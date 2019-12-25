@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -25,400 +25,292 @@
 
 #include "tcp_reassemblers.h"
 
+#include "tcp_defs.h"
+#include "tcp_stream_tracker.h"
+
 class TcpReassemblerFirst : public TcpReassembler
 {
 public:
-    TcpReassemblerFirst(TcpSession* session, TcpStreamTracker* tracker, bool server) :
-        TcpReassembler(session, tracker, StreamPolicy::OS_FIRST, server)
-    { }
+    TcpReassemblerFirst() = default;
 
 private:
-    int insert_left_overlap() override
-    {
-        return left_overlap_keep_first( );
-    }
+    int insert_left_overlap(TcpReassemblerState& trs) override
+    { return left_overlap_keep_first(trs); }
 
-    void insert_right_overlap() override
-    {
-        right_overlap_truncate_new( );
-    }
+    void insert_right_overlap(TcpReassemblerState& trs) override
+    { right_overlap_truncate_new(trs); }
 
-    int insert_full_overlap() override
-    {
-        return full_right_overlap_os5( );
-    }
+    int insert_full_overlap(TcpReassemblerState& trs) override
+    { return full_right_overlap_os5(trs); }
 };
 
 class TcpReassemblerLast : public TcpReassembler
 {
 public:
-    TcpReassemblerLast(TcpSession* session, TcpStreamTracker* tracker, bool server) :
-        TcpReassembler(session, tracker, StreamPolicy::OS_LAST, server)
-    { }
+    TcpReassemblerLast() = default;
 
 private:
-    int insert_left_overlap() override
-    {
-        return left_overlap_keep_last( );
-    }
+    int insert_left_overlap(TcpReassemblerState& trs) override
+    { return left_overlap_keep_last(trs); }
 
-    void insert_right_overlap() override
-    {
-        right_overlap_truncate_existing( );
-    }
+    void insert_right_overlap(TcpReassemblerState& trs) override
+    { right_overlap_truncate_existing(trs); }
 
-    int insert_full_overlap() override
-    {
-        return full_right_overlap_os4( );
-    }
+    int insert_full_overlap(TcpReassemblerState& trs) override
+    { return full_right_overlap_os4(trs); }
 };
 
 class TcpReassemblerLinux : public TcpReassembler
 {
 public:
-    TcpReassemblerLinux(TcpSession* session, TcpStreamTracker* tracker, bool server) :
-        TcpReassembler(session, tracker, StreamPolicy::OS_LINUX, server)
-    { }
+    TcpReassemblerLinux() = default;
 
 private:
-    int insert_left_overlap() override
-    {
-        return left_overlap_keep_first( );
-    }
+    int insert_left_overlap(TcpReassemblerState& trs) override
+    { return left_overlap_keep_first(trs); }
 
-    void insert_right_overlap() override
-    {
-        right_overlap_truncate_existing( );
-    }
+    void insert_right_overlap(TcpReassemblerState& trs) override
+    { right_overlap_truncate_existing(trs); }
 
-    int insert_full_overlap() override
-    {
-        return full_right_overlap_os2( );
-    }
+    int insert_full_overlap(TcpReassemblerState& trs) override
+    { return full_right_overlap_os2(trs); }
 };
 
 class TcpReassemblerOldLinux : public TcpReassembler
 {
 public:
-    TcpReassemblerOldLinux(TcpSession* session, TcpStreamTracker* tracker, bool server) :
-        TcpReassembler(session, tracker, StreamPolicy::OS_OLD_LINUX, server)
-    { }
+    TcpReassemblerOldLinux() = default;
 
 private:
-    int insert_left_overlap() override
-    {
-        return left_overlap_keep_first( );
-    }
+    int insert_left_overlap(TcpReassemblerState& trs) override
+    { return left_overlap_keep_first(trs); }
 
-    void insert_right_overlap() override
-    {
-        right_overlap_truncate_existing( );
-    }
+    void insert_right_overlap(TcpReassemblerState& trs) override
+    { right_overlap_truncate_existing(trs); }
 
-    int insert_full_overlap() override
-    {
-        return full_right_overlap_os4( );
-    }
+    int insert_full_overlap(TcpReassemblerState& trs) override
+    { return full_right_overlap_os4(trs); }
 };
 
 class TcpReassemblerBSD : public TcpReassembler
 {
 public:
-    TcpReassemblerBSD(TcpSession* session, TcpStreamTracker* tracker, bool server) :
-        TcpReassembler(session, tracker, StreamPolicy::OS_BSD, server)
-    { }
+    TcpReassemblerBSD() = default;
 
 private:
-    int insert_left_overlap() override
-    {
-        return left_overlap_keep_first( );
-    }
+    int insert_left_overlap(TcpReassemblerState& trs) override
+    { return left_overlap_keep_first(trs); }
 
-    void insert_right_overlap() override
-    {
-        right_overlap_truncate_existing( );
-    }
+    void insert_right_overlap(TcpReassemblerState& trs) override
+    { right_overlap_truncate_existing(trs); }
 
-    int insert_full_overlap() override
-    {
-        return full_right_overlap_os1( );
-    }
+    int insert_full_overlap(TcpReassemblerState& trs) override
+    { return full_right_overlap_os1(trs); }
 };
 
 class TcpReassemblerMacOS : public TcpReassembler
 {
 public:
-    TcpReassemblerMacOS(TcpSession* session, TcpStreamTracker* tracker, bool server) :
-        TcpReassembler(session, tracker, StreamPolicy::OS_MACOS, server)
-    { }
+    TcpReassemblerMacOS() = default;
 
 private:
-    int insert_left_overlap() override
-    {
-        return left_overlap_keep_first( );
-    }
+    int insert_left_overlap(TcpReassemblerState& trs) override
+    { return left_overlap_keep_first(trs); }
 
-    void insert_right_overlap() override
-    {
-        right_overlap_truncate_existing( );
-    }
+    void insert_right_overlap(TcpReassemblerState& trs) override
+    { right_overlap_truncate_existing(trs); }
 
-    int insert_full_overlap() override
-    {
-        return full_right_overlap_os1( );
-    }
+    int insert_full_overlap(TcpReassemblerState& trs) override
+    { return full_right_overlap_os1(trs); }
 };
 
 class TcpReassemblerSolaris : public TcpReassembler
 {
 public:
-    TcpReassemblerSolaris(TcpSession* session, TcpStreamTracker* tracker, bool server) :
-        TcpReassembler(session, tracker, StreamPolicy::OS_SOLARIS, server)
-    { }
+    TcpReassemblerSolaris() = default;
 
 private:
-    int insert_left_overlap() override
-    {
-        return left_overlap_trim_first( );
-    }
+    int insert_left_overlap(TcpReassemblerState& trs) override
+    { return left_overlap_trim_first(trs); }
 
-    void insert_right_overlap() override
-    {
-        right_overlap_truncate_new( );
-    }
+    void insert_right_overlap(TcpReassemblerState& trs) override
+    { right_overlap_truncate_new(trs); }
 
-    int insert_full_overlap() override
-    {
-        return full_right_overlap_os3( );
-    }
+    int insert_full_overlap(TcpReassemblerState& trs) override
+    { return full_right_overlap_os3(trs); }
 };
 
 class TcpReassemblerIrix : public TcpReassembler
 {
 public:
-    TcpReassemblerIrix(TcpSession* session, TcpStreamTracker* tracker, bool server) :
-        TcpReassembler(session, tracker, StreamPolicy::OS_IRIX, server)
-    { }
+    TcpReassemblerIrix() = default;
 
 private:
-    int insert_left_overlap() override
-    {
-        return left_overlap_keep_first( );
-    }
+    int insert_left_overlap(TcpReassemblerState& trs) override
+    { return left_overlap_keep_first(trs);  }
 
-    void insert_right_overlap() override
-    {
-        right_overlap_truncate_existing( );
-    }
+    void insert_right_overlap(TcpReassemblerState& trs) override
+    { right_overlap_truncate_existing(trs); }
 
-    int insert_full_overlap() override
-    {
-        return full_right_overlap_os2( );
-    }
+    int insert_full_overlap(TcpReassemblerState& trs) override
+    { return full_right_overlap_os2(trs); }
 };
 
 class TcpReassemblerHpux11 : public TcpReassembler
 {
 public:
-    TcpReassemblerHpux11(TcpSession* session, TcpStreamTracker* tracker, bool server) :
-        TcpReassembler(session, tracker, StreamPolicy::OS_HPUX11, server)
-    { }
+    TcpReassemblerHpux11() = default;
 
 private:
-    int insert_left_overlap() override
-    {
-        return left_overlap_trim_first( );
-    }
+    int insert_left_overlap(TcpReassemblerState& trs) override
+    { return left_overlap_trim_first(trs); }
 
-    void insert_right_overlap() override
-    {
-        right_overlap_truncate_new( );
-    }
+    void insert_right_overlap(TcpReassemblerState& trs) override
+    { right_overlap_truncate_new(trs); }
 
-    int insert_full_overlap() override
-    {
-        return full_right_overlap_os3( );
-    }
+    int insert_full_overlap(TcpReassemblerState& trs) override
+    { return full_right_overlap_os3(trs); }
 };
 
 class TcpReassemblerHpux10 : public TcpReassembler
 {
 public:
-    TcpReassemblerHpux10(TcpSession* session, TcpStreamTracker* tracker, bool server) :
-        TcpReassembler(session, tracker, StreamPolicy::OS_HPUX10, server)
-    { }
+    TcpReassemblerHpux10() = default;
 
 private:
-    int insert_left_overlap() override
-    {
-        return left_overlap_keep_first( );
-    }
+    int insert_left_overlap(TcpReassemblerState& trs) override
+    { return left_overlap_keep_first(trs); }
 
-    void insert_right_overlap() override
-    {
-        right_overlap_truncate_existing( );
-    }
+    void insert_right_overlap(TcpReassemblerState& trs) override
+    { right_overlap_truncate_existing(trs); }
 
-    int insert_full_overlap() override
-    {
-        return full_right_overlap_os2( );
-    }
+    int insert_full_overlap(TcpReassemblerState& trs) override
+    { return full_right_overlap_os2(trs); }
 };
 
 class TcpReassemblerWindows : public TcpReassembler
 {
 public:
-    TcpReassemblerWindows(TcpSession* session, TcpStreamTracker* tracker, bool server) :
-        TcpReassembler(session, tracker, StreamPolicy::OS_WINDOWS, server)
-    { }
+    TcpReassemblerWindows() = default;
 
 private:
-    int insert_left_overlap() override
-    {
-        return left_overlap_keep_first( );
-    }
+    int insert_left_overlap(TcpReassemblerState& trs) override
+    { return left_overlap_keep_first(trs); }
 
-    void insert_right_overlap() override
-    {
-        right_overlap_truncate_existing( );
-    }
+    void insert_right_overlap(TcpReassemblerState& trs) override
+    { right_overlap_truncate_existing(trs); }
 
-    int insert_full_overlap() override
-    {
-        return full_right_overlap_os1( );
-    }
+    int insert_full_overlap(TcpReassemblerState& trs) override
+    { return full_right_overlap_os1(trs); }
 };
 
 class TcpReassemblerWindows2K3 : public TcpReassembler
 {
 public:
-    TcpReassemblerWindows2K3(TcpSession* session, TcpStreamTracker* tracker, bool server) :
-        TcpReassembler(session, tracker, StreamPolicy::OS_WINDOWS2K3, server)
-    { }
+    TcpReassemblerWindows2K3() = default;
 
 private:
-    int insert_left_overlap() override
-    {
-        return left_overlap_keep_first( );
-    }
+    int insert_left_overlap(TcpReassemblerState& trs) override
+    { return left_overlap_keep_first(trs); }
 
-    void insert_right_overlap() override
-    {
-        right_overlap_truncate_existing( );
-    }
+    void insert_right_overlap(TcpReassemblerState& trs) override
+    { right_overlap_truncate_existing(trs); }
 
-    int insert_full_overlap() override
-    {
-        return full_right_overlap_os1( );
-    }
+    int insert_full_overlap(TcpReassemblerState& trs) override
+    { return full_right_overlap_os1(trs); }
 };
 
 class TcpReassemblerVista : public TcpReassembler
 {
 public:
-    TcpReassemblerVista(TcpSession* session, TcpStreamTracker* tracker, bool server) :
-        TcpReassembler(session, tracker, StreamPolicy::OS_VISTA, server)
-    { }
+    TcpReassemblerVista() = default;
 
 private:
-    int insert_left_overlap() override
-    {
-        return left_overlap_keep_first( );
-    }
+    int insert_left_overlap(TcpReassemblerState& trs) override
+    { return left_overlap_keep_first(trs); }
 
-    void insert_right_overlap() override
-    {
-        right_overlap_truncate_new( );
-    }
+    void insert_right_overlap(TcpReassemblerState& trs) override
+    { right_overlap_truncate_new(trs); }
 
-    int insert_full_overlap() override
-    {
-        return full_right_overlap_os5 ( );
-    }
+    int insert_full_overlap(TcpReassemblerState& trs) override
+    { return full_right_overlap_os5 (trs); }
 };
 
 class TcpReassemblerProxy : public TcpReassemblerFirst
 {
 public:
-    TcpReassemblerProxy(TcpSession* session, TcpStreamTracker* tracker, bool server) :
-        TcpReassemblerFirst(session, tracker, server)
-    {
-        tcp_ips_data = NORM_MODE_TEST;
-    }
+    TcpReassemblerProxy() = default;
 
 private:
-    int insert_left_overlap() override
-    {
-        return left_overlap_keep_first( );
-    }
+    int insert_left_overlap(TcpReassemblerState& trs) override
+    { return left_overlap_keep_first(trs); }
 
-    void insert_right_overlap() override
-    {
-        right_overlap_truncate_new( );
-    }
+    void insert_right_overlap(TcpReassemblerState& trs) override
+    { right_overlap_truncate_new(trs); }
 
-    int insert_full_overlap() override
-    {
-        return full_right_overlap_os5( );
-    }
+    int insert_full_overlap(TcpReassemblerState& trs) override
+    { return full_right_overlap_os5(trs); }
 };
 
-TcpReassembler* TcpReassemblerFactory::create(TcpSession* session, TcpStreamTracker* tracker,
-    StreamPolicy os_policy, bool server)
+void TcpReassemblerPolicy::init(TcpSession* ssn, TcpStreamTracker* trk, StreamPolicy pol, bool server)
 {
-    NormMode tcp_ips_data = Normalize_GetMode(NORM_TCP_IPS);
+    trs.sos.init_sos(ssn, pol);
+    trs.server_side = server;
+    trs.tracker = trk;
 
-    if (tcp_ips_data == NORM_MODE_ON)
-        return new TcpReassemblerFirst(session, tracker, server);
+    if ( trs.server_side )
+    {
+        trs.ignore_dir = SSN_DIR_FROM_CLIENT;
+        trs.packet_dir = PKT_FROM_CLIENT;
+    }
     else
     {
-        switch (os_policy)
-        {
-        case StreamPolicy::OS_FIRST:
-            return new TcpReassemblerFirst(session, tracker, server);
-
-        case StreamPolicy::OS_LAST:
-            return new TcpReassemblerLast(session, tracker, server);
-
-        case StreamPolicy::OS_LINUX:
-            return new TcpReassemblerLinux(session, tracker, server);
-
-        case StreamPolicy::OS_OLD_LINUX:
-            return new TcpReassemblerOldLinux(session, tracker, server);
-
-        case StreamPolicy::OS_BSD:
-            return new TcpReassemblerBSD(session, tracker, server);
-
-        case StreamPolicy::OS_MACOS:
-            return new TcpReassemblerMacOS(session, tracker, server);
-
-        case StreamPolicy::OS_SOLARIS:
-            return new TcpReassemblerSolaris(session, tracker, server);
-
-        case StreamPolicy::OS_IRIX:
-            return new TcpReassemblerIrix(session, tracker, server);
-
-        case StreamPolicy::OS_HPUX11:
-            return new TcpReassemblerHpux11(session, tracker, server);
-
-        case StreamPolicy::OS_HPUX10:
-            return new TcpReassemblerHpux10(session, tracker, server);
-
-        case StreamPolicy::OS_WINDOWS:
-            return new TcpReassemblerWindows(session, tracker, server);
-
-        case StreamPolicy::OS_WINDOWS2K3:
-            return new TcpReassemblerWindows2K3(session, tracker, server);
-
-        case StreamPolicy::OS_VISTA:
-            return new TcpReassemblerVista(session, tracker, server);
-
-        case StreamPolicy::OS_PROXY:
-            return new TcpReassemblerProxy(session, tracker, server);
-
-        default:
-            return new TcpReassemblerBSD(session, tracker, server);
-        }
+        trs.ignore_dir = SSN_DIR_FROM_SERVER;
+        trs.packet_dir = PKT_FROM_SERVER;
     }
+
+    trs.flush_count = 0;
+    trs.xtradata_mask = 0;
+
+    reassembler = TcpReassemblerFactory::get_instance(pol);
 }
 
+void TcpReassemblerPolicy::reset()
+{
+    init(nullptr, nullptr, StreamPolicy::OS_DEFAULT, false);
+}
+
+TcpReassembler* TcpReassemblerFactory::reassemblers[StreamPolicy::OS_END_OF_LIST];
+
+void TcpReassemblerFactory::initialize()
+{
+    reassemblers[StreamPolicy::OS_FIRST] = new TcpReassemblerFirst;
+    reassemblers[StreamPolicy::OS_LAST] = new TcpReassemblerLast;
+    reassemblers[StreamPolicy::OS_LINUX] = new TcpReassemblerLinux;
+    reassemblers[StreamPolicy::OS_OLD_LINUX] = new TcpReassemblerOldLinux;
+    reassemblers[StreamPolicy::OS_BSD] = new TcpReassemblerBSD;
+    reassemblers[StreamPolicy::OS_MACOS] = new TcpReassemblerMacOS;
+    reassemblers[StreamPolicy::OS_SOLARIS] = new TcpReassemblerSolaris;
+    reassemblers[StreamPolicy::OS_IRIX] = new TcpReassemblerIrix;
+    reassemblers[StreamPolicy::OS_HPUX11] = new TcpReassemblerHpux11;
+    reassemblers[StreamPolicy::OS_HPUX10] = new TcpReassemblerHpux10;
+    reassemblers[StreamPolicy::OS_WINDOWS] = new TcpReassemblerWindows;
+    reassemblers[StreamPolicy::OS_WINDOWS2K3] = new TcpReassemblerWindows2K3;
+    reassemblers[StreamPolicy::OS_VISTA] = new TcpReassemblerVista;
+    reassemblers[StreamPolicy::OS_PROXY] = new TcpReassemblerProxy;
+}
+
+void TcpReassemblerFactory::term()
+{
+    for ( auto sp = StreamPolicy::OS_FIRST; sp <= StreamPolicy::OS_PROXY; sp++ )
+        delete reassemblers[sp];
+}
+
+TcpReassembler* TcpReassemblerFactory::get_instance(StreamPolicy os_policy)
+{
+    NormMode tcp_ips_data = Normalize_GetMode(NORM_TCP_IPS);
+    StreamPolicy sp = (tcp_ips_data == NORM_MODE_ON) ? StreamPolicy::OS_FIRST : os_policy;
+
+    assert( sp <= StreamPolicy::OS_PROXY );
+    return reassemblers[sp];
+}

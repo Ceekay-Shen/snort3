@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -27,17 +27,18 @@
 
 #include <climits>
 #include <string>
+#include <unistd.h>
 
 #include "appid_api.h"
 #include "appid_config.h"
 #include "appid_inspector.h"
 #include "appid_peg_counts.h"
-#include "log/messages.h"
 #include "log/unified2.h"
 #include "main/snort_config.h"
-#include "main/snort_debug.h"
 #include "target_based/snort_protocols.h"
 #include "utils/util_cstring.h"
+
+using namespace snort;
 
 static AppInfoTable app_info_table;
 static AppInfoTable app_info_service_table;
@@ -51,34 +52,24 @@ static AppInfoTable custom_app_info_table;
 static const char* CONF_SEPARATORS = "\t\n\r";
 static const int MIN_MAX_TP_FLOW_DEPTH = 1;
 static const int MAX_MAX_TP_FLOW_DEPTH = 1000000;
+static const int MIN_HOST_PORT_APP_CACHE_LOOKUP_INTERVAL = 1;
+static const int MAX_HOST_PORT_APP_CACHE_LOOKUP_INTERVAL = 1000000;
+static const int MIN_HOST_PORT_APP_CACHE_LOOKUP_RANGE = 1;
+static const int MAX_HOST_PORT_APP_CACHE_LOOKUP_RANGE = 1000000;
 static const char* APP_CONFIG_FILE = "appid.conf";
 static const char* USR_CONFIG_FILE = "userappid.conf";
 const char* APP_MAPPING_FILE = "appMapping.data";
 
-static inline char* strdup_to_lower(const char* source)
-{
-    char* dest = snort_strdup(source);
-    char* lcd = dest;
-
-    while (*lcd)
-    {
-        *lcd = tolower(*lcd);
-        lcd++;
-    }
-
-    return dest;
-}
-
 AppInfoTableEntry::AppInfoTableEntry(AppId id, char* name)
     : appId(id), serviceId(id), clientId(id), payloadId(id), app_name(name)
 {
-    app_name_key = strdup_to_lower(name);
+    app_name_key = AppInfoManager::strdup_to_lower(name);
 }
 
 AppInfoTableEntry::AppInfoTableEntry(AppId id, char* name, AppId sid, AppId cid, AppId pid)
     : appId(id), serviceId(sid), clientId(cid), payloadId(pid), app_name(name)
 {
-    app_name_key = strdup_to_lower(name);
+    app_name_key = AppInfoManager::strdup_to_lower(name);
 }
 
 AppInfoTableEntry::~AppInfoTableEntry()
@@ -101,7 +92,7 @@ static AppInfoTableEntry* find_app_info_by_name(const char* app_name)
 {
     AppInfoTableEntry* entry = nullptr;
     AppInfoNameTable::iterator app;
-    const char* search_name = strdup_to_lower(app_name);
+    const char* search_name = AppInfoManager::strdup_to_lower(app_name);
 
     app = app_info_name_table.find(search_name);
     if ( app != app_info_name_table.end() )
@@ -138,6 +129,20 @@ static AppId get_static_app_info_entry(AppId appid)
     return 0;
 }
 
+char* AppInfoManager::strdup_to_lower(const char* source)
+{
+    char* dest = snort_strdup(source);
+    char* lcd = dest;
+
+    while (*lcd)
+    {
+        *lcd = tolower(*lcd);
+        lcd++;
+    }
+
+    return dest;
+}
+
 bool AppInfoManager::configured()
 {
     return !app_info_table.empty();
@@ -150,7 +155,6 @@ AppInfoTableEntry* AppInfoManager::get_app_info_entry(AppId appId, const
     AppInfoTable::const_iterator app;
     AppInfoTableEntry* entry = nullptr;
 
-    std::lock_guard<std::mutex> lock(app_info_tables_rw_mutex);
     if ((tmp = get_static_app_info_entry(appId)))
     {
         app = lookup_table.find(tmp);
@@ -180,7 +184,6 @@ AppInfoTableEntry* AppInfoManager::add_dynamic_app_entry(const char* app_name)
         return nullptr;
     }
 
-    std::lock_guard<std::mutex> lock(app_info_tables_rw_mutex);
     AppInfoTableEntry* entry = find_app_info_by_name(app_name);
     if (!entry)
     {
@@ -247,6 +250,12 @@ const char* AppInfoManager::get_app_name(int32_t id)
     return entry ? entry->app_name : nullptr;
 }
 
+const char* AppInfoManager::get_app_name_key(int32_t id)
+{
+    AppInfoTableEntry* entry = get_app_info_entry(id);
+    return entry ? entry->app_name_key : nullptr;
+}
+
 AppId AppInfoManager::get_appid_by_name(const char* app_name)
 {
     AppInfoTableEntry* entry = find_app_info_by_name(app_name);
@@ -273,8 +282,6 @@ void AppInfoManager::load_appid_config(AppIdModuleConfig* config, const char* pa
     FILE* config_file = fopen(path, "r");
     if (config_file == nullptr)
         return;
-
-    DebugFormat(DEBUG_APPID, "Loading configuration file %s\n", path);
 
     while (fgets(buf, sizeof(buf), config_file) != nullptr)
     {
@@ -320,72 +327,177 @@ void AppInfoManager::load_appid_config(AppIdModuleConfig* config, const char* pa
                 }
                 else
                 {
-                    DebugFormat(DEBUG_APPID,
-                        "AppId: setting max thirdparty inspection flow depth to %d packets.\n",
-                        max_tp_flow_depth);
                     config->max_tp_flow_depth = max_tp_flow_depth;
+                }
+            }
+            else if (!(strcasecmp(conf_key, "host_port_app_cache_lookup_interval")))
+            {
+                int host_port_app_cache_lookup_interval = atoi(conf_val);
+                if (host_port_app_cache_lookup_interval < MIN_HOST_PORT_APP_CACHE_LOOKUP_INTERVAL
+                    || host_port_app_cache_lookup_interval > MAX_HOST_PORT_APP_CACHE_LOOKUP_INTERVAL )
+                {
+                     ParseWarning(WARN_CONF,
+                        "AppId: invalid host_port_app_cache_lookup_interval %d, must be between %d and %d\n.",
+                        host_port_app_cache_lookup_interval, MIN_HOST_PORT_APP_CACHE_LOOKUP_INTERVAL , MAX_HOST_PORT_APP_CACHE_LOOKUP_INTERVAL);
+                }
+                else
+                {
+                     config->host_port_app_cache_lookup_interval = host_port_app_cache_lookup_interval;
+                }
+            }
+            else if (!(strcasecmp(conf_key, "host_port_app_cache_lookup_range")))
+            {
+                int host_port_app_cache_lookup_range = atoi(conf_val);
+                if (host_port_app_cache_lookup_range < MIN_HOST_PORT_APP_CACHE_LOOKUP_RANGE
+                    || host_port_app_cache_lookup_range > MAX_HOST_PORT_APP_CACHE_LOOKUP_RANGE)
+                {
+                     ParseWarning(WARN_CONF,
+                        "AppId: invalid host_port_app_cache_lookup_range %d, must be between %d and %d\n.",
+                        host_port_app_cache_lookup_range , MIN_HOST_PORT_APP_CACHE_LOOKUP_RANGE, MAX_HOST_PORT_APP_CACHE_LOOKUP_RANGE);
+                }
+                else
+                {
+                     config->host_port_app_cache_lookup_range = host_port_app_cache_lookup_range;
+                }
+            }
+            else if (!(strcasecmp(conf_key, "is_host_port_app_cache_runtime")))
+            {
+                if (!(strcasecmp(conf_val, "enabled")))
+                {
+                    config->is_host_port_app_cache_runtime = true;
+                }
+            }
+            else if (!(strcasecmp(conf_key, "check_host_port_app_cache")))
+            {
+                if (!(strcasecmp(conf_val, "enabled")))
+                {
+                    config->check_host_port_app_cache = true;
+                }
+            }
+            else if (!(strcasecmp(conf_key, "check_host_cache_unknown_ssl")))
+            {
+                if (!(strcasecmp(conf_val, "enabled")))
+                {
+                    config->check_host_cache_unknown_ssl = true;
+                }
+            }
+            else if (!(strcasecmp(conf_key, "allow_port_wildcard_host_cache")))
+            {
+                if (!(strcasecmp(conf_val, "enabled")))
+                {
+                    config->allow_port_wildcard_host_cache = true;
+                }
+            }
+            else if (!(strcasecmp(conf_key, "recheck_for_portservice_appid")))
+            {
+                if (!(strcasecmp(conf_val, "enabled")))
+                {
+                    config->recheck_for_portservice_appid = true;
+                }
+            }
+            else if (!(strcasecmp(conf_key, "bittorrent_aggressiveness")))
+            {
+                int aggressiveness = atoi(conf_val);
+                LogMessage("AppId: bittorrent_aggressiveness %d\n", aggressiveness);
+                if (aggressiveness >= 50)
+                {
+                    config->host_port_app_cache_lookup_interval = 5;
+                    config->recheck_for_portservice_appid = true;
+                    set_app_info_flags(APP_ID_BITTORRENT, APPINFO_FLAG_DEFER);
+                    set_app_info_flags(APP_ID_BITTORRENT, APPINFO_FLAG_DEFER_PAYLOAD);
+                    config->max_tp_flow_depth = 25;
+                    LogMessage("AppId: host_port_app_cache_lookup_interval %d\n", config->host_port_app_cache_lookup_interval);
+                    LogMessage("AppId: recheck_for_portservice_appid enabled\n");
+                    LogMessage("AppId: defer_to_thirdparty %d\n", APP_ID_BITTORRENT);
+                    LogMessage("AppId: defer_payload_to_thirdparty %d\n", APP_ID_BITTORRENT);
+                    LogMessage("AppId: max_tp_flow_depth %d\n", config->max_tp_flow_depth);
+                }
+                if (aggressiveness >= 80)
+                {
+                    config->allow_port_wildcard_host_cache = true;
+                    LogMessage("AppId: allow_port_wildcard_host_cache enabled\n");
+                }
+            }
+            else if (!(strcasecmp(conf_key, "ultrasurf_aggressiveness")))
+            {
+                int aggressiveness = atoi(conf_val);
+                LogMessage("AppId: ultrasurf_aggressiveness %d\n", aggressiveness);
+                if (aggressiveness >= 50)
+                {
+                    config->check_host_cache_unknown_ssl = true;
+                    set_app_info_flags(APP_ID_ULTRASURF, APPINFO_FLAG_DEFER);
+                    set_app_info_flags(APP_ID_ULTRASURF, APPINFO_FLAG_DEFER_PAYLOAD);
+                    config->max_tp_flow_depth = 25;
+                    LogMessage("AppId: check_host_cache_unknown_ssl enabled\n");
+                    LogMessage("AppId: defer_to_thirdparty %d\n", APP_ID_ULTRASURF);
+                    LogMessage("AppId: defer_payload_to_thirdparty %d\n", APP_ID_ULTRASURF);
+                    LogMessage("AppId: max_tp_flow_depth %d\n", config->max_tp_flow_depth);
+                }
+                if (aggressiveness >= 80)
+                {
+                    config->allow_port_wildcard_host_cache = true;
+                    LogMessage("AppId: allow_port_wildcard_host_cache enabled\n");
+                }
+            }
+            else if (!(strcasecmp(conf_key, "psiphon_aggressiveness")))
+            {
+                int aggressiveness = atoi(conf_val);
+                LogMessage("AppId: psiphon_aggressiveness %d\n", aggressiveness);
+                if (aggressiveness >= 50)
+                {
+                    config->check_host_cache_unknown_ssl = true;
+                    set_app_info_flags(APP_ID_PSIPHON, APPINFO_FLAG_DEFER);
+                    set_app_info_flags(APP_ID_PSIPHON, APPINFO_FLAG_DEFER_PAYLOAD);
+                    config->max_tp_flow_depth = 25;
+                    LogMessage("AppId: check_host_cache_unknown_ssl enabled\n");
+                    LogMessage("AppId: defer_to_thirdparty %d\n", APP_ID_PSIPHON);
+                    LogMessage("AppId: defer_payload_to_thirdparty %d\n", APP_ID_PSIPHON);
+                    LogMessage("AppId: max_tp_flow_depth %d\n", config->max_tp_flow_depth);
+                }
+                if (aggressiveness >= 80)
+                {
+                    config->allow_port_wildcard_host_cache = true;
+                    LogMessage("AppId: allow_port_wildcard_host_cache enabled\n");
                 }
             }
             else if (!(strcasecmp(conf_key, "tp_allow_probes")))
             {
                 if (!(strcasecmp(conf_val, "enabled")))
                 {
-                    DebugMessage(DEBUG_APPID,
-                        "AppId: TCP probes will be analyzed by NAVL.\n");
-
                     config->tp_allow_probes = 1;
                 }
             }
             else if (!(strcasecmp(conf_key, "tp_client_app")))
             {
-                DebugFormat(DEBUG_APPID,
-                    "AppId: if thirdparty reports app %d, we will use it as a client.\n",
-                    atoi(conf_val));
                 set_app_info_flags(atoi(conf_val), APPINFO_FLAG_TP_CLIENT);
             }
             else if (!(strcasecmp(conf_key, "ssl_reinspect")))
             {
-                DebugFormat(DEBUG_APPID,
-                    "AppId: adding app %d to list of SSL apps that get more granular inspection.\n",
-                    atoi(conf_val));
                 set_app_info_flags(atoi(conf_val), APPINFO_FLAG_SSL_INSPECT);
             }
             else if (!(strcasecmp(conf_key, "disable_safe_search")))
             {
                 if (!(strcasecmp(conf_val, "disabled")))
                 {
-                    DebugMessage(DEBUG_APPID, "AppId: disabling safe search enforcement.\n");
                     config->safe_search_enabled = false;
                 }
             }
             else if (!(strcasecmp(conf_key, "ssl_squelch")))
             {
-                DebugFormat(DEBUG_APPID,
-                    "AppId: adding app %d to list of SSL apps that may open a second SSL connection.\n",
-                    atoi(conf_val));
                 set_app_info_flags(atoi(conf_val), APPINFO_FLAG_SSL_SQUELCH);
             }
             else if (!(strcasecmp(conf_key, "defer_to_thirdparty")))
             {
-                DebugFormat(DEBUG_APPID,
-                    "AppId: adding app %d to list of apps where we should take thirdparty ID over the NDE's.\n",
-                    atoi(conf_val));
                 set_app_info_flags(atoi(conf_val), APPINFO_FLAG_DEFER);
             }
             else if (!(strcasecmp(conf_key, "defer_payload_to_thirdparty")))
             {
-                DebugFormat(DEBUG_APPID,
-                    "AppId: adding app %d to list of apps where we should take "
-                    "thirdparty payload ID over the NDE's.\n",
-                    atoi(conf_val));
                 set_app_info_flags(atoi(conf_val), APPINFO_FLAG_DEFER_PAYLOAD);
             }
             else if (!(strcasecmp(conf_key, "chp_userid")))
             {
                 if (!(strcasecmp(conf_val, "disabled")))
                 {
-                    DebugMessage(DEBUG_APPID,
-                        "AppId: HTTP UserID collection disabled.\n");
                     config->chp_userid_disabled = true;
                     continue;
                 }
@@ -394,8 +506,6 @@ void AppInfoManager::load_appid_config(AppIdModuleConfig* config, const char* pa
             {
                 if (!(strcasecmp(conf_val, "disabled")))
                 {
-                    DebugMessage(DEBUG_APPID,
-                        "AppId: HTTP Body header reading disabled.\n");
                     config->chp_body_collection_disabled = 1;
                     continue;
                 }
@@ -404,7 +514,6 @@ void AppInfoManager::load_appid_config(AppIdModuleConfig* config, const char* pa
             {
                 if (!(strcasecmp(conf_val, "disabled")))
                 {
-                    DebugMessage(DEBUG_APPID, "AppId: FTP userID disabled.\n");
                     config->ftp_userid_disabled = 1;
                     continue;
                 }
@@ -424,8 +533,6 @@ void AppInfoManager::load_appid_config(AppIdModuleConfig* config, const char* pa
                 uint8_t temp_val;
                 temp_val = strtol(conf_val, nullptr, 10);
                 set_app_info_priority (temp_appid, temp_val);
-                DebugFormat(DEBUG_APPID,"AppId: %d Setting priority bit %d .\n",
-                    temp_appid, temp_val);
             }
             else if (!(strcasecmp(conf_key, "referred_appId")))
             {
@@ -448,9 +555,6 @@ void AppInfoManager::load_appid_config(AppIdModuleConfig* config, const char* pa
                             sizeof(referred_app_list) - referred_app_index, "%d ", id);
                         set_app_info_flags(id, APPINFO_FLAG_REFERRED);
                     }
-                    DebugFormat(DEBUG_APPID,
-                        "AppId: adding appIds to list of referred web apps: %s\n",
-                        referred_app_list);
                 }
             }
             else if (!(strcasecmp(conf_key, "rtmp_max_packets")))
@@ -471,9 +575,6 @@ void AppInfoManager::load_appid_config(AppIdModuleConfig* config, const char* pa
             }
             else if (!(strcasecmp(conf_key, "ignore_thirdparty_appid")))
             {
-                DebugFormat(DEBUG_APPID,
-                    "AppId: adding app %d to list of ignore thirdparty apps.\n",
-                    atoi(conf_val));
                 set_app_info_flags(atoi(conf_val), APPINFO_FLAG_IGNORE);
             }
             else if (!(strcasecmp(conf_key, "http2_detection")))
@@ -485,12 +586,10 @@ void AppInfoManager::load_appid_config(AppIdModuleConfig* config, const char* pa
                 // ports.
                 if (!(strcasecmp(conf_val, "disabled")))
                 {
-                    DebugMessage(DEBUG_APPID, "AppId: disabling internal HTTP/2 detection.\n");
                     config->http2_detection_enabled = false;
                 }
                 else if (!(strcasecmp(conf_val, "enabled")))
                 {
-                    DebugMessage(DEBUG_APPID, "AppId: enabling internal HTTP/2 detection.\n");
                     config->http2_detection_enabled = true;
                 }
                 else
@@ -506,20 +605,18 @@ void AppInfoManager::load_appid_config(AppIdModuleConfig* config, const char* pa
     fclose(config_file);
 }
 
-int16_t AppInfoManager::add_appid_protocol_reference(const char* protocol)
+SnortProtocolId AppInfoManager::add_appid_protocol_reference(const char* protocol,
+    SnortConfig* sc)
 {
-    static std::mutex apr_mutex;
-
-    std::lock_guard<std::mutex> lock(apr_mutex);
-    int16_t id = SnortConfig::get_conf()->proto_ref->add(protocol);
-    return id;
+    SnortProtocolId snort_protocol_id = sc->proto_ref->add(protocol);
+    return snort_protocol_id;
 }
 
-void AppInfoManager::init_appid_info_table(AppIdModuleConfig* mod_config)
+void AppInfoManager::init_appid_info_table(AppIdModuleConfig* mod_config,
+    SnortConfig* sc)
 {
     if ( !mod_config->app_detector_dir )
     {
-        AppIdPegCounts::set_detectors_configured();
         return;  // no lua detectors, no rule support, already warned
     }
 
@@ -592,8 +689,10 @@ void AppInfoManager::init_appid_info_table(AppIdModuleConfig* mod_config)
 
             /* snort service key, if it exists */
             token = strtok_r(nullptr, CONF_SEPARATORS, &context);
+
+            // FIXIT-RC: Sometimes the token is "~". Should we ignore those?
             if (token)
-                entry->snortId = add_appid_protocol_reference(token);
+                entry->snort_protocol_id = add_appid_protocol_reference(token, sc);
 
             if ((app_id = get_static_app_info_entry(entry->appId)))
             {
@@ -613,15 +712,15 @@ void AppInfoManager::init_appid_info_table(AppIdModuleConfig* mod_config)
         }
         fclose(tableFile);
 
-        AppIdPegCounts::add_unknown_app_peg();
         snprintf(filepath, sizeof(filepath), "%s/odp/%s", mod_config->app_detector_dir,
             APP_CONFIG_FILE);
         load_appid_config (mod_config, filepath);
         snprintf(filepath, sizeof(filepath), "%s/custom/%s", mod_config->app_detector_dir,
             USR_CONFIG_FILE);
+        if (access (filepath, F_OK))
+            snprintf(filepath, sizeof(filepath), "%s/../%s", mod_config->app_detector_dir,
+                USR_CONFIG_FILE);
         load_appid_config (mod_config, filepath);
     }
-
-    AppIdPegCounts::set_detectors_configured();
 }
 

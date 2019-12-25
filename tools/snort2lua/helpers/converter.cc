@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -37,12 +37,18 @@
 #include "helpers/util_binder.h"
 #include "init_state.h"
 
-TableDelegation table_delegation = 
+#define GID_REPUTATION "136"
+
+TableDelegation table_delegation =
 {
     { "binder", true },
+    { "detection", true },
     { "ips", true },
     { "network", true },
-    { "normalizer", true},
+    { "normalizer", true },
+    { "rule_state", true },
+    { "stream_tcp", true },
+    { "suppress", true },
 };
 
 std::string Converter::ips_pattern;
@@ -50,7 +56,9 @@ bool Converter::parse_includes = true;
 bool Converter::empty_args = false;
 bool Converter::convert_rules_mult_files = true;
 bool Converter::convert_conf_mult_files = true;
-bool Converter::bind_wizard = false;
+bool Converter::bind_wizard = true;
+bool Converter::bind_port = false;
+bool Converter::convert_max_session = true;
 
 Converter::Converter() :
     table_api(&top_table_api, table_delegation),
@@ -174,11 +182,23 @@ int Converter::parse_include_file(const std::string& input_file)
     return rc;
 }
 
-int Converter::parse_file(const std::string& input_file, bool reset)
+int Converter::parse_file(
+    const std::string& input_file,
+    const std::string* rule_file,
+    bool reset)
 {
     std::ifstream in;
+    std::ofstream rules;
     std::string orig_text;
 
+    bool line_by_line = rule_file and input_file.length() >= 6 and
+        input_file.substr(input_file.length() - 6) == ".rules";
+
+    if ( line_by_line )
+    {
+        rules.open(*rule_file, std::ifstream::out);
+        rule_api.print_rules(rules, true);
+    }
     // theoretically, I can save this state.  But there's
     // no need since any function calling this method
     // will set the state when it's done anyway.
@@ -190,6 +210,7 @@ int Converter::parse_file(const std::string& input_file, bool reset)
 
     in.open(input_file, std::ifstream::in);
     unsigned line_num = 0;
+
     while (!in.eof())
     {
         std::string tmp;
@@ -199,12 +220,21 @@ int Converter::parse_file(const std::string& input_file, bool reset)
         data_api.set_current_file(input_file); //Set at each line to handle recursion correctly
         data_api.set_current_line(++line_num);
 
-        std::size_t first_non_white_char = tmp.find_first_not_of(' ');
-        if ((first_non_white_char == std::string::npos) ||
-            (tmp[first_non_white_char] == '#') ||
-            (tmp[first_non_white_char] == ';'))      // no, i did not know that semicolons made a
-                                                     // line a comment
+        if ( tmp.empty() )
+            continue;
+
+        // same criteria used for rtrim
+        // http://en.cppreference.com/w/cpp/string/byte/isspace
+        std::size_t first_non_white_char = tmp.find_first_not_of(" \f\n\r\t\v");
+
+        bool comment = (tmp[first_non_white_char] == '#') or (tmp[first_non_white_char] == ';');
+        bool commented_rule = tmp.substr(0, 7) == "# alert";
+
+        if ( !commented_rule && ((first_non_white_char == std::string::npos) || comment) )
         {
+            if ( line_by_line )
+                rules << tmp << std::endl;
+
             util::trim(tmp);
 
             if (!tmp.empty())
@@ -213,7 +243,6 @@ int Converter::parse_file(const std::string& input_file, bool reset)
                 tmp.erase(tmp.begin());
                 util::ltrim(tmp);
             }
-
             data_api.add_comment(tmp);
         }
         else if ( tmp[tmp.find_last_not_of(' ')] == '\\')
@@ -227,6 +256,12 @@ int Converter::parse_file(const std::string& input_file, bool reset)
             orig_text += tmp;
             std::istringstream data_stream(orig_text);
 
+            if (commented_rule)
+            {
+                std::string hash_char;
+                data_stream >> hash_char;
+            }
+
             try
             {
                 while (data_stream.peek() != EOF)
@@ -237,6 +272,40 @@ int Converter::parse_file(const std::string& input_file, bool reset)
                         break;
                     }
                 }
+
+                std::string gid = rule_api.get_option("gid");
+                if (0 == gid.compare(GID_REPUTATION) && 0 ==
+                    rule_api.get_rule_old_action().compare("sdrop"))
+                {
+                    std::string sid = rule_api.get_option("sid");
+                    table_api.open_table("suppress");
+                    table_api.add_diff_option_comment("gen_id", "gid");
+                    table_api.add_diff_option_comment("sid_id", "sid");
+                    table_api.open_table();
+                    table_api.add_option("gid", std::stoi(gid));
+                    table_api.add_option("sid", std::stoi(sid));
+                    table_api.close_table();
+                    table_api.close_table();
+                }
+
+                if (rule_api.enable_addr_anomaly_detection())
+                {
+                    table_api.open_table("detection");
+                    table_api.add_option("enable_address_anomaly_checks", true);
+                    table_api.close_table();
+                }
+
+                rule_api.resolve_pcre_buffer_options();
+
+                if (commented_rule)
+                    rule_api.make_rule_a_comment();
+
+                if ( line_by_line )
+                {
+                    rule_api.print_rules(rules, true);
+                    rule_api.clear();
+                }
+
                 if(empty_args)
                 {
                     set_empty_args(false);
@@ -260,6 +329,11 @@ int Converter::parse_file(const std::string& input_file, bool reset)
             if ( reset && !multiline_state )
                 reset_state();
         }
+    }
+    if ( line_by_line )
+    {
+        rules.close();
+        rule_api.reset_state();
     }
 
     // this is set by parse_include_file
@@ -340,11 +414,19 @@ void Converter::add_bindings()
     // vector::clear()'s ordering isn't deterministic but this is
     // keep in place for stable regressions
     std::stable_sort(binders.rbegin(), binders.rend());
+    for (auto it = binders.begin(); it != binders.end();)
+    {
+        if ( (*it)->has_ports() )
+            it = binders.erase(it);
+        else
+            ++it;
+    }
     while ( !binders.empty() )
         binders.pop_back();
 }
 
-int Converter::convert(const std::string& input,
+int Converter::convert(
+    const std::string& input,
     const std::string& output_file,
     std::string rule_file,
     std::string error_file)
@@ -352,7 +434,10 @@ int Converter::convert(const std::string& input,
     int rc;
     initialize();
 
-    rc = parse_file(input);
+    if (rule_file.empty())
+        rule_file = output_file;
+
+    rc = parse_file(input, &rule_file);
 
     if ( bind_wizard )
     {
@@ -366,9 +451,6 @@ int Converter::convert(const std::string& input,
     }
 
     add_bindings();
-
-    if (rule_file.empty())
-        rule_file = output_file;
 
     if (error_file.empty())
         error_file = output_file + ".rej";
@@ -419,13 +501,9 @@ int Converter::convert(const std::string& input,
         out << "-- make install\n";
         out << "--\n";
         out << "-- then:\n";
-        out << "-- export LUA_PATH=$DIR/include/snort/lua/?.lua\\;\\;\n";
         out << "-- export SNORT_LUA_PATH=$DIR/conf/\n";
         out << "---------------------------------------------------------------------------\n";
         out << "\n";
-        out << "\n";
-        out << "\n";
-        out << "require(\"snort_config\")\n\n";
         out << "dir = os.getenv('SNORT_LUA_PATH')\n";
         out << "\n";
         out << "if ( not dir ) then\n";
@@ -433,7 +511,6 @@ int Converter::convert(const std::string& input,
         out << "end\n";
         out << "\n";
         out << "dofile(dir .. '/snort_defaults.lua')\n";
-        out << "\n";
         out << "\n";
         data_api.print_data(out);
 
@@ -512,4 +589,3 @@ int Converter::convert(const std::string& input,
     }
     return rc;
 }
-

@@ -3,16 +3,13 @@ set (HASH_INCLUDES
     hashes.h
     ghash.h 
     xhash.h 
-    hashfcn.h 
+    hashfcn.h
+    lru_cache_shared.h
 )
 
-set (HASH_SOURCES )
-
-add_library( hash STATIC
+add_library( hash OBJECT
     ${HASH_INCLUDES}
-    ${HASH_SOURCES}
     hashes.cc
-    lru_cache_shared.h
     lru_cache_shared.cc
     ghash.cc 
     hashfcn.cc 

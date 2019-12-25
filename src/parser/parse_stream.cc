@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -32,6 +32,7 @@
 #include "parse_conf.h"
 #include "parse_rule.h"
 
+using namespace snort;
 using namespace std;
 
 static unsigned chars = 0, tokens = 0;
@@ -484,8 +485,6 @@ struct RuleParseState
     { otn = nullptr; }
 };
 
-static void parse_body(const char*, RuleParseState&, struct SnortConfig*);
-
 static bool exec(
     FsmAction act, string& tok,
     RuleParseState& rps, SnortConfig* sc)
@@ -542,16 +541,9 @@ static bool exec(
         if ( rps.tbd )
             exec(FSM_END, tok, rps, sc);
 
-        if ( const char* extra = parse_rule_close(sc, rps.rtn, rps.otn) )
-        {
-            IpsManager::reset_options();
-            parse_body(extra, rps, sc);
-        }
-        else
-        {
-            rps.otn = nullptr;
-            rules++;
-        }
+        parse_rule_close(sc, rps.rtn, rps.otn);
+        rps.otn = nullptr;
+        rules++;
         break;
     }
     case FSM_KEY:
@@ -623,40 +615,7 @@ static int get_escape(const string& s)
     return 1;      // escape, option goes to "
 }
 
-// parse_body() is called at the end of a stub rule to parse the detection
-// options in an so rule.  similar to parse_stream() except we start in a
-// different state.
-static void parse_body(const char* extra, RuleParseState& rps, struct SnortConfig* sc)
-{
-    stringstream is(extra);
-
-    string tok;
-    TokenType type;
-    int esc = 1;
-
-    int num = 8;
-    const char* punct = "(:,;)";
-
-    while ( (type = get_token(is, tok, punct, esc)) )
-    {
-        ++tokens;
-        const State* s = get_state(num, type, tok);
-
-#ifdef TRACER
-        printf("%d: %s = '%s' -> %s\n",
-            num, toks[type], tok.c_str(), acts[s->action]);
-#endif
-        exec(s->action, tok, rps, sc);
-
-        num = s->next;
-        esc = get_escape(rps.key);
-
-        if ( s->punct )
-            punct = s->punct;
-    }
-}
-
-void parse_stream(istream& is, struct SnortConfig* sc)
+void parse_stream(istream& is, SnortConfig* sc)
 {
     string tok;
     TokenType type;

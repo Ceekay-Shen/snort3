@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -47,33 +47,17 @@ uint16_t get_run_num()
 void set_instance_id(unsigned id)
 { instance_id = id; }
 
-unsigned get_instance_id()
-{ return instance_id; }
-
 void set_thread_type(SThreadType type)
 { thread_type = type; }
+
+namespace snort
+{
+unsigned get_instance_id()
+{ return instance_id; }
 
 SThreadType get_thread_type()
 { return thread_type; }
 
-//-------------------------------------------------------------------------
-// union rules - breaks are mandatory and must be taken in daq thread
-//-------------------------------------------------------------------------
-
-static unsigned g_breaks = 0;
-static THREAD_LOCAL unsigned t_breaks = 0;
-
-void take_break()
-{ g_breaks++; }
-
-bool break_time()
-{
-    if ( t_breaks == g_breaks )
-        return false;
-
-    t_breaks = g_breaks;
-    return true;
-}
 
 //-------------------------------------------------------------------------
 // format is:
@@ -89,7 +73,8 @@ bool break_time()
 const char* get_instance_file(std::string& file, const char* name)
 {
     bool sep = false;
-    file = !SnortConfig::get_conf()->log_dir.empty() ? SnortConfig::get_conf()->log_dir : "./";
+    file = !SnortConfig::get_conf()->log_dir.empty() ?
+        SnortConfig::get_conf()->log_dir : "./";
 
     if ( file.back() != '/' )
         file += '/';
@@ -103,7 +88,8 @@ const char* get_instance_file(std::string& file, const char* name)
     if ( (ThreadConfig::get_instance_max() > 1) || SnortConfig::get_conf()->id_zero )
     {
         char id[8];
-        snprintf(id, sizeof(id), "%u", get_instance_id() + SnortConfig::get_conf()->id_offset);
+        snprintf(id, sizeof(id), "%u",
+            get_instance_id() + SnortConfig::get_conf()->id_offset);
         file += id;
         sep = true;
     }
@@ -123,4 +109,5 @@ const char* get_instance_file(std::string& file, const char* name)
     file += name;
 
     return file.c_str();
+}
 }

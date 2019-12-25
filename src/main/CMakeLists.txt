@@ -1,5 +1,6 @@
 
 set (INCLUDES
+    analyzer_command.h
     policy.h
     snort_config.h
     snort_debug.h
@@ -12,19 +13,22 @@ if ( ENABLE_DEBUG_MSGS )
 endif ( ENABLE_DEBUG_MSGS )
 
 if ( ENABLE_SHELL )
-    set ( SHELL_SOURCES control.cc control.h control_mgmt.cc control_mgmt.h )
+    set ( SHELL_SOURCES control.cc control.h control_mgmt.cc control_mgmt.h ac_shell_cmd.h ac_shell_cmd.cc)
 endif ( ENABLE_SHELL )
 
-add_library (main STATIC
+add_subdirectory(test)
+
+add_library (main OBJECT
     analyzer.cc
     analyzer.h
     analyzer_command.cc
-    analyzer_command.h
     build.h
     help.cc
     help.h
     modules.cc
     modules.h
+    oops_handler.cc
+    oops_handler.h
     policy.cc
     request.cc
     request.h
@@ -43,14 +47,6 @@ add_library (main STATIC
     ${DEBUG_MSGS_SOURCES}
     ${INCLUDES}
     ${SHELL_SOURCES}
-)
-
-
-target_link_libraries(main
-    time
-    codecs
-    detection
-    packet_io
 )
 
 install (FILES ${INCLUDES}

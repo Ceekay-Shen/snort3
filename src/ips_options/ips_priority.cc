@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -26,6 +26,8 @@
 #include "framework/ips_option.h"
 #include "framework/module.h"
 
+using namespace snort;
+
 #define s_name "priority"
 
 //-------------------------------------------------------------------------
@@ -34,7 +36,7 @@
 
 static const Parameter s_params[] =
 {
-    { "~", Parameter::PT_INT, "1:", nullptr,
+    { "~", Parameter::PT_INT, "1:max31", nullptr,
       "relative severity level; 1 is highest priority" },
 
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
@@ -61,7 +63,7 @@ bool PriorityModule::set(const char*, Value& v, SnortConfig*)
     if ( !v.is("~") )
         return false;
 
-    priority = v.get_long();
+    priority = v.get_int32();
     return true;
 }
 

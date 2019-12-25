@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -30,8 +30,9 @@
 #include "appid_session.h"
 #include "lua_detector_api.h"
 #include "protocols/packet.h"
-#include "main/snort_debug.h"
 #include "log/messages.h"
+
+using namespace snort;
 
 static THREAD_LOCAL unsigned client_module_index = 0;
 
@@ -56,11 +57,7 @@ void ClientDetector::register_appid(AppId appId, unsigned extractsInfo)
     }
     extractsInfo &= (APPINFO_FLAG_CLIENT_ADDITIONAL | APPINFO_FLAG_CLIENT_USER);
     if (!extractsInfo)
-    {
-        DebugFormat(DEBUG_LOG,
-            "Ignoring direct client application without info for AppId: %d", appId);
         return;
-    }
 
     pEntry->client_detector = this;
     pEntry->flags |= extractsInfo;

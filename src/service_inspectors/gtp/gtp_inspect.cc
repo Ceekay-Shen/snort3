@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -26,13 +26,15 @@
 #include "gtp_inspect.h"
 
 #include "detection/detection_engine.h"
-#include "detection/ips_context.h"
+#include "detection/ips_context_data.h"
 #include "managers/inspector_manager.h"
 #include "profiler/profiler.h"
 #include "protocols/packet.h"
 
 #include "gtp.h"
 #include "gtp_module.h"
+
+using namespace snort;
 
 //-------------------------------------------------------------------------
 // flow stuff
@@ -63,7 +65,7 @@ GtpFlowData::~GtpFlowData()
 // ips context stuff
 //-------------------------------------------------------------------------
 
-static unsigned ips_id = 0;
+static unsigned gtp_ips_id = 0;
 
 // This table stores all the information elements in a packet
 // To save memory, only one table for each ips context.
@@ -78,20 +80,15 @@ public:
     { memset(gtp_ies, 0, sizeof(gtp_ies)); }
 
     static void init()
-    { ips_id = IpsContextData::get_ips_id(); }
+    { gtp_ips_id = IpsContextData::get_ips_id(); }
 
     GTP_IEData gtp_ies[MAX_GTP_IE_CODE + 1];
 };
 
 GTP_IEData* get_infos()
 {
-    GtpContextData* gcd = (GtpContextData*)DetectionEngine::get_data(ips_id);
+    GtpContextData* gcd = IpsContextData::get<GtpContextData>(gtp_ips_id);
 
-    if ( !gcd )
-    {
-        gcd = new GtpContextData;
-        DetectionEngine::set_data(ips_id, gcd);
-    }
     return gcd->gtp_ies;
 }
 
@@ -239,7 +236,7 @@ static const InspectApi gtp_api =
         mod_dtor
     },
     IT_SERVICE,
-    (uint16_t)PktType::UDP,
+    PROTO_BIT__UDP,
     nullptr,
     "gtp",
     gtp_init,

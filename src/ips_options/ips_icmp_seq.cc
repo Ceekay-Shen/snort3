@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -52,6 +52,8 @@
 #include "protocols/icmp6.h"
 #include "protocols/packet.h"
 
+using namespace snort;
+
 #define s_name "icmp_seq"
 
 static THREAD_LOCAL ProfileStats icmpSeqPerfStats;
@@ -101,7 +103,7 @@ bool IcmpSeqOption::operator==(const IpsOption& ips) const
 
 IpsOption::EvalStatus IcmpSeqOption::eval(Cursor&, Packet* p)
 {
-    Profile profile(icmpSeqPerfStats);
+    RuleProfile profile(icmpSeqPerfStats);
 
     if (!p->ptrs.icmph)
         return NO_MATCH;
@@ -128,7 +130,7 @@ IpsOption::EvalStatus IcmpSeqOption::eval(Cursor&, Packet* p)
 static const Parameter s_params[] =
 {
     { "~range", Parameter::PT_INTERVAL, RANGE, nullptr,
-      "check if icmp sequence number is in given range" },
+      "check if ICMP sequence number is in given range" },
 
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
 };

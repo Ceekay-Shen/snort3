@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -24,6 +24,8 @@
 #include "file_segment.h"
 
 #include "file_lib.h"
+
+using namespace snort;
 
 FileSegment::~FileSegment ()
 {
@@ -150,22 +152,22 @@ FilePosition FileSegments::get_file_position(uint64_t data_size, uint64_t file_s
     return SNORT_FILE_MIDDLE;
 }
 
-int FileSegments::process_one(Flow* flow, const uint8_t* file_data, int data_size,
+int FileSegments::process_one(Packet* p, const uint8_t* file_data, int data_size,
     FilePolicyBase* policy)
 {
     FilePosition position = get_file_position(data_size, context->get_file_size());
 
-    return context->process(flow, file_data, data_size, position, policy);
+    return context->process(p, file_data, data_size, position, policy);
 }
 
-int FileSegments::process_all(Flow* flow, FilePolicyBase* policy)
+int FileSegments::process_all(Packet* p, FilePolicyBase* policy)
 {
     int ret = 1;
 
     FileSegment* current_segment = head;
     while (current_segment && (current_offset == current_segment->offset))
     {
-        ret = process_one(flow, (const uint8_t*)current_segment->data->data(),
+        ret = process_one(p, (const uint8_t*)current_segment->data->data(),
             current_segment->data->size(), policy);
 
         if (!ret)
@@ -190,7 +192,7 @@ int FileSegments::process_all(Flow* flow, FilePolicyBase* policy)
  *    1: continue processing/log/block this file
  *    0: ignore this file
  */
-int FileSegments::process(Flow* flow, const uint8_t* file_data, uint64_t data_size,
+int FileSegments::process(Packet* p, const uint8_t* file_data, uint64_t data_size,
     uint64_t offset, FilePolicyBase* policy)
 {
     int ret = 0;
@@ -203,7 +205,7 @@ int FileSegments::process(Flow* flow, const uint8_t* file_data, uint64_t data_si
     // Walk through the segments that can be flushed
     if (current_offset == offset)
     {
-        ret =  process_one(flow, file_data, data_size, policy);
+        ret =  process_one(p, file_data, data_size, policy);
         current_offset += data_size;
         if (!ret)
         {
@@ -211,11 +213,12 @@ int FileSegments::process(Flow* flow, const uint8_t* file_data, uint64_t data_si
             return 0;
         }
 
-        ret = process_all(flow, policy);
+        ret = process_all(p, policy);
     }
     else if ((current_offset < context->get_file_size()) && (current_offset < offset))
     {
         add(file_data, data_size, offset);
+        return 1;
     }
 
     return ret;

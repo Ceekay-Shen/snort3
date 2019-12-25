@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -87,7 +87,7 @@ bool Content<option_name>::parse_options(
         rule_api.add_suboption("length", val);
 
     else if (keyword == "rawbytes")
-        add_sticky_buffer(data_stream, "pkt_data");
+        add_sticky_buffer(data_stream, "raw_data");
 
     else if (keyword == "http_client_body")
         add_sticky_buffer(data_stream, "http_client_body");

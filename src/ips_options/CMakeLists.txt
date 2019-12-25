@@ -7,12 +7,15 @@ SET( PLUGIN_LIST
     ips_ack.cc
     ips_asn1.cc
     ips_base64.cc
+    ips_ber_data.cc
+    ips_ber_skip.cc
     ips_bufferlen.cc
     ips_byte_extract.cc
     ips_byte_jump.cc
     ips_byte_math.cc
     ips_byte_test.cc
     ips_cvs.cc
+    ips_enable.cc
     ips_file_type.cc
     ips_flags.cc
     ips_fragbits.cc
@@ -27,6 +30,7 @@ SET( PLUGIN_LIST
     ips_isdataat.cc
     ips_itype.cc
     ips_msg.cc
+    ips_pcre.cc
     ips_priority.cc
     ips_raw_data.cc
     ips_rem.cc
@@ -61,8 +65,6 @@ set (IPS_SOURCES
     ips_metadata.cc
     ips_options.cc
     ips_options.h
-    ips_pcre.cc
-    ips_pcre.h
     ips_pkt_data.cc
     ips_reference.cc
     ips_replace.cc
@@ -71,14 +73,16 @@ set (IPS_SOURCES
 )
 
 if ( HAVE_HYPERSCAN )
-    set(OPTION_LIST ips_regex.cc ips_regex.h
-        ips_sd_pattern.cc ips_sd_pattern.h
+    set(PLUGIN_LIST
+        ${PLUGIN_LIST}
+        ips_regex.cc
+        ips_sd_pattern.cc
         sd_credit_card.cc sd_credit_card.h)
 endif ()
 
 if (STATIC_IPS_OPTIONS)
 
-    add_library ( ips_options STATIC
+    add_library ( ips_options OBJECT
         ${IPS_SOURCES}
         ${OPTION_LIST}
         ${PLUGIN_LIST}
@@ -86,7 +90,7 @@ if (STATIC_IPS_OPTIONS)
 
 else (STATIC_IPS_OPTIONS)
 
-    add_library ( ips_options STATIC
+    add_library ( ips_options OBJECT
         ${IPS_SOURCES}
         ${OPTION_LIST}
     )
@@ -94,12 +98,15 @@ else (STATIC_IPS_OPTIONS)
     add_dynamic_module(ips_ack ips_options ips_ack.cc)
     add_dynamic_module(ips_asn1 ips_options ips_asn1.cc asn1_detect.cc asn1_detect.h asn1_util.h asn1_util.cc)
     add_dynamic_module(ips_base64 ips_options ips_base64.cc)
+    add_dynamic_module(ips_ber_data ips_options ips_ber_data.cc)
+    add_dynamic_module(ips_ber_skip ips_options ips_ber_skip.cc)
     add_dynamic_module(ips_bufferlen ips_options ips_bufferlen.cc)
-    add_dynamic_module(ips_byte_test ips_options ips_byte_test.cc)
-    add_dynamic_module(ips_byte_jump ips_options ips_byte_jump.cc)
     add_dynamic_module(ips_byte_extract ips_options ips_byte_extract.cc)
+    add_dynamic_module(ips_byte_jump ips_options ips_byte_jump.cc)
     add_dynamic_module(ips_byte_math ips_options ips_byte_math.cc)
+    add_dynamic_module(ips_byte_test ips_options ips_byte_test.cc)
     add_dynamic_module(ips_cvs ips_options ips_cvs.cc)
+    add_dynamic_module(ips_enable ips_options ips_enable.cc)
     add_dynamic_module(ips_file_type ips_options ips_file_type.cc)
     add_dynamic_module(ips_flags ips_options ips_flags.cc)
     add_dynamic_module(ips_fragbits ips_options ips_fragbits.cc)
@@ -114,6 +121,7 @@ else (STATIC_IPS_OPTIONS)
     add_dynamic_module(ips_isdataat ips_options ips_isdataat.cc)
     add_dynamic_module(ips_itype ips_options ips_itype.cc)
     add_dynamic_module(ips_msg ips_options ips_msg.cc)
+    add_dynamic_module(ips_pcre ips_options ips_pcre.cc)
     add_dynamic_module(ips_priority ips_options ips_priority.cc)
     add_dynamic_module(ips_raw_data ips_options ips_raw_data.cc)
     add_dynamic_module(ips_rem ips_options ips_rem.cc)
@@ -128,11 +136,11 @@ else (STATIC_IPS_OPTIONS)
     add_dynamic_module(ips_tos ips_options ips_tos.cc)
     add_dynamic_module(ips_ttl ips_options ips_ttl.cc)
     add_dynamic_module(ips_window ips_options ips_window.cc)
+if ( HAVE_HYPERSCAN )
+    add_dynamic_module(ips_regex ips_options ips_regex.cc)
+    add_dynamic_module(ips_sd_pattern ips_options ips_sd_pattern.cc sd_credit_card.cc sd_credit_card.h)
+endif ( HAVE_HYPERSCAN )
 
 endif (STATIC_IPS_OPTIONS)
 
-target_link_libraries(ips_options
-    framework
-    helpers
-    hash
-)
+add_subdirectory(test)

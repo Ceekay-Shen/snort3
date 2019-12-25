@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -22,7 +22,7 @@
 #include "config.h"
 #endif
 
-#include <sfbpf_dlt.h>
+#include <daq_dlt.h>
 
 #include "codecs/codec_module.h"
 #include "framework/codec.h"
@@ -30,6 +30,8 @@
 #include "main/snort_config.h"
 #include "protocols/eth.h"
 #include "protocols/packet_manager.h"
+
+using namespace snort;
 
 #define CD_ETH_NAME "eth"
 #define CD_ETH_HELP_STR "support for ethernet protocol"
@@ -71,13 +73,13 @@ public:
 
 void EthCodec::get_data_link_type(std::vector<int>& v)
 {
-    v.push_back(DLT_PPP_ETHER);
-    v.push_back(DLT_EN10MB);
+    v.emplace_back(DLT_PPP_ETHER);
+    v.emplace_back(DLT_EN10MB);
 }
 
 void EthCodec::get_protocol_ids(std::vector<ProtocolId>& v)
 {
-    v.push_back(ProtocolId::ETHERNET_802_3);
+    v.emplace_back(ProtocolId::ETHERNET_802_3);
 }
 
 bool EthCodec::decode(const RawData& raw, CodecData& codec, DecodeData&)

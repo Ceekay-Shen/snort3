@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -32,13 +32,15 @@
 #include "dnp3.h"
 #include "dnp3_map.h"
 
+using namespace snort;
+
 //-------------------------------------------------------------------------
 // DNP3 indicator flags rule options
 //-------------------------------------------------------------------------
 
 #define s_name "dnp3_ind"
 #define s_help \
-    "detection option to check dnp3 indicator flags"
+    "detection option to check DNP3 indicator flags"
 
 static THREAD_LOCAL ProfileStats dnp3_ind_perf_stats;
 
@@ -78,7 +80,7 @@ bool Dnp3IndOption::operator==(const IpsOption& ips) const
 
 IpsOption::EvalStatus Dnp3IndOption::eval(Cursor&, Packet* p)
 {
-    Profile profile(dnp3_ind_perf_stats);
+    RuleProfile profile(dnp3_ind_perf_stats);
 
     if ((p->has_tcp_data() && !p->is_full_pdu()) || !p->flow || !p->dsize)
         return NO_MATCH;
@@ -113,7 +115,7 @@ IpsOption::EvalStatus Dnp3IndOption::eval(Cursor&, Packet* p)
 static const Parameter s_params[] =
 {
     { "~", Parameter::PT_STRING, nullptr, nullptr,
-      "match given dnp3 indicator flags" },
+      "match given DNP3 indicator flags" },
 
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
 };

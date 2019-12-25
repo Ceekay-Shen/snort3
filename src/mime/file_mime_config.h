@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -33,6 +33,8 @@
 #define MAX_DEPTH                     65535
 #define MIN_DEPTH                     (-1)
 
+namespace snort
+{
 class SO_PUBLIC DecodeConfig
 {
 public:
@@ -51,6 +53,15 @@ public:
     void set_uu_depth(int);
     int get_uu_depth();
 
+    void set_decompress_pdf(bool);
+    bool is_decompress_pdf();
+
+    void set_decompress_swf(bool);
+    bool is_decompress_swf();
+
+    void set_decompress_zip(bool);
+    bool is_decompress_zip();
+
     int64_t get_file_depth();
     bool is_decoding_enabled();
     void sync_all_depths();
@@ -63,9 +74,12 @@ private:
     int qp_depth = DEFAULT_DEPTH;
     int bitenc_depth = DEFAULT_DEPTH;
     int uu_depth = DEFAULT_DEPTH;
+    bool decompress_pdf = false;
+    bool decompress_swf = false;
+    bool decompress_zip = false;
     int64_t file_depth = MIN_DEPTH;
     bool decode_enabled = true;
 };
-
+}
 #endif
 

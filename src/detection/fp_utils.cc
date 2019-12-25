@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -24,20 +24,25 @@
 
 #include <cassert>
 #include <cstring>
+#include <list>
+#include <mutex>
+#include <thread>
 
 #include "ips_options/ips_flow.h"
 #include "log/messages.h"
+#include "main/snort_config.h"
 #include "main/thread_config.h"
+#include "pattern_match_data.h"
 #include "ports/port_group.h"
 #include "target_based/snort_protocols.h"
+#include "treenodes.h"
 #include "utils/util.h"
 
 #ifdef UNIT_TEST
-#include "catch/catch.hpp"
+#include "catch/snort_catch.h"
 #endif
 
-#include "pattern_match_data.h"
-#include "treenodes.h"
+using namespace snort;
 
 //--------------------------------------------------------------------------
 // private utilities
@@ -45,7 +50,7 @@
 
 static void finalize_content(OptFpList* ofl)
 {
-    PatternMatchData* pmd = get_pmd(ofl, 0, RULE_WO_DIR);
+    PatternMatchData* pmd = get_pmd(ofl, UNKNOWN_PROTOCOL_ID, RULE_WO_DIR);
 
     if ( !pmd )
         return;
@@ -57,7 +62,7 @@ static void finalize_content(OptFpList* ofl)
 
 static void clear_fast_pattern_only(OptFpList* ofl)
 {
-    PatternMatchData* pmd = get_pmd(ofl, 0, RULE_WO_DIR);
+    PatternMatchData* pmd = get_pmd(ofl, UNKNOWN_PROTOCOL_ID, RULE_WO_DIR);
 
     if ( pmd && pmd->fp_only > 0 )
         pmd->fp_only = 0;
@@ -117,17 +122,29 @@ static RuleDirection get_dir(OptTreeNode* otn)
 // public utilities
 //--------------------------------------------------------------------------
 
-PatternMatchData* get_pmd(OptFpList* ofl, int proto, RuleDirection direction)
+PatternMatchData* get_pmd(OptFpList* ofl, SnortProtocolId snort_protocol_id, RuleDirection direction)
 {
     if ( !ofl->ips_opt )
         return nullptr;
 
-    return ofl->ips_opt->get_pattern(proto, direction);
+    return ofl->ips_opt->get_pattern(snort_protocol_id, direction);
+}
+
+bool is_fast_pattern_only(OptFpList* ofl, Mpse::MpseType mpse_type)
+{
+    PatternMatchData* pmd = get_pmd(ofl, UNKNOWN_PROTOCOL_ID, RULE_WO_DIR);
+
+    if ( !pmd )
+        return false;
+
+    assert((mpse_type == Mpse::MPSE_TYPE_NORMAL) or (mpse_type == Mpse::MPSE_TYPE_OFFLOAD));
+
+    return (pmd->fp_only & (1 << mpse_type));
 }
 
 bool is_fast_pattern_only(OptFpList* ofl)
 {
-    PatternMatchData* pmd = get_pmd(ofl, 0, RULE_WO_DIR);
+    PatternMatchData* pmd = get_pmd(ofl, UNKNOWN_PROTOCOL_ID, RULE_WO_DIR);
 
     if ( !pmd )
         return false;
@@ -143,10 +160,10 @@ bool is_fast_pattern_only(OptFpList* ofl)
   *   length - of trimmed pattern
   *   buff - ptr to new beginning of trimmed buffer
   */
-int flp_trim(const char* p, int plen, const char** buff)
+unsigned flp_trim(const char* p, unsigned plen, const char** buff)
 {
-    int i;
-    int size = 0;
+    unsigned i;
+    unsigned size = 0;
 
     if ( !p )
         return 0;
@@ -220,7 +237,7 @@ struct FpSelector
 {
     CursorActionType cat;
     PatternMatchData* pmd;
-    int size;
+    unsigned size;
 
     FpSelector(CursorActionType, PatternMatchData*);
 
@@ -240,14 +257,17 @@ FpSelector::FpSelector(CursorActionType c, PatternMatchData* p)
 }
 
 bool FpSelector::is_better_than(
-    FpSelector& rhs, bool srvc, RuleDirection dir, bool only_literals)
+    FpSelector& rhs, bool /*srvc*/, RuleDirection /*dir*/, bool only_literals)
 {
     if ( !pmd_can_be_fp(pmd, cat, only_literals) )
     {
         if ( pmd->is_fast_pattern() )
         {
             ParseWarning(WARN_RULES, "content ineligible for fast_pattern matcher - ignored");
-            pmd->flags &= ~PatternMatchData::FAST_PAT;
+            // When we have a normal search engine we do not wish to invalidate the user
+            // indicated fast pattern as this may be a valid fast pattern for use in the offload
+            // search engine
+            // pmd->flags &= ~PatternMatchData::FAST_PAT;
         }
         return false;
     }
@@ -255,22 +275,6 @@ bool FpSelector::is_better_than(
     if ( !rhs.pmd )
         return true;
 
-    if ( !srvc )
-    {
-        if ( cat == CAT_SET_RAW and rhs.cat != CAT_SET_RAW )
-            return true;
-
-        if ( cat != CAT_SET_RAW and rhs.cat == CAT_SET_RAW )
-            return false;
-    }
-    else if ( dir == RULE_FROM_SERVER )
-    {
-        if ( cat != CAT_SET_KEY and rhs.cat == CAT_SET_KEY )
-            return true;
-
-        if ( cat == CAT_SET_KEY and rhs.cat != CAT_SET_KEY )
-            return false;
-    }
     if ( pmd->is_fast_pattern() )
     {
         if ( rhs.pmd->is_fast_pattern() )
@@ -288,6 +292,9 @@ bool FpSelector::is_better_than(
     if ( !pmd->is_negated() && rhs.pmd->is_negated() )
         return true;
 
+    if ( pmd->is_negated() && !rhs.pmd->is_negated() )
+        return false;
+
     if ( size > rhs.size )
         return true;
 
@@ -299,7 +306,7 @@ bool FpSelector::is_better_than(
 //--------------------------------------------------------------------------
 
 PatternMatchVector get_fp_content(
-    OptTreeNode* otn, OptFpList*& next, bool srvc, bool only_literals)
+    OptTreeNode* otn, OptFpList*& next, bool srvc, bool only_literals, bool& exclude)
 {
     CursorActionType curr_cat = CAT_SET_RAW;
     FpSelector best;
@@ -321,7 +328,7 @@ PatternMatchVector get_fp_content(
         }
 
         RuleDirection dir = get_dir(otn);
-        PatternMatchData* tmp = get_pmd(ofl, otn->proto, dir);
+        PatternMatchData* tmp = get_pmd(ofl, otn->snort_protocol_id, dir);
 
         if ( !tmp )
             continue;
@@ -343,24 +350,87 @@ PatternMatchVector get_fp_content(
             // Add alternate pattern
             PatternMatchData* alt_pmd = ofl->ips_opt->get_alternate_pattern();
             if (alt_pmd)
-                pmds.push_back(alt_pmd);
+                pmds.emplace_back(alt_pmd);
             // Add main pattern last
-            pmds.push_back(best.pmd);
+            pmds.emplace_back(best.pmd);
         }
     }
 
-    if ( best.pmd and otn->proto == SNORT_PROTO_FILE and best.cat != CAT_SET_FILE )
+    if ( best.pmd and best.cat != CAT_SET_RAW and !srvc and otn->sigInfo.num_services > 0 )
     {
-        ParseWarning(WARN_RULES, "file rule %u:%u does not have file_data fast pattern",
-            otn->sigInfo.gid, otn->sigInfo.sid);
-        pmds.clear();
+        pmds.clear();  // just include in service group
+        exclude = true;
     }
+    else
+        exclude = false;
 
     if ( content && !best.pmd)
         ParseWarning(WARN_RULES, "content based rule %u:%u has no eligible fast pattern",
             otn->sigInfo.gid, otn->sigInfo.sid);
 
     return pmds;
+}
+
+//--------------------------------------------------------------------------
+// mpse compile threads
+//--------------------------------------------------------------------------
+
+static std::list<Mpse*> s_tbd;
+static std::mutex s_mutex;
+
+static Mpse* get_mpse()
+{
+    std::lock_guard<std::mutex> lock(s_mutex);
+
+    if ( s_tbd.empty() )
+        return nullptr;
+
+    Mpse* m = s_tbd.front();
+    s_tbd.pop_front();
+
+    return m;
+}
+
+static void compile_mpse(SnortConfig* sc, unsigned id, unsigned* count)
+{
+    set_instance_id(id);
+    unsigned c = 0;
+
+    while ( Mpse* m = get_mpse() )
+    {
+        if ( !m->prep_patterns(sc) )
+            c++;
+    }
+    std::lock_guard<std::mutex> lock(s_mutex);
+    *count += c;
+}
+
+void queue_mpse(Mpse* m)
+{
+    s_tbd.push_back(m);
+}
+
+unsigned compile_mpses(struct SnortConfig* sc, bool parallel)
+{
+    std::list<std::thread*> workers;
+    unsigned max = parallel ? sc->num_slots : 1;
+    unsigned count = 0;
+
+    if ( max == 1 )
+    {
+        compile_mpse(sc, get_instance_id(), &count);
+        return count;
+    }
+
+    for ( unsigned i = 0; i < max; ++i )
+        workers.push_back(new std::thread(compile_mpse, sc, i, &count));
+
+    for ( auto* w : workers )
+    {
+        w->join();
+        delete w;
+    }
+    return count;
 }
 
 //--------------------------------------------------------------------------
@@ -494,7 +564,7 @@ TEST_CASE("fp_cat2", "[FastPatternSelect]")
     set_pmd(p1, 0x0, "foo");
     FpSelector s1(CAT_SET_FILE, &p1);
 
-    CHECK(s0.is_better_than(s1, false, RULE_WO_DIR));
+    CHECK(!s0.is_better_than(s1, false, RULE_WO_DIR));
     CHECK(!s1.is_better_than(s0, false, RULE_WO_DIR));
 }
 
@@ -534,7 +604,7 @@ TEST_CASE("fp_pkt_key_port", "[FastPatternSelect]")
     set_pmd(p1, 0x0, "longer");
     FpSelector s1(CAT_SET_KEY, &p1);
 
-    CHECK(s0.is_better_than(s1, false, RULE_WO_DIR));
+    CHECK(!s0.is_better_than(s1, false, RULE_WO_DIR));
 }
 
 TEST_CASE("fp_pkt_key_port_user", "[FastPatternSelect]")
@@ -612,8 +682,8 @@ TEST_CASE("fp_pkt_key_srvc_rsp", "[FastPatternSelect]")
     set_pmd(p1, 0x0, "longer");
     FpSelector s1(CAT_SET_KEY, &p1);
 
-    CHECK(s0.is_better_than(s1, true, RULE_FROM_SERVER));
-    CHECK(!s1.is_better_than(s0, true, RULE_FROM_SERVER));
+    CHECK(!s0.is_better_than(s1, true, RULE_FROM_SERVER));
+    CHECK(s1.is_better_than(s0, true, RULE_FROM_SERVER));
 }
 #endif
 

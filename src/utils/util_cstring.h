@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 // Copyright (C) 2002 Martin Roesch <roesch@sourcefire.com>
 //
@@ -29,6 +29,8 @@
 
 #include "main/snort_types.h"
 
+namespace snort
+{
 #define SNORT_SNPRINTF_SUCCESS 0
 #define SNORT_SNPRINTF_TRUNCATION 1
 #define SNORT_SNPRINTF_ERROR (-1)
@@ -107,7 +109,7 @@ inline int SnortStrToU32(const char* buffer, char** endptr,
         buffer++;
 
     // If all spaces or a negative sign is found, return error.
-    // XXX May also want to exclude '+' as well.
+    // May want to exclude '+' as well.
     if ((*buffer == '\0') || (*buffer == '-'))
         return -1;
 
@@ -131,6 +133,6 @@ inline int SnortStrToU32(const char* buffer, char** endptr,
 
     return 0;
 }
-
+}
 #endif
 

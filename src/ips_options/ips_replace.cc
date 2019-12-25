@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 // Copyright (C) 1998-2002 Martin Roesch <roesch@sourcefire.com>
 //
@@ -36,6 +36,7 @@
 #include "profiler/profiler.h"
 #include "protocols/packet.h"
 
+using namespace snort;
 using namespace std;
 
 static void replace_parse(const char* args, string& s)
@@ -76,7 +77,7 @@ static THREAD_LOCAL ProfileStats replacePerfStats;
 class ReplaceOption : public IpsOption
 {
 public:
-    ReplaceOption(string&);
+    ReplaceOption(const string&);
     ~ReplaceOption() override;
 
     EvalStatus eval(Cursor&, Packet*) override;
@@ -105,7 +106,7 @@ private:
     int* offset; /* >=0 is offset to start of replace */
 };
 
-ReplaceOption::ReplaceOption(string& s) : IpsOption(s_name)
+ReplaceOption::ReplaceOption(const string& s) : IpsOption(s_name)
 {
     unsigned n = ThreadConfig::get_instance_max();
     offset = new int[n];
@@ -155,7 +156,7 @@ bool ReplaceOption::operator==(const IpsOption& ips) const
 
 IpsOption::EvalStatus ReplaceOption::eval(Cursor& c, Packet* p)
 {
-    Profile profile(replacePerfStats);
+    RuleProfile profile(replacePerfStats);
 
     if ( p->is_cooked() )
         return NO_MATCH;
@@ -174,7 +175,7 @@ IpsOption::EvalStatus ReplaceOption::eval(Cursor& c, Packet* p)
 
 void ReplaceOption::action(Packet*)
 {
-    Profile profile(replacePerfStats);
+    RuleProfile profile(replacePerfStats);
 
     if ( pending() )
         Replace_QueueChange(repl, (unsigned)pos());

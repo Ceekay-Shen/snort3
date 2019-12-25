@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2010-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -34,6 +34,8 @@
 #include "utils/util.h"
 
 #include "extract.h"
+
+using namespace snort;
 
 static THREAD_LOCAL ProfileStats byteExtractPerfStats;
 
@@ -141,7 +143,7 @@ bool ByteExtractOption::operator==(const IpsOption& ips) const
 
 IpsOption::EvalStatus ByteExtractOption::eval(Cursor& c, Packet* p)
 {
-    Profile profile(byteExtractPerfStats);
+    RuleProfile profile(byteExtractPerfStats);
 
     ByteExtractData* data = &config;
 
@@ -215,7 +217,7 @@ IpsOption::EvalStatus ByteExtractOption::eval(Cursor& c, Packet* p)
     SetVarValueByIndex(value, data->var_number);
 
     /* advance cursor */
-    c.add_pos(bytes_read);
+    c.add_pos(data->offset + bytes_read);
 
     /* this rule option always "matches" if the read is performed correctly */
     return MATCH;
@@ -373,10 +375,10 @@ bool ExtractModule::end(const char*, int, SnortConfig*)
 bool ExtractModule::set(const char*, Value& v, SnortConfig*)
 {
     if ( v.is("~count") )
-        data.bytes_to_grab = v.get_long();
+        data.bytes_to_grab = v.get_uint8();
 
     else if ( v.is("~offset") )
-        data.offset = v.get_long();
+        data.offset = v.get_int32();
 
     else if ( v.is("~name") )
         data.name = snort_strdup(v.get_string());
@@ -385,10 +387,10 @@ bool ExtractModule::set(const char*, Value& v, SnortConfig*)
         data.relative_flag = 1;
 
     else if ( v.is("align") )
-        data.align = v.get_long();
+        data.align = v.get_uint8();
 
     else if ( v.is("multiplier") )
-        data.multiplier = v.get_long();
+        data.multiplier = v.get_uint16();
 
     else if ( v.is("big") )
         set_byte_order(data.endianness, ENDIAN_BIG, "byte_extract");
@@ -414,7 +416,7 @@ bool ExtractModule::set(const char*, Value& v, SnortConfig*)
         data.base = 8;
 
     else if ( v.is("bitmask") )
-        data.bitmask_val = v.get_long();
+        data.bitmask_val = v.get_uint32();
 
     else
         return false;

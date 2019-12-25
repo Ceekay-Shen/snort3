@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2017-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2017-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -24,6 +24,8 @@
 #include "codecs/codec_module.h"
 #include "framework/codec.h"
 
+using namespace snort;
+
 #define CD_BAD_PROTO_NAME "bad_proto"
 #define CD_BAD_PROTO_HELP "bad protocol id"
 
@@ -41,10 +43,10 @@ public:
 
 void BadProtocalCodec::get_protocol_ids(std::vector<ProtocolId>& proto_ids)
 {
-    proto_ids.push_back(ProtocolId::SWIPE);
-    proto_ids.push_back(ProtocolId::MOBILITY);
-    proto_ids.push_back(ProtocolId::SUN_ND);
-    proto_ids.push_back(ProtocolId::PIM);
+    proto_ids.emplace_back(ProtocolId::SWIPE);
+    proto_ids.emplace_back(ProtocolId::MOBILITY);
+    proto_ids.emplace_back(ProtocolId::SUN_ND);
+    proto_ids.emplace_back(ProtocolId::PIM);
 }
 
 bool BadProtocalCodec::decode(const RawData&, CodecData& codec, DecodeData&)

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -36,6 +36,8 @@
 #include "log/messages.h"
 #include "managers/mpse_manager.h"
 
+using namespace snort;
+
 FastPatternConfig::FastPatternConfig()
 {
     search_api = MpseManager::get_search_api("ac_bnfa");
@@ -64,6 +66,25 @@ const char* FastPatternConfig::get_search_method()
     return search_api->base.name;
 }
 
+bool FastPatternConfig::set_offload_search_method(const char* method)
+{
+    const MpseApi* api = MpseManager::get_search_api(method);
+
+    if ( !api )
+        return false;
+
+    offload_search_api = api;
+    return true;
+}
+
+const char* FastPatternConfig::get_offload_search_method()
+{
+    if ( !offload_search_api )
+        return nullptr;
+
+    return offload_search_api->base.name;
+}
+
 void FastPatternConfig::set_max_pattern_len(unsigned int max_len)
 {
     if (max_pattern_len != 0)
@@ -73,7 +94,7 @@ void FastPatternConfig::set_max_pattern_len(unsigned int max_len)
     max_pattern_len = max_len;
 }
 
-int FastPatternConfig::set_max(int bytes)
+unsigned FastPatternConfig::set_max(unsigned bytes)
 {
     if ( max_pattern_len and (bytes > max_pattern_len) )
     {
@@ -83,3 +104,7 @@ int FastPatternConfig::set_max(int bytes)
     return bytes;
 }
 
+void FastPatternConfig::set_queue_limit(unsigned int limit)
+{
+    queue_limit = limit;
+}

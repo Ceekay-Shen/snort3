@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2013-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -20,24 +20,34 @@
 #ifndef PARSE_CONF_H
 #define PARSE_CONF_H
 
+#include <string>
 #include "detection/rules.h"
 
 void parse_conf_init();
 void parse_conf_term();
 void parse_conf_print();
 
+namespace snort
+{
 struct SnortConfig;
+}
 
-void ParseConfigFile(SnortConfig*, const char* fname);
-void ParseConfigString(SnortConfig*, const char* str);
+const char* get_parse_file();
 
-void parse_include(SnortConfig*, const char*);
+// returns code or nullptr if not found, file holds abs path
+// file may hold original parse path on entry
+const char* get_config_file(const char* arg, std::string& file);
 
-void AddRuleState(SnortConfig*, const RuleState&);
-void add_service_to_otn(SnortConfig*, OptTreeNode*, const char*);
+void parse_rules_file(snort::SnortConfig*, const char* fname);
+void parse_rules_string(snort::SnortConfig*, const char* str);
 
-RuleType get_rule_type(const char*);
-ListHead* get_rule_list(SnortConfig*, const char*);
+void ParseIpVar(snort::SnortConfig*, const char* name, const char* s);
+void parse_include(snort::SnortConfig*, const char*);
+
+void add_service_to_otn(snort::SnortConfig*, OptTreeNode*, const char*);
+
+snort::Actions::Type get_rule_type(const char*);
+ListHead* get_rule_list(snort::SnortConfig*, const char*);
 
 #endif
 

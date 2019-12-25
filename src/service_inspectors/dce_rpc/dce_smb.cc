@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -28,8 +28,8 @@
 #include "file_api/file_service.h"
 #include "protocols/packet.h"
 #include "utils/util.h"
-#include "packet_io/active.h"
 
+#include "dce_context_data.h"
 #include "dce_smb_commands.h"
 #include "dce_smb_module.h"
 #include "dce_smb_paf.h"
@@ -37,30 +37,10 @@
 #include "dce_smb_utils.h"
 #include "dce_smb2.h"
 
+using namespace snort;
+
 THREAD_LOCAL dce2SmbStats dce2_smb_stats;
-
-// used here
 THREAD_LOCAL ProfileStats dce2_smb_pstat_main;
-THREAD_LOCAL ProfileStats dce2_smb_pstat_session;
-THREAD_LOCAL ProfileStats dce2_smb_pstat_new_session;
-THREAD_LOCAL ProfileStats dce2_smb_pstat_smb_req;
-
-// used elsewhere
-THREAD_LOCAL ProfileStats dce2_smb_pstat_detect;
-THREAD_LOCAL ProfileStats dce2_smb_pstat_log;
-THREAD_LOCAL ProfileStats dce2_smb_pstat_co_seg;
-THREAD_LOCAL ProfileStats dce2_smb_pstat_co_frag;
-THREAD_LOCAL ProfileStats dce2_smb_pstat_co_reass;
-THREAD_LOCAL ProfileStats dce2_smb_pstat_co_ctx;
-THREAD_LOCAL ProfileStats dce2_smb_pstat_smb_seg;
-THREAD_LOCAL ProfileStats dce2_smb_pstat_smb_uid;
-THREAD_LOCAL ProfileStats dce2_smb_pstat_smb_tid;
-THREAD_LOCAL ProfileStats dce2_smb_pstat_smb_fid;
-THREAD_LOCAL ProfileStats dce2_smb_pstat_smb_file;
-THREAD_LOCAL ProfileStats dce2_smb_pstat_smb_file_detect;
-THREAD_LOCAL ProfileStats dce2_smb_pstat_smb_file_api;
-THREAD_LOCAL ProfileStats dce2_smb_pstat_smb_fingerprint;
-THREAD_LOCAL ProfileStats dce2_smb_pstat_smb_negotiate;
 
 //-------------------------------------------------------------------------
 // debug stuff
@@ -338,11 +318,12 @@ const char* get_smb_com_string(uint8_t b)
 class Dce2Smb : public Inspector
 {
 public:
-    Dce2Smb(dce2SmbProtoConf&);
+    Dce2Smb(const dce2SmbProtoConf&);
     ~Dce2Smb() override;
 
     void show(SnortConfig*) override;
     void eval(Packet*) override;
+    void clear(Packet*) override;
     StreamSplitter* get_splitter(bool c2s) override
     {
         return new Dce2SmbSplitter(c2s);
@@ -352,14 +333,9 @@ private:
     dce2SmbProtoConf config;
 };
 
-Dce2Smb::Dce2Smb(dce2SmbProtoConf& pc)
+Dce2Smb::Dce2Smb(const dce2SmbProtoConf& pc)
 {
     config = pc;
-    if ((config.smb_file_inspection == DCE2_SMB_FILE_INSPECTION_ONLY)
-        || (config.smb_file_inspection == DCE2_SMB_FILE_INSPECTION_ON))
-    {
-        Active::set_enabled();
-    }
 }
 
 Dce2Smb::~Dce2Smb()
@@ -383,12 +359,8 @@ void Dce2Smb::eval(Packet* p)
     assert(p->has_tcp_data());
     assert(p->flow);
 
-    if (p->flow->get_session_flags() & SSNFLAG_MIDSTREAM)
-    {
-        DebugMessage(DEBUG_DCE_SMB,
-            "Midstream - not inspecting.\n");
+    if ( p->test_session_flags(SSNFLAG_MIDSTREAM) )
         return;
-    }
 
     dce2_smb_sess = dce2_handle_smb_session(p, &config);
 
@@ -397,17 +369,24 @@ void Dce2Smb::eval(Packet* p)
         p->packet_flags |= PKT_ALLOW_MULTIPLE_DETECT;
         dce2_detected = 0;
 
-        p->endianness = (Endianness*)new DceEndianness();
+        p->endianness = new DceEndianness();
 
         DCE2_SmbProcess(dce2_smb_sess);
 
         if (!dce2_detected)
             DCE2_Detect(&dce2_smb_sess->sd);
 
-        DCE2_ResetRopts(&dce2_smb_sess->sd.ropts);
-
         delete p->endianness;
         p->endianness = nullptr;
+    }
+}
+
+void Dce2Smb::clear(Packet* p)
+{
+    DCE2_SmbSsnData* dce2_smb_sess = get_dce2_smb_session_data(p->flow);
+    if ( dce2_smb_sess )
+    {
+        DCE2_ResetRopts(&dce2_smb_sess->sd, p);
     }
 }
 
@@ -430,6 +409,7 @@ static void dce2_smb_init()
     Dce2SmbFlowData::init();
     DCE2_SmbInitGlobals();
     DCE2_SmbInitDeletePdu();
+    DceContextData::init(DCE2_TRANS_TYPE__SMB);
 }
 
 static Inspector* dce2_smb_ctor(Module* m)
@@ -460,7 +440,7 @@ const InspectApi dce2_smb_api =
         mod_dtor
     },
     IT_SERVICE,
-    (uint16_t)PktType::PDU,
+    PROTO_BIT__PDU,
     nullptr,  // buffers
     "netbios-ssn",
     dce2_smb_init,

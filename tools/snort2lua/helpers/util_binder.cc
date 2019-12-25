@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -45,49 +45,55 @@ void Binder::add_to_configuration()
     table_api.open_top_level_table("binder");
     table_api.open_table(true);
 
-    table_api.open_table("when", true);
+    if (use_type != "wizard")
+    {
+        table_api.open_table("when", true);
 
-    //FIXIT-M this needs to be split out into ips, network, and inspection
-    if ( has_ips_policy_id() )
-        table_api.add_option("ips_policy_id", when_ips_policy_id);
+        //FIXIT-M this needs to be split out into ips, network, and inspection
+        if ( has_ips_policy_id() )
+            table_api.add_option("ips_policy_id", when_ips_policy_id);
 
-    for ( const auto& s : vlans )
-        table_api.add_list("vlans", s);
+        for ( const auto& s : vlans )
+            table_api.add_list("vlans", s);
 
-    if ( has_service() )
-        table_api.add_option("service", when_service);
+        if ( has_service() )
+            table_api.add_option("service", when_service);
 
-    for ( const auto& n : src_nets )
-        table_api.add_list("src_nets", n);
+        for ( const auto& n : src_nets )
+            table_api.add_list("src_nets", n);
 
-    for ( const auto& n : dst_nets )
-        table_api.add_list("dst_nets", n);
+        for ( const auto& n : dst_nets )
+            table_api.add_list("dst_nets", n);
 
-    for ( const auto& n : nets )
-        table_api.add_list("nets", n);
+        for ( const auto& n : nets )
+            table_api.add_list("nets", n);
 
-    for ( const auto& p : src_ports )
-        table_api.add_list("src_ports", p);
+        for ( const auto& p : src_ports )
+            table_api.add_list("src_ports", p);
 
-    for ( const auto& p : dst_ports )
-        table_api.add_list("dst_ports", p);
+        for ( const auto& p : dst_ports )
+            table_api.add_list("dst_ports", p);
 
-    for ( const auto& p : ports )
-        table_api.add_list("ports", p);
+        for ( const auto& p : ports )
+            table_api.add_list("ports", p);
 
-    if ( has_src_zone() )
-        table_api.add_option("src_zone", std::stoi(when_src_zone));
+        for ( const auto& p : when_src_zone )
+            table_api.add_list("src_zone", p);
 
-    if ( has_dst_zone() )
-        table_api.add_option("dst_zone", std::stoi(when_dst_zone));
+        for ( const auto& p : when_dst_zone )
+            table_api.add_list("dst_zone", p);
 
-    if ( has_proto() )
-        table_api.add_option("proto", when_proto);
+        for ( const auto& p : zones )
+            table_api.add_list("zones", p);
 
-    if ( has_role() )
-        table_api.add_option("role", when_role);
+        if ( has_proto() )
+            table_api.add_option("proto", when_proto);
 
-    table_api.close_table(); // "when"
+        if ( has_role() )
+            table_api.add_option("role", when_role);
+
+        table_api.close_table(); // "when"
+    }
 
     table_api.open_table("use", true);
 
@@ -178,10 +184,13 @@ void Binder::add_when_port(const std::string& port)
 { ports.push_back(port); }
 
 void Binder::set_when_src_zone(const std::string& zone)
-{ when_src_zone = zone; }
+{ when_src_zone.push_back(zone); }
 
 void Binder::set_when_dst_zone(const std::string& zone)
-{ when_dst_zone = zone; }
+{ when_dst_zone.push_back(zone); }
+
+void Binder::add_when_zone(const std::string& zone)
+{ zones.push_back(zone); }
 
 void Binder::clear_ports()
 { ports.clear(); }
@@ -344,9 +353,12 @@ void print_binder_priorities()
             binders.back()->add_when_port("a");
 
         if ( i & (1 << 11) )
-            binders.back()->set_when_proto("a");
+            binders.back()->add_when_zone("a");
 
         if ( i & (1 << 12) )
+            binders.back()->set_when_proto("a");
+
+        if ( i & (1 << 13) )
             binders.back()->set_when_role("a");
     }
 

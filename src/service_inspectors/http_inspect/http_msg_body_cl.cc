@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -23,8 +23,6 @@
 
 #include "http_msg_body_cl.h"
 
-using namespace HttpEnums;
-
 void HttpMsgBodyCl::update_flow()
 {
     if (session_data->cutter[source_id] != nullptr)
@@ -38,15 +36,13 @@ void HttpMsgBodyCl::update_flow()
         // End of message
         session_data->half_reset(source_id);
     }
-    session_data->section_type[source_id] = SEC__NOT_COMPUTE;
 }
 
 #ifdef REG_TEST
 void HttpMsgBodyCl::print_section(FILE* output)
 {
     HttpMsgSection::print_section_title(output, "Content-Length body");
-    fprintf(output, "Content-Length %" PRIi64 ", octets seen %" PRIi64 "\n", data_length,
-        body_octets);
+    fprintf(output, "octets seen %" PRIi64 "\n", body_octets);
     print_body_section(output);
 }
 #endif

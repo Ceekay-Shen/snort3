@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -22,14 +22,28 @@
 #ifndef SERVICE_STATE_H
 #define SERVICE_STATE_H
 
-#include <mutex>
+#include <list>
+#include <map>
 
-#include "sfip/sf_ip.h"
-#include "service_plugins/service_discovery.h"
 #include "protocols/protocol_ids.h"
+#include "sfip/sf_ip.h"
+#include "utils/cpp_macros.h"
 #include "utils/util.h"
 
+#include "appid_pegs.h"
+#include "service_plugins/service_discovery.h"
+
 class ServiceDetector;
+
+class AppIdServiceStateKey;
+class ServiceDiscoveryState;
+
+typedef AppIdServiceStateKey Key_t;
+typedef ServiceDiscoveryState Val_t;
+
+typedef std::map<Key_t, Val_t*> Map_t;
+typedef std::list<Map_t::iterator> Queue_t;
+
 
 enum SERVICE_ID_STATE
 {
@@ -77,9 +91,9 @@ public:
     ~ServiceDiscoveryState();
     ServiceDetector* select_detector_by_brute_force(IpProtocol proto);
     void set_service_id_valid(ServiceDetector* sd);
-    void set_service_id_failed(AppIdSession* asd, const SfIp* client_ip, unsigned invalid_delta =
-        0);
-    void update_service_incompatiable(const SfIp* ip);
+    void set_service_id_failed(AppIdSession& asd, const snort::SfIp* client_ip,
+        unsigned invalid_delta = 0);
+    void update_service_incompatiable(const snort::SfIp* ip);
 
     SERVICE_ID_STATE get_state() const
     {
@@ -111,13 +125,16 @@ public:
         reset_time = resetTime;
     }
 
+    Queue_t::iterator qptr; // Our place in service_state_queue
+
 private:
     SERVICE_ID_STATE state;
     ServiceDetector* service = nullptr;
-    AppIdDetectorList* brute_force_mgr = nullptr;
+    AppIdDetectorList* tcp_brute_force_mgr = nullptr;
+    AppIdDetectorList* udp_brute_force_mgr = nullptr;
     unsigned valid_count = 0;
     unsigned detract_count = 0;
-    SfIp last_detract;
+    snort::SfIp last_detract;
 
     // consecutive incompatible flows - incompatible means client packet did not match.
     unsigned invalid_client_count = 0;
@@ -126,22 +143,181 @@ private:
      * different every time, then consecutive incompatible status indicate that flow is not using
      * specific service.
      */
-    SfIp last_invalid_client;
+    snort::SfIp last_invalid_client;
     time_t reset_time;
 };
 
 class AppIdServiceState
 {
 public:
-    static void initialize();
+    static bool initialize(size_t memcap);
     static void clean();
-    static ServiceDiscoveryState* add(const SfIp*, IpProtocol, uint16_t port, bool decrypted);
-    static ServiceDiscoveryState* get(const SfIp*, IpProtocol, uint16_t port, bool decrypted);
-    static void remove(const SfIp*, IpProtocol, uint16_t port, bool decrypted);
-    static void check_reset(AppIdSession* asd, const SfIp* ip, uint16_t port);
+    static ServiceDiscoveryState* add(const snort::SfIp*, IpProtocol, uint16_t port, bool decrypted, bool do_touch = false);
+    static ServiceDiscoveryState* get(const snort::SfIp*, IpProtocol, uint16_t port, bool decrypted, bool do_touch = false);
+    static void remove(const snort::SfIp*, IpProtocol, uint16_t port, bool decrypted);
+    static void check_reset(AppIdSession& asd, const snort::SfIp* ip, uint16_t port);
 
     static void dump_stats();
+
+    static bool prune(size_t max_memory = 0, size_t num_items = -1u);
+};
+
+
+PADDING_GUARD_BEGIN
+class AppIdServiceStateKey
+{
+public:
+    AppIdServiceStateKey()
+    {
+        ip.clear();
+        port = 0;
+        level = 0;
+        proto = IpProtocol::PROTO_NOT_SET;
+        padding[0] = padding[1] = padding[2] = 0;
+    }
+
+    AppIdServiceStateKey(const snort::SfIp* ip_in,
+        IpProtocol proto_in, uint16_t port_in, bool decrypted)
+    {
+        ip = *ip_in;
+        port = port_in;
+        level = decrypted != 0;
+        proto = proto_in;
+        padding[0] = padding[1] = padding[2] = 0;
+    }
+
+    bool operator<(const AppIdServiceStateKey& right) const
+    {
+        return memcmp((const uint8_t*) this, (const uint8_t*) &right, sizeof(*this)) < 0;
+    }
+
+private:
+    snort::SfIp ip;
+    uint16_t port;
+    uint32_t level;
+    IpProtocol proto;
+    uint8_t padding[3];
+};
+PADDING_GUARD_END
+
+
+extern THREAD_LOCAL AppIdStats appid_stats;
+
+class MapList
+{
+public:
+
+    MapList(size_t cap) : memcap(cap), mem_used(0) {}
+
+    ~MapList()
+    {
+        for ( auto& kv : m )
+            delete kv.second;
+    }
+
+    Val_t* add(const Key_t& k, bool do_touch = false)
+    {
+        Val_t* ss = nullptr;
+
+        // Try to emplace k first, with a nullptr.
+        std::pair<Map_t::iterator, bool> sit = m.emplace( std::make_pair(k, ss) );
+        Map_t::iterator it = sit.first;
+
+        if ( sit.second )
+        {
+            // emplace succeeded
+            ss = it->second = new Val_t;
+            q.emplace_back(it);
+            mem_used += sz;
+            ss->qptr = --q.end(); // remember our place in the queue
+            appid_stats.service_cache_adds++;
+
+            if ( mem_used > memcap )
+                remove( q.front() );
+        }
+        else
+        {
+            ss = it->second;
+            if ( do_touch )
+                touch( ss->qptr );
+        }
+
+        return ss;
+    }
+
+    Val_t* get(const Key_t& k, bool do_touch = 0)
+    {
+        Map_t::const_iterator it = m.find(k);
+        if ( it != m.end() ) {
+            if ( do_touch )
+                touch(it->second->qptr);
+            return it->second;
+        }
+        return nullptr;
+    }
+
+    bool remove(Map_t::iterator it)
+    {
+        if ( it != m.end() && !m.empty() )
+        {
+            assert( mem_used >= sz );
+            mem_used -= sz;
+            q.erase(it->second->qptr);  // remove from queue
+            delete it->second;
+            m.erase(it);                // then from cache
+            appid_stats.service_cache_removes++;
+
+            return true;
+        }
+        return false;
+    }
+
+    bool prune(size_t max_memory = 0, size_t num_items = -1u)
+    {
+        if ( max_memory == 0 )
+            max_memory = memcap;
+
+        size_t i=0;
+        while ( mem_used > max_memory && i++ < num_items )
+            remove( q.front() );
+
+        appid_stats.service_cache_prunes++;
+
+        return mem_used <= max_memory;
+    }
+
+    Map_t::iterator find(const Key_t& k)
+    {
+        return m.find(k);
+    }
+
+    void touch(Queue_t::iterator& qptr)
+    {
+        // If we don't already have the highest priority...
+        if ( *qptr != q.back() )
+        {
+            q.emplace_back(*qptr);
+            q.erase(qptr);
+            qptr = --q.end();
+        }
+    }
+
+    size_t size() const { return m.size(); }
+
+    Queue_t::iterator newest() { return --q.end(); }
+    Queue_t::iterator oldest() { return q.begin(); }
+    Queue_t::iterator end() { return q.end(); }
+
+    // how much memory we add when we put an SDS in the cache:
+    static const size_t sz;
+
+    friend class AppIdServiceState;
+
+private:
+    Map_t m;
+    Queue_t q;
+    size_t memcap;
+    size_t mem_used;
 };
 
 #endif
-

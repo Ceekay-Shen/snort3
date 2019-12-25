@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 1998-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -36,8 +36,10 @@
 #include "utils/util_cstring.h"
 
 #ifdef UNIT_TEST
-#include "catch/catch.hpp"
+#include "catch/snort_catch.h"
 #endif
+
+using namespace snort;
 
 vartable_t* sfvt_alloc_table()
 {
@@ -179,7 +181,7 @@ sfvt_expand_value_error:
     return nullptr;
 }
 
-// XXX this implementation is just used to support
+// this implementation is just used to support
 // Snort's underlying implementation better
 SfIpRet sfvt_define(vartable_t* table, const char* name, const char* value)
 {
@@ -290,12 +292,14 @@ SfIpRet sfvt_add_str(vartable_t* table, const char* str, sfip_var_t** ipret)
 }
 
 /* Adds the variable described by "src" to the variable "dst",
- * using the vartable for looking variables used within "src" */
+ * using the vartable for looking variables used within "src".
+ * If vartable is null variables are not supported. 
+ */
 SfIpRet sfvt_add_to_var(vartable_t* table, sfip_var_t* dst, const char* src)
 {
     SfIpRet ret;
 
-    if (!table || !dst || !src)
+    if (!dst || !src)
         return SFIP_ARG_ERR;
 
     if ((ret = sfvar_parse_iplist(table, dst, src, 0)) == SFIP_SUCCESS)
@@ -317,12 +321,10 @@ sfip_var_t* sfvt_lookup_var(vartable_t* table, const char* name)
     if (*name == '$')
         name++;
 
-    /* XXX should I assume there will be trailing garbage or
+    /* should I assume there will be trailing garbage or
      * should I automatically find where the variable ends? */
-    for (end=name;
-        *end && !isspace((int)*end) && *end != '\\' && *end != ']';
-        end++)
-        ;
+    for (end=name; *end && !isspace((int)*end) && *end != '\\' && *end != ']'; end++);
+
     len = end - name;
 
     for (p=table->head; len && p; p=p->next)

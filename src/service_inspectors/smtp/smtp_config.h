@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -129,8 +129,8 @@ struct SMTP_PROTO_CONF
     int max_header_line_len = 0;
     int max_response_line_len = 0;
     int xlink2state;
-    MailLogConfig log_config;
-    DecodeConfig decode_conf;
+    snort::MailLogConfig log_config;
+    snort::DecodeConfig decode_conf;
 
     uint32_t xtra_filename_id;
     uint32_t xtra_mfrom_id;
@@ -138,10 +138,10 @@ struct SMTP_PROTO_CONF
     uint32_t xtra_ehdrs_id;
 
     int num_cmds;
-    SMTPToken* cmds;
-    SMTPCmdConfig* cmd_config;
-    SMTPSearch* cmd_search;
-    SearchTool* cmd_search_mpse;
+    SMTPToken* cmds = nullptr;
+    SMTPCmdConfig* cmd_config = nullptr;
+    SMTPSearch* cmd_search = nullptr;
+    snort::SearchTool* cmd_search_mpse = nullptr;
 };
 
 struct SmtpStats
@@ -150,7 +150,7 @@ struct SmtpStats
     PegCount sessions;
     PegCount concurrent_sessions;
     PegCount max_concurrent_sessions;
-    MimeStats mime_stats;
+    snort::MimeStats mime_stats;
 };
 
 extern const PegInfo smtp_peg_names[];

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -21,10 +21,14 @@
 #include "config.h"
 #endif
 
+#include <daq.h>
+
 #include "codecs/codec_module.h"
 #include "framework/codec.h"
 #include "log/text_log.h"
 #include "protocols/vlan.h"
+
+using namespace snort;
 
 #define CD_VLAN_NAME "vlan"
 #define CD_VLAN_HELP "support for local area network"
@@ -61,10 +65,10 @@ constexpr unsigned int ETHERNET_MAX_LEN_ENCAP = 1518;    /* 802.3 (+LLC) or ethe
 
 void VlanCodec::get_protocol_ids(std::vector<ProtocolId>& v)
 {
-    v.push_back(ProtocolId::ETHERTYPE_8021Q);
-    v.push_back(ProtocolId::ETHERTYPE_8021AD);
-    v.push_back(ProtocolId::ETHERTYPE_QINQ_NS1);
-    v.push_back(ProtocolId::ETHERTYPE_QINQ_NS2);
+    v.emplace_back(ProtocolId::ETHERTYPE_8021Q);
+    v.emplace_back(ProtocolId::ETHERTYPE_8021AD);
+    v.emplace_back(ProtocolId::ETHERTYPE_QINQ_NS1);
+    v.emplace_back(ProtocolId::ETHERTYPE_QINQ_NS2);
 }
 
 bool VlanCodec::decode(const RawData& raw, CodecData& codec, DecodeData&)
@@ -88,12 +92,17 @@ bool VlanCodec::decode(const RawData& raw, CodecData& codec, DecodeData&)
     else
         codec.next_prot_id = (ProtocolId)proto;
 
+    codec.lyr_len = sizeof(vlan::VlanTagHdr);
+
+    const DAQ_PktHdr_t* pkth = daq_msg_get_pkthdr(raw.daq_msg);
+    if (pkth->flags & DAQ_PKT_FLAG_IGNORE_VLAN)
+        return true;
+
     // Vlan IDs 0 and 4095 are reserved.
     const uint16_t vid = vh->vid();
     if (vid == 0 || vid == 4095)
         codec_event(codec, DECODE_BAD_VLAN);
 
-    codec.lyr_len = sizeof(vlan::VlanTagHdr);
     codec.proto_bits |= PROTO_BIT__VLAN;
     return true;
 }

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -30,7 +30,6 @@
 #include "detection/detection_engine.h"
 #include "log/text_log.h"
 #include "main/snort_config.h"
-#include "main/snort_debug.h"
 #include "packet_io/active.h"
 #include "packet_io/sfdaq.h"
 #include "profiler/profiler_defs.h"
@@ -39,6 +38,8 @@
 #include "eth.h"
 #include "icmp4.h"
 #include "icmp6.h"
+
+using namespace snort;
 
 THREAD_LOCAL ProfileStats decodePerfStats;
 
@@ -66,7 +67,17 @@ const std::array<const char*, PacketManager::stat_offset> PacketManager::stat_na
 
 // Encoder Foo
 static THREAD_LOCAL PegCount total_rebuilt_pkts = 0;
-static THREAD_LOCAL std::array<uint8_t, Codec::PKT_MAX> s_pkt { { 0 } };
+static THREAD_LOCAL std::array<uint8_t, Codec::PKT_MAX>* s_pkt;
+
+void PacketManager::thread_init()
+{
+    s_pkt = new std::array<uint8_t, Codec::PKT_MAX>{ {0} };
+}
+
+void PacketManager::thread_term()
+{
+    delete s_pkt;
+}
 
 //-------------------------------------------------------------------------
 // Private helper functions
@@ -89,7 +100,7 @@ void PacketManager::pop_teredo(Packet* p, RawData& raw)
 {
     p->proto_bits &= ~PROTO_BIT__TEREDO;
     if ( SnortConfig::tunnel_bypass_enabled(TUNNEL_TEREDO) )
-        Active::clear_tunnel_bypass();
+        p->active->clear_tunnel_bypass();
 
     const ProtocolIndex mapped_prot = CodecManager::s_proto_map[to_utype(ProtocolId::TEREDO)];
     s_stats[mapped_prot + stat_offset]--;
@@ -112,18 +123,11 @@ static_assert(CODEC_ENCAP_LAYER == (CODEC_UNSURE_ENCAP | CODEC_SAVE_LAYER),
     "If this is an encapsulated layer, you must also set UNSURE_ENCAP"
     " and SAVE_LAYER");
 
-RawData::RawData(const DAQ_PktHdr_t* h, const uint8_t* p)
-{
-    pkth = h;
-    data = p;
-    len = h->caplen;
-}
-
 //-------------------------------------------------------------------------
 // Encode/Decode functions
 //-------------------------------------------------------------------------
 void PacketManager::decode(
-    Packet* p, const DAQ_PktHdr_t* pkthdr, const uint8_t* pkt, bool cooked)
+    Packet* p, const DAQ_PktHdr_t* pkthdr, const uint8_t* pkt, uint32_t pktlen, bool cooked, bool retry)
 {
     Profile profile(decodePerfStats);
 
@@ -132,7 +136,7 @@ void PacketManager::decode(
     ProtocolIndex mapped_prot = CodecManager::grinder;
     ProtocolId prev_prot_id = CodecManager::grinder_id;
 
-    RawData raw(pkthdr, pkt);
+    RawData raw(p->daq_msg, pkt, pktlen);
     CodecData codec_data(ProtocolId::FINISHED_DECODE);
 
     if ( cooked )
@@ -142,6 +146,9 @@ void PacketManager::decode(
     p->reset();
     p->pkth = pkthdr;
     p->pkt = pkt;
+    p->pktlen = pktlen;
+    if (retry)
+        p->packet_flags |= PKT_RETRY;
     layer::set_packet_pointer(p);
 
     s_stats[total_processed]++;
@@ -149,10 +156,16 @@ void PacketManager::decode(
     // loop until the protocol id is no longer valid
     while (CodecManager::s_protocols[mapped_prot]->decode(raw, codec_data, p->ptrs))
     {
-        DebugFormat(DEBUG_DECODE, "Codec %s (protocol_id: %hu:"
+        trace_logf(decode, "Codec %s (protocol_id: %hu) "
             "ip header starts at: %p, length is %d\n",
             CodecManager::s_protocols[mapped_prot]->get_name(),
             static_cast<uint16_t>(codec_data.next_prot_id), pkt, codec_data.lyr_len);
+
+        if ( codec_data.tunnel_bypass )
+        {
+            p->active->set_tunnel_bypass();
+            codec_data.tunnel_bypass = false;
+        }
 
         if ( codec_data.codec_flags & CODEC_ETHER_NEXT )
         {
@@ -163,7 +176,7 @@ void PacketManager::decode(
             }
             codec_data.codec_flags &= ~CODEC_ETHER_NEXT;
         }
-                
+
         /*
          * We only want the layer immediately following SAVE_LAYER to have the
          * UNSURE_ENCAP flag set.  So, if this is a SAVE_LAYER, zero out the
@@ -208,7 +221,13 @@ void PacketManager::decode(
         if ( p->num_layers == CodecManager::max_layers )
             DetectionEngine::queue_event(GID_DECODE, DECODE_TOO_MANY_LAYERS);
         else
+        {
             push_layer(p, prev_prot_id, raw.data, codec_data.lyr_len);
+
+            // Cache the index of the vlan layer for quick access.
+            if ( codec_data.proto_bits == PROTO_BIT__VLAN )
+                p->vlan_idx = p->num_layers-1;
+        }
 
         // internal statistics and record keeping
         s_stats[mapped_prot + stat_offset]++; // add correct decode for previous layer
@@ -227,7 +246,7 @@ void PacketManager::decode(
         codec_data.proto_bits = 0;
     }
 
-    DebugFormat(DEBUG_DECODE, "Codec %s (protocol_id: %hu: ip header"
+    trace_logf(decode, "Codec %s (protocol_id: %hu) ip header"
         " starts at: %p, length is %lu\n",
         CodecManager::s_protocols[mapped_prot]->get_name(),
         static_cast<uint16_t>(prev_prot_id), pkt, (unsigned long)codec_data.lyr_len);
@@ -416,7 +435,7 @@ const uint8_t* PacketManager::encode_response(
     TcpResponse type, EncodeFlags flags, const Packet* p, uint32_t& len,
     const uint8_t* const payload, uint32_t payload_len)
 {
-    Buffer buf(s_pkt.data(), s_pkt.size());
+    Buffer buf(s_pkt->data(), s_pkt->size());
 
     switch (type)
     {
@@ -463,7 +482,7 @@ const uint8_t* PacketManager::encode_response(
 const uint8_t* PacketManager::encode_reject(UnreachResponse type,
     EncodeFlags flags, const Packet* p, uint32_t& len)
 {
-    Buffer buf(s_pkt.data(), s_pkt.size());
+    Buffer buf(s_pkt->data(), s_pkt->size());
 
     if (p->is_ip4())
     {
@@ -594,29 +613,21 @@ const uint8_t* PacketManager::encode_reject(UnreachResponse type,
     }
 }
 
-static void set_hdr(
+static void init_daq_pkthdr(
     const Packet* p, Packet* c, const DAQ_PktHdr_t* phdr, uint32_t opaque)
 {
-    c->reset();
-
     if ( !phdr )
         phdr = p->pkth;
 
-    DAQ_PktHdr_t* pkth = const_cast<DAQ_PktHdr_t*>(c->pkth);
+    assert(c->pkth == c->context->pkth);
+    DAQ_PktHdr_t* pkth = c->context->pkth;
     pkth->ingress_index = phdr->ingress_index;
     pkth->ingress_group = phdr->ingress_group;
     pkth->egress_index = phdr->egress_index;
     pkth->egress_group = phdr->egress_group;
-    pkth->flags = phdr->flags & (~DAQ_PKT_FLAG_HW_TCP_CS_GOOD);
+    pkth->flags = phdr->flags;
     pkth->address_space_id = phdr->address_space_id;
     pkth->opaque = opaque;
-    if (pkth->flags & DAQ_PKT_FLAG_REAL_ADDRESSES)
-    {
-        pkth->n_real_sPort = phdr->n_real_sPort;
-        pkth->n_real_dPort = phdr->n_real_dPort;
-        pkth->real_sIP = phdr->real_sIP;
-        pkth->real_dIP = phdr->real_dIP;
-    }
 }
 
 //-------------------------------------------------------------------------
@@ -633,7 +644,7 @@ int PacketManager::format_tcp(
     const DAQ_PktHdr_t* phdr, uint32_t opaque)
 {
     c->reset();
-    set_hdr(p, c, phdr, opaque);
+    init_daq_pkthdr(p, c, phdr, opaque);
 
     c->packet_flags |= PKT_PSEUDO;
     c->pseudo_type = type;
@@ -644,10 +655,10 @@ int PacketManager::format_tcp(
     c->user_network_policy_id = p->user_network_policy_id;
 
     // setup pkt capture header
-    DAQ_PktHdr_t* pkth = const_cast<DAQ_PktHdr_t*>(c->pkth);
-    pkth->caplen = 0;
-    pkth->pktlen = 0;
-    pkth->ts = p->pkth->ts;
+    c->pktlen = 0;
+    assert(c->pkth == c->context->pkth);
+    c->context->pkth->pktlen = 0;
+    c->context->pkth->ts = p->pkth->ts;
 
     total_rebuilt_pkts++;
     return 0;
@@ -662,11 +673,11 @@ int PacketManager::encode_format(
     bool update_ip4_len = false;
     uint8_t num_layers = p->num_layers;
 
-    if ( num_layers <= 0 )
+    if ( num_layers == 0 )
         return -1;
 
     c->reset();
-    set_hdr(p, c, phdr, opaque);
+    init_daq_pkthdr(p, c, phdr, opaque);
 
     if ( f & ENC_FLAG_NET )
     {
@@ -693,7 +704,7 @@ int PacketManager::encode_format(
             update_ip4_len = true;
         }
 
-        if (num_layers <= 0)
+        if (num_layers == 0)
             return -1;
     }
 
@@ -750,10 +761,10 @@ int PacketManager::encode_format(
     c->user_network_policy_id = p->user_network_policy_id;
 
     // setup pkt capture header
-    DAQ_PktHdr_t* pkth = const_cast<DAQ_PktHdr_t*>(c->pkth);
-    pkth->caplen = len;
-    pkth->pktlen = len;
-    pkth->ts = p->pkth->ts;
+    c->pktlen = len;
+    assert(c->pkth == c->context->pkth);
+    c->context->pkth->pktlen = len;
+    c->context->pkth->ts = p->pkth->ts;
 
     layer::set_packet_pointer(c);  // ensure we are looking at the new packet
     total_rebuilt_pkts++;
@@ -815,12 +826,15 @@ void PacketManager::encode_update(Packet* p)
             tmp_api, flags, const_cast<uint8_t*>(l.start), l.length, len);
     }
 
-    // see IP6_Update() for an explanation of this ...
     if ( !(p->packet_flags & PKT_MODIFIED) || (p->packet_flags & PKT_RESIZED) )
     {
-        DAQ_PktHdr_t* pkth = const_cast<DAQ_PktHdr_t*>(p->pkth);
-        pkth->caplen = len;
-        pkth->pktlen = len;
+        p->pktlen = len;
+        // Only attempt to update the DAQ packet header for manufactured (defragged) packets.  If
+        // this is the original wire packet, leave the header alone; the drop/inject for resize
+        // will use pktlen from Packet for the injection length.
+        // FIXIT-L there should be a better way to detect that this is manufactured packet
+        if (p->pkth == p->context->pkth)
+            p->context->pkth->pktlen = len;
     }
 }
 
@@ -849,10 +863,10 @@ void PacketManager::dump_stats()
     g_stats[CodecManager::s_proto_map[to_utype(ProtocolId::FINISHED_DECODE)] + stat_offset] = 0;
 
     for (unsigned int i = 0; i < stat_names.size(); i++)
-        pkt_names.push_back(stat_names[i]);
+        pkt_names.emplace_back(stat_names[i]);
 
     for (int i = 0; CodecManager::s_protocols[i] != nullptr; i++)
-        pkt_names.push_back(CodecManager::s_protocols[i]->get_name());
+        pkt_names.emplace_back(CodecManager::s_protocols[i]->get_name());
 
     show_percent_stats((PegCount*)&g_stats, &pkt_names[0],
         (unsigned int)pkt_names.size(), "codec");
@@ -907,4 +921,3 @@ void PacketManager::log_protocols(TextLog* const text_log,
         }
     }
 }
-

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -83,6 +83,8 @@ static ConversionState* config_false_no_opt_ctor(Converter& c)
     return new DeadCode(c);
 }
 
+#if 0
+// currently unused - for future reference
 template<const std::string* snort_option,
 const std::string* lua_table>
 static ConversionState* config_false_no_opt_ctor(Converter& c)
@@ -92,6 +94,7 @@ static ConversionState* config_false_no_opt_ctor(Converter& c)
     c.get_table_api().close_table();
     return new DeadCode(c);
 }
+#endif
 } // namespace
 
 /*************************************************
@@ -298,19 +301,6 @@ static const ConvertMap nopcre_api =
 };
 
 const ConvertMap* nopcre_map = &nopcre_api;
-
-/*************************************************
- ******************  no_promisc  *****************
- *************************************************/
-
-static const std::string no_promisc = "no_promisc";
-static const ConvertMap no_promisc_api =
-{
-    no_promisc,
-    config_true_no_opt_ctor<& no_promisc, & daq>
-};
-
-const ConvertMap* no_promisc_map = &no_promisc_api;
 
 /*************************************************
  ******************  obfuscate  ******************

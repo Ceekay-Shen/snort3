@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -27,7 +27,6 @@
 #include <vector>
 
 #include "binder/bind_module.h"
-#include "binder/binder.h"
 #include "detection/detect.h"
 #include "detection/detection_engine.h"
 #include "flow/flow.h"
@@ -41,6 +40,7 @@
 
 #include "module_manager.h"
 
+using namespace snort;
 using namespace std;
 
 // FIXIT-L define module names just once
@@ -63,10 +63,13 @@ using namespace std;
 struct PHGlobal
 {
     const InspectApi& api;
-    bool init;  // call api.pinit()
+    bool initialized = false;   // In the context of the main thread, this means that api.pinit()
+                                // has been called.  In the packet thread, it means that
+                                // api.tinit() has been called.
+    bool instance_initialized = false;  // In the packet thread, at least one instance has had
+                                        // tinit() called.
 
-    PHGlobal(const InspectApi& p) : api(p)
-    { init = true; }
+    PHGlobal(const InspectApi& p) : api(p) { }
 
     static bool comp(const PHGlobal* a, const PHGlobal* b)
     { return ( a->api.type < b->api.type ); }
@@ -75,23 +78,10 @@ struct PHGlobal
 struct PHClass
 {
     const InspectApi& api;
-    bool* init;  // call pin->tinit()
-    bool* term;  // call pin->tterm()
 
-    PHClass(const InspectApi& p) : api(p)
-    {
-        init = new bool[ThreadConfig::get_instance_max()];
-        term = new bool[ThreadConfig::get_instance_max()];
+    PHClass(const InspectApi& p) : api(p) { }
 
-        for ( unsigned i = 0; i < ThreadConfig::get_instance_max(); ++i )
-            init[i] = term[i] = true;
-    }
-
-    ~PHClass()
-    {
-        delete[] init;
-        delete[] term;
-    }
+    ~PHClass() = default;
 
     PHClass(const PHClass&) = delete;
     PHClass& operator=(const PHClass&) = delete;
@@ -100,7 +90,8 @@ struct PHClass
     { return ( a->api.type < b->api.type ); }
 };
 
-enum ReloadType {
+enum ReloadType
+{
     RELOAD_TYPE_NONE = 0,
     RELOAD_TYPE_DELETED,
     RELOAD_TYPE_REENABLED,
@@ -128,9 +119,11 @@ struct PHInstance
     { reload_type = val; }
 
     bool is_reloaded()
-    { return ((reload_type == RELOAD_TYPE_REENABLED) or
-            (reload_type == RELOAD_TYPE_DELETED) or
-            (reload_type == RELOAD_TYPE_NEW)); }
+    {
+        return ((reload_type == RELOAD_TYPE_REENABLED)or
+                   (reload_type == RELOAD_TYPE_DELETED) or
+                   (reload_type == RELOAD_TYPE_NEW));
+    }
 
     ReloadType get_reload_type()
     { return reload_type; }
@@ -165,12 +158,13 @@ typedef list<Inspector*> PHList;
 static PHGlobalList s_handlers;
 static PHList s_trash;
 static PHList s_trash2;
-static THREAD_LOCAL bool s_clear = false;
 static bool s_sorted = false;
+
+static THREAD_LOCAL vector<PHGlobal>* s_tl_handlers = nullptr;
 
 struct FrameworkConfig
 {
-    PHClassList clist;
+    PHClassList clist;  // List of inspector module classes that have been configured
 };
 
 struct PHVector
@@ -213,7 +207,7 @@ void PHVector::add_control(PHInstance* p)
 
 struct FrameworkPolicy
 {
-    PHInstanceList ilist;
+    PHInstanceList ilist;   // List of inspector module instances
 
     PHVector passive;
     PHVector packet;
@@ -228,10 +222,10 @@ struct FrameworkPolicy
 
     bool default_binder;
 
-    void vectorize();
+    void vectorize(SnortConfig*);
 };
 
-void FrameworkPolicy::vectorize()
+void FrameworkPolicy::vectorize(SnortConfig* sc)
 {
     passive.alloc(ilist.size());
     packet.alloc(ilist.size());
@@ -245,8 +239,11 @@ void FrameworkPolicy::vectorize()
     {
         switch ( p->pp_class.api.type )
         {
-        case IT_PASSIVE :
+        case IT_PASSIVE:
             passive.add(p);
+            // FIXIT-L Ugly special case for noticing a binder
+            if ( !strcmp(p->pp_class.api.base.name, bind_id) )
+                binder = p->handler;
             break;
 
         case IT_PACKET:
@@ -266,10 +263,6 @@ void FrameworkPolicy::vectorize()
             service.add(p);
             break;
 
-        case IT_BINDER:
-            binder = p->handler;
-            break;
-
         case IT_WIZARD:
             wizard = p->handler;
             break;
@@ -279,8 +272,12 @@ void FrameworkPolicy::vectorize()
             break;
 
         case IT_PROBE:
-            probe.add(p);
+        {
+            // probes always run
+            // add them to default so they can be found on InspectorManager::probe
+            sc->policy_map->get_inspection_policy(0)->framework_policy->probe.add(p);
             break;
+        }
 
         case IT_MAX:
             break;
@@ -295,7 +292,7 @@ void FrameworkPolicy::vectorize()
 void InspectorManager::add_plugin(const InspectApi* api)
 {
     PHGlobal* g = new PHGlobal(*api);
-    s_handlers.push_back(g);
+    s_handlers.emplace_back(g);
 }
 
 static const InspectApi* get_plugin(const char* keyword)
@@ -354,7 +351,7 @@ void InspectorManager::release_plugins()
 
     for ( auto* p : s_handlers )
     {
-        if ( !p->init && p->api.pterm )
+        if ( p->initialized && p->api.pterm )
             p->api.pterm();
 
         delete p;
@@ -388,7 +385,8 @@ void InspectorManager::empty_trash()
 // FIXIT-L allowing lookup by name or type or key is kinda hinky
 // would be helpful to have specific lookups
 static bool get_instance(
-        FrameworkPolicy* fp, const char* keyword, bool dflt_only, std::vector<PHInstance*>::iterator& it)
+    FrameworkPolicy* fp, const char* keyword, bool dflt_only,
+    std::vector<PHInstance*>::iterator& it)
 {
     for ( it = fp->ilist.begin(); it != fp->ilist.end(); ++it )
     {
@@ -406,10 +404,10 @@ static bool get_instance(
 }
 
 static PHInstance* get_instance(
-        FrameworkPolicy* fp, const char* keyword, bool dflt_only = false)
+    FrameworkPolicy* fp, const char* keyword, bool dflt_only = false)
 {
     std::vector<PHInstance*>::iterator it;
-    return get_instance(fp, keyword, dflt_only, it)? *it : nullptr;
+    return get_instance(fp, keyword, dflt_only, it) ? *it : nullptr;
 }
 
 static PHInstance* get_new(
@@ -446,7 +444,7 @@ static PHInstance* get_new(
         else
             p->set_reloaded(RELOAD_TYPE_NEW);
     }
-    fp->ilist.push_back(p);
+    fp->ilist.emplace_back(p);
     return p;
 }
 
@@ -471,12 +469,13 @@ void InspectorManager::delete_policy(InspectionPolicy* pi, bool cloned)
     for ( auto* p : pi->framework_policy->ilist )
     {
         if ( cloned and !(p->is_reloaded()) )
-                continue;
+            continue;
 
         if ( p->handler->get_api()->type == IT_PASSIVE )
-            s_trash2.push_back(p->handler);
+            s_trash2.emplace_back(p->handler);
         else
-            s_trash.push_back(p->handler);
+            s_trash.emplace_back(p->handler);
+
         delete p;
     }
     delete pi->framework_policy;
@@ -485,13 +484,11 @@ void InspectorManager::delete_policy(InspectionPolicy* pi, bool cloned)
 
 void InspectorManager::update_policy(SnortConfig* sc)
 {
-    if ( !sc->policy_map->inspection_policy.empty() )
-    {
-        InspectionPolicy* pi = sc->policy_map->inspection_policy[0];
-        for ( auto* p : pi->framework_policy->ilist )
-            p->set_reloaded(RELOAD_TYPE_NONE);
-    }
+    InspectionPolicy* pi = sc->policy_map->get_inspection_policy();
+    for ( auto* p : pi->framework_policy->ilist )
+        p->set_reloaded(RELOAD_TYPE_NONE);
 }
+
 // FIXIT-M create a separate list for meta handlers?  is there really more than one?
 void InspectorManager::dispatch_meta(FrameworkPolicy* fp, int type, const uint8_t* data)
 {
@@ -499,20 +496,50 @@ void InspectorManager::dispatch_meta(FrameworkPolicy* fp, int type, const uint8_
         p->handler->meta(type, data);
 }
 
-Inspector* InspectorManager::get_binder()
+Binder* InspectorManager::get_binder()
 {
     InspectionPolicy* pi = get_inspection_policy();
 
     if ( !pi || !pi->framework_policy )
         return nullptr;
 
-    return pi->framework_policy->binder;
+    return (Binder*)pi->framework_policy->binder;
+}
+
+bool InspectorManager::inspector_exists_in_any_policy(const char* key, SnortConfig* sc)
+{
+    PolicyMap* pm = sc->policy_map;
+
+    if (pm == nullptr)
+        return false;
+
+    for (unsigned i=0; i<pm->inspection_policy_count(); i++)
+    {
+        const InspectionPolicy* const pi = pm->get_inspection_policy(i);
+
+        if ( !pi || !pi->framework_policy )
+            continue; 
+
+        const PHInstance* const p = get_instance(pi->framework_policy, key);
+
+        if ( p )
+            return true;
+    }
+
+    return false;
 }
 
 // FIXIT-P cache get_inspector() returns or provide indexed lookup
-Inspector* InspectorManager::get_inspector(const char* key, bool dflt_only)
+Inspector* InspectorManager::get_inspector(const char* key, bool dflt_only, SnortConfig* sc)
 {
-    InspectionPolicy* pi = get_inspection_policy();
+    InspectionPolicy* pi;
+
+    if (dflt_only && (sc != nullptr))
+        pi = get_default_inspection_policy(sc);
+    else if (dflt_only)
+        pi = get_default_inspection_policy(SnortConfig::get_conf());
+    else
+        pi = get_inspection_policy();
 
     if ( !pi || !pi->framework_policy )
         return nullptr;
@@ -525,34 +552,21 @@ Inspector* InspectorManager::get_inspector(const char* key, bool dflt_only)
     return p->handler;
 }
 
-InspectorType InspectorManager::get_type(const char* key)
-{
-    Inspector* p = get_inspector(key);
-
-    if ( !p )
-        return IT_MAX;
-
-    return p->get_api()->type;
-}
-
 bool InspectorManager::delete_inspector(SnortConfig* sc, const char* iname)
 {
     bool ok = false;
-    if ( !sc->policy_map->inspection_policy.empty() )
-    {
-        FrameworkPolicy* fp = sc->policy_map->inspection_policy[0]->framework_policy;
-        std::vector<PHInstance*>::iterator old_it;
+    FrameworkPolicy* fp = sc->policy_map->get_inspection_policy()->framework_policy;
+    std::vector<PHInstance*>::iterator old_it;
 
-        if ( get_instance(fp, iname, false, old_it) )
+    if ( get_instance(fp, iname, false, old_it) )
+    {
+        (*old_it)->set_reloaded(RELOAD_TYPE_DELETED);
+        fp->ilist.erase(old_it);
+        ok = true;
+        std::vector<PHInstance*>::iterator bind_it;
+        if ( get_instance(fp, bind_id, false, bind_it) )
         {
-            (*old_it)->set_reloaded(RELOAD_TYPE_DELETED);
-            fp->ilist.erase(old_it);
-            ok = true;
-            std::vector<PHInstance*>::iterator bind_it;
-            if ( get_instance(fp, "binder", false, bind_it) )
-            {
-                (*bind_it)->handler->update(sc, iname);
-            }
+            (*bind_it)->handler->remove_inspector_binding(sc, iname);
         }
     }
 
@@ -568,7 +582,7 @@ InspectSsnFunc InspectorManager::get_session(uint16_t proto)
 {
     for ( auto* p : s_handlers )
     {
-        if ( p->api.type == IT_STREAM && p->api.proto_bits == proto && !p->init )
+        if ( p->api.type == IT_STREAM && p->api.proto_bits == proto && p->initialized )
             return p->api.ssn;
     }
     return nullptr;
@@ -604,27 +618,44 @@ static PHClass* get_class(const char* keyword, FrameworkConfig* fc)
     for ( auto* p : s_handlers )
         if ( !strcmp(p->api.base.name, keyword) )
         {
-            if ( p->init )
+            if ( !p->initialized )
             {
                 if ( p->api.pinit )
                     p->api.pinit();
-                p->init = false;
+                p->initialized = true;
             }
             PHClass* ppc = new PHClass(p->api);
-            fc->clist.push_back(ppc);
+            fc->clist.emplace_back(ppc);
             return ppc;
         }
     return nullptr;
+}
+
+static PHGlobal& get_thread_local_plugin(const InspectApi& api)
+{
+    assert(s_tl_handlers != nullptr);
+
+    for ( PHGlobal& phg : *s_tl_handlers )
+    {
+        if ( &phg.api == &api )
+            return phg;
+    }
+    s_tl_handlers->emplace_back(api);
+    return s_tl_handlers->back();
 }
 
 void InspectorManager::thread_init(SnortConfig* sc)
 {
     Inspector::slot = get_instance_id();
 
+    // Initial build out of this thread's configured plugin registry
+    s_tl_handlers = new vector<PHGlobal>;
     for ( auto* p : sc->framework_config->clist )
     {
-        if ( p->api.tinit )
-            p->api.tinit();
+        PHGlobal& phg = get_thread_local_plugin(p->api);
+        if (phg.api.tinit)
+            phg.api.tinit();
+        phg.initialized = true;
     }
 
     // pin->tinit() only called for default policy
@@ -633,45 +664,92 @@ void InspectorManager::thread_init(SnortConfig* sc)
 
     if ( pi && pi->framework_policy )
     {
-        unsigned slot = get_instance_id();
-
         for ( auto* p : pi->framework_policy->ilist )
-            if ( p->pp_class.init[slot] )
+        {
+            PHGlobal& phg = get_thread_local_plugin(p->pp_class.api);
+            if ( !phg.instance_initialized )
             {
                 p->handler->tinit();
-                p->pp_class.init[slot] = false;
-                p->pp_class.term[slot] = true;
+                phg.instance_initialized = true;
             }
+        }
+    }
+}
+
+void InspectorManager::thread_reinit(SnortConfig* sc)
+{
+    // Update this thread's configured plugin registry with any newly configured inspectors
+    for ( auto* p : sc->framework_config->clist )
+    {
+        PHGlobal& phg = get_thread_local_plugin(p->api);
+        if (!phg.initialized)
+        {
+            if (phg.api.tinit)
+                phg.api.tinit();
+            phg.initialized = true;
+        }
+    }
+
+    // pin->tinit() only called for default policy
+    InspectionPolicy* pi = get_default_inspection_policy(sc);
+
+    if ( pi && pi->framework_policy )
+    {
+        // Call pin->tinit() for anything that hasn't yet
+        for ( auto* p : pi->framework_policy->ilist )
+        {
+            PHGlobal& phg = get_thread_local_plugin(p->pp_class.api);
+            if ( !phg.instance_initialized )
+            {
+                p->handler->tinit();
+                phg.instance_initialized = true;
+            }
+        }
     }
 }
 
 void InspectorManager::thread_stop(SnortConfig*)
 {
+    // If thread_init() was never called, we have nothing to do.
+    if ( !s_tl_handlers )
+        return;
+
     // pin->tterm() only called for default policy
     set_default_policy();
     InspectionPolicy* pi = get_inspection_policy();
 
+    // FIXIT-RC Any inspectors that were once configured/instantiated but
+    // no longer exist in the conf cannot have their instance tterm()
+    // called and will leak!
+
     if ( pi && pi->framework_policy )
     {
-        unsigned slot = get_instance_id();
-
         for ( auto* p : pi->framework_policy->ilist )
-            if ( p->pp_class.term[slot] )
+        {
+            PHGlobal& phg = get_thread_local_plugin(p->pp_class.api);
+            if ( phg.instance_initialized )
             {
                 p->handler->tterm();
-                p->pp_class.term[slot] = false;
-                p->pp_class.init[slot] = true;
+                phg.instance_initialized = false;
             }
+        }
     }
 }
 
-void InspectorManager::thread_term(SnortConfig* sc)
+void InspectorManager::thread_term(SnortConfig*)
 {
-    for ( auto* p : sc->framework_config->clist )
+    // If thread_init() was never called, we have nothing to do.
+    if ( !s_tl_handlers )
+        return;
+
+    // Call tterm for every inspector plugin ever configured during the lifetime of this thread
+    for ( PHGlobal& phg : *s_tl_handlers )
     {
-        if ( p->api.tterm )
-            p->api.tterm();
+        if ( phg.api.tterm && phg.initialized )
+            phg.api.tterm();
     }
+    delete s_tl_handlers;
+    s_tl_handlers = nullptr;
 }
 
 //-------------------------------------------------------------------------
@@ -732,10 +810,11 @@ Inspector* InspectorManager::instantiate(
     // FIXIT-L can't we just unify PHInstance and InspectorWrapper?
     return ppi->handler;
 }
+
 #endif
 
 // create default binding for wizard and configured services
-static void instantiate_binder(SnortConfig* sc, FrameworkPolicy* fp)
+static void instantiate_default_binder(SnortConfig* sc, FrameworkPolicy* fp)
 {
     BinderModule* m = (BinderModule*)ModuleManager::get_module(bind_id);
     bool tcp = false, udp = false, pdu = false;
@@ -748,18 +827,18 @@ static void instantiate_binder(SnortConfig* sc, FrameworkPolicy* fp)
         const char* t = api.base.name;
         m->add(s, t);
 
-        tcp = tcp || (api.proto_bits & (unsigned)PktType::TCP);
-        udp = udp || (api.proto_bits & (unsigned)PktType::UDP);
-        pdu = pdu || (api.proto_bits & (unsigned)PktType::PDU);
+        tcp = tcp or (api.proto_bits & PROTO_BIT__TCP);
+        udp = udp or (api.proto_bits & PROTO_BIT__UDP);
+        pdu = pdu or (api.proto_bits & PROTO_BIT__PDU);
     }
     if ( tcp or pdu )
-        m->add((unsigned)PktType::TCP, wiz_id);
+        m->add(PROTO_BIT__TCP, wiz_id);
 
     if ( udp )
-        m->add((unsigned)PktType::UDP, wiz_id);
+        m->add(PROTO_BIT__UDP, wiz_id);
 
     if ( tcp or udp or pdu )
-        m->add((unsigned)PktType::PDU, wiz_id);
+        m->add(PROTO_BIT__PDU, wiz_id);
 
     const InspectApi* api = get_plugin(bind_id);
     InspectorManager::instantiate(api, m, sc);
@@ -793,7 +872,7 @@ static bool configure(SnortConfig* sc, FrameworkPolicy* fp, bool cloned)
     if ( new_ins or reenabled_ins )
     {
         std::vector<PHInstance*>::iterator old_binder;
-        if ( get_instance(fp, "binder", false, old_binder) )
+        if ( get_instance(fp, bind_id, false, old_binder) )
         {
             if ( new_ins and fp->default_binder )
             {
@@ -812,20 +891,20 @@ static bool configure(SnortConfig* sc, FrameworkPolicy* fp, bool cloned)
     }
 
     sort(fp->ilist.begin(), fp->ilist.end(), PHInstance::comp);
-    fp->vectorize();
+    fp->vectorize(sc);
 
     // FIXIT-M checking for wizard here would avoid fatals for
     // can't bind wizard but this exposes other issues that must
     // be fixed first.
     if ( fp->session.num and !fp->binder /*and fp->wizard*/ )
-        instantiate_binder(sc, fp);
+        instantiate_default_binder(sc, fp);
 
     return ok;
 }
 
-Inspector* InspectorManager::acquire(const char* key, SnortConfig* sc)
+Inspector* InspectorManager::acquire(const char* key, bool dflt_only)
 {
-    Inspector* pi = get_inspector(key, sc);
+    Inspector* pi = get_inspector(key, dflt_only);
 
     if ( !pi )
         FatalError("unconfigured inspector: '%s'.\n", key);
@@ -851,18 +930,19 @@ bool InspectorManager::configure(SnortConfig* sc, bool cloned)
     }
     bool ok = true;
 
-    for ( unsigned idx = 0; idx < sc->policy_map->inspection_policy.size(); ++idx )
+    for ( unsigned idx = 0; idx < sc->policy_map->inspection_policy_count(); ++idx )
     {
         if ( cloned and idx )
             break;
 
         set_inspection_policy(sc, idx);
-        InspectionPolicy* p = sc->policy_map->inspection_policy[idx];
+        InspectionPolicy* p = sc->policy_map->get_inspection_policy(idx);
         p->configure();
         ok = ::configure(sc, p->framework_policy, cloned) && ok;
     }
 
     set_inspection_policy(sc);
+
     return ok;
 }
 
@@ -897,7 +977,14 @@ static inline void execute(
         if ( !p->flow && (ppc.api.type == IT_SERVICE) )
             break;
 
-        if ( (unsigned)p->type() & ppc.api.proto_bits )
+        // FIXIT-L ideally we could eliminate PktType and just use
+        // proto_bits but things like teredo need to be fixed up.
+        if ( p->type() == PktType::NONE )
+        {
+            if ( p->proto_bits & ppc.api.proto_bits )
+                (*prep)->handler->eval(p);
+        }
+        else if ( BIT((unsigned)p->type()) & ppc.api.proto_bits )
             (*prep)->handler->eval(p);
     }
 }
@@ -906,10 +993,8 @@ static inline void execute(
 void InspectorManager::bumble(Packet* p)
 {
     Flow* flow = p->flow;
-    Inspector* ins = get_binder();
 
-    if ( ins )
-        ins->exec(BinderSpace::ExecOperation::HANDLE_GADGET, flow);
+    DataBus::publish(FLOW_SERVICE_CHANGE_EVENT, p);
 
     flow->clear_clouseau();
 
@@ -927,21 +1012,16 @@ void InspectorManager::full_inspection(Packet* p)
     if ( flow->service and flow->clouseau and !p->is_cooked() )
         bumble(p);
 
-    if ( !p->dsize )
+    // For reassembled PDUs, a null data buffer signals no detection. Detection can be required
+    // with a length of 0. For raw packets, a length of 0 does signal no detection.
+    if ( (p->is_cooked() and !p->data) or (!p->is_cooked() and !p->dsize) )
         DetectionEngine::disable_content(p);
 
     else if ( flow->gadget && flow->gadget->likes(p) )
     {
         flow->gadget->eval(p);
-        s_clear = true;
+        p->context->clear_inspectors = true;
     }
-}
-
-void InspectorManager::execute_control(Packet* p)
-{
-    SnortConfig* sc = SnortConfig::get_conf();
-    FrameworkPolicy* fp = get_default_inspection_policy(sc)->framework_policy;
-    ::execute(p, fp->control.vec, fp->control.num);
 }
 
 // FIXIT-M leverage knowledge of flow creation so that reputation (possibly a
@@ -963,22 +1043,27 @@ void InspectorManager::execute(Packet* p)
     }
     // must check between each ::execute()
     if ( p->disable_inspect )
-       return;
+        return;
 
     if ( !p->is_cooked() )
         ::execute(p, fp->packet.vec, fp->packet.num);
 
     if ( p->disable_inspect )
-       return;
+        return;
+
+    SnortConfig* sc = SnortConfig::get_conf();
+    FrameworkPolicy* fp_dft = get_default_inspection_policy(sc)->framework_policy;
 
     if ( !p->flow )
     {
+        if (fp_dft != fp)
+            ::execute(p, fp_dft->network.vec, fp_dft->network.num);
         ::execute(p, fp->network.vec, fp->network.num);
 
         if ( p->disable_inspect )
-           return;
+            return;
 
-        execute_control(p);
+        ::execute(p, fp_dft->control.vec, fp_dft->control.num);
     }
     else
     {
@@ -986,33 +1071,38 @@ void InspectorManager::execute(Packet* p)
             p->flow->session->process(p);
 
         if ( !p->flow->service )
+        {
+            if (fp_dft != fp)
+                ::execute(p, fp_dft->network.vec, fp_dft->network.num);
             ::execute(p, fp->network.vec, fp->network.num);
+        }
 
         if ( p->disable_inspect )
-           return;
+            return;
 
         if ( p->flow->full_inspection() )
             full_inspection(p);
 
         if ( !p->disable_inspect and !p->flow->is_inspection_disabled() )
-            execute_control(p);
+            ::execute(p, fp_dft->control.vec, fp_dft->control.num);
     }
 }
 
 void InspectorManager::probe(Packet* p)
 {
-    FrameworkPolicy* fp = get_inspection_policy()->framework_policy;
+    InspectionPolicy* policy = SnortConfig::get_conf()->policy_map->get_inspection_policy(0);
+    FrameworkPolicy* fp = policy->framework_policy;
     ::execute(p, fp->probe.vec, fp->probe.num);
 }
 
 void InspectorManager::clear(Packet* p)
 {
-    if ( !s_clear )
+    if ( !p->context->clear_inspectors )
         return;
 
     if ( p->flow and p->flow->gadget )
         p->flow->gadget->clear(p);
 
-    s_clear = false;
+    p->context->clear_inspectors = false;
 }
 

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -26,7 +26,6 @@
 #include "detection/detection_util.h"
 #include "log/messages.h"
 #include "log/unified2.h"
-#include "main/snort_debug.h"
 #include "profiler/profiler.h"
 #include "protocols/packet.h"
 #include "protocols/ssl.h"
@@ -40,6 +39,12 @@
 #include "smtp_paf.h"
 #include "smtp_util.h"
 #include "smtp_xlink2state.h"
+
+#ifdef UNIT_TEST
+#include "catch/snort_catch.h"
+#endif
+
+using namespace snort;
 
 THREAD_LOCAL ProfileStats smtpPerfStats;
 THREAD_LOCAL SmtpStats smtpstats;
@@ -179,7 +184,7 @@ SmtpFlowData::SmtpFlowData() : FlowData(inspector_id)
 {
     memset(&session, 0, sizeof(session));
     smtpstats.concurrent_sessions++;
-    if(smtpstats.max_concurrent_sessions < smtpstats.concurrent_sessions)
+    if (smtpstats.max_concurrent_sessions < smtpstats.concurrent_sessions)
         smtpstats.max_concurrent_sessions = smtpstats.concurrent_sessions;
 }
 
@@ -214,10 +219,8 @@ static SMTPData* SetNewSMTPData(SMTP_PROTO_CONF* config, Packet* p)
     smtp_ssn->mime_ssn->config = config;
     smtp_ssn->mime_ssn->set_mime_stats(&(smtpstats.mime_stats));
 
-    if(Stream::is_midstream(p->flow))
+    if (Stream::is_midstream(p->flow))
     {
-        DebugMessage(DEBUG_SMTP, "Got midstream packet - "
-            "setting state to unknown\n");
         smtp_ssn->state = STATE_UNKNOWN;
     }
 
@@ -246,11 +249,16 @@ static void SMTP_InitCmds(SMTP_PROTO_CONF* config)
 
 static void SMTP_TermCmds(SMTP_PROTO_CONF* config)
 {
-    for ( int i = 0; i <= config->num_cmds; ++i )
-        snort_free(const_cast<char*>(config->cmds[i].name));
-
-    snort_free(config->cmds);
-    snort_free(config->cmd_config);
+    if (!config)
+        return;
+    if (config->cmds)
+    {
+        for ( int i = 0; i <= config->num_cmds; ++i )
+            snort_free(const_cast<char*>(config->cmds[i].name));
+        snort_free(config->cmds);
+    }
+    if (config->cmd_config)
+        snort_free(config->cmd_config);
 }
 
 static void SMTP_CommandSearchInit(SMTP_PROTO_CONF* config)
@@ -270,6 +278,8 @@ static void SMTP_CommandSearchInit(SMTP_PROTO_CONF* config)
 
 static void SMTP_CommandSearchTerm(SMTP_PROTO_CONF* config)
 {
+    if (config->cmd_search == nullptr)
+        return;
     snort_free(config->cmd_search);
     delete config->cmd_search_mpse;
 }
@@ -361,7 +371,7 @@ static int GetCmdId(SMTP_PROTO_CONF* config, const char* name, SMTPCmdTypeEnum t
     return AddCmd(config, name, type);
 }
 
-static void SMTP_PrintConfig(SMTP_PROTO_CONF *config)
+static void SMTP_PrintConfig(SMTP_PROTO_CONF* config)
 {
     assert(config);
 
@@ -371,13 +381,13 @@ static void SMTP_PrintConfig(SMTP_PROTO_CONF *config)
     LogMessage("SMTP Config:\n");
     snprintf(buf, sizeof(buf) - 1, "    Normalize: ");
 
-    if(config->normalize == NORMALIZE_ALL)
+    if (config->normalize == NORMALIZE_ALL)
         sfsnprintfappend(buf, sizeof(buf) - 1, "all");
 
-    else if(config->normalize == NORMALIZE_NONE)
+    else if (config->normalize == NORMALIZE_NONE)
         sfsnprintfappend(buf, sizeof(buf) - 1, "none");
 
-    else if(config->normalize == NORMALIZE_CMDS)
+    else if (config->normalize == NORMALIZE_CMDS)
     {
         for (SMTPToken* cmd = config->cmds; cmd->name != nullptr; cmd++)
         {
@@ -453,11 +463,11 @@ static void SMTP_PrintConfig(SMTP_PROTO_CONF *config)
         (config->xlink2state == ALERT_XLINK2STATE) ? "Yes" : "No");
     if (config->xlink2state == DROP_XLINK2STATE)
     {
-        LogMessage("    Drop on X-Link2State Alert: %s\n", "Yes" );
+        LogMessage("    Drop on X-Link2State Alert: %s\n", "Yes");
     }
     else
     {
-        LogMessage("    Drop on X-Link2State Alert: %s\n", "No" );
+        LogMessage("    Drop on X-Link2State Alert: %s\n", "No");
     }
 
     snprintf(buf, sizeof(buf) - 1, "    Alert on commands: ");
@@ -544,16 +554,12 @@ static int SMTP_Setup(Packet* p, SMTPData* ssn)
 
         if (ssn->session_flags & SMTP_FLAG_NEXT_STATE_UNKNOWN)
         {
-            DebugMessage(DEBUG_SMTP, "Found gap in previous reassembly buffer - "
-                "set state to unknown\n");
             ssn->state = STATE_UNKNOWN;
             ssn->session_flags &= ~SMTP_FLAG_NEXT_STATE_UNKNOWN;
         }
 
         if (missing_in_rebuilt == SSN_MISSING_BEFORE)
         {
-            DebugMessage(DEBUG_SMTP, "Found missing packets before "
-                "in reassembly buffer - set state to unknown\n");
             ssn->state = STATE_UNKNOWN;
         }
     }
@@ -598,8 +604,6 @@ static bool SMTP_IsAuthCtxIgnored(const uint8_t* start, int length)
 static bool SMTP_IsAuthChanged(SMTPData* smtp_ssn, const uint8_t* start_ptr, const
     uint8_t* end_ptr)
 {
-    int length;
-    bool auth_changed = false;
     const uint8_t* start = start_ptr;
     const uint8_t* end = end_ptr;
 
@@ -609,17 +613,18 @@ static bool SMTP_IsAuthChanged(SMTPData* smtp_ssn, const uint8_t* start_ptr, con
         end--;
 
     if (start >= end)
-        return auth_changed;
+        return false;
 
-    length = end - start;
+    int length = end - start;
 
     if (length > MAX_AUTH_NAME_LEN)
-        return auth_changed;
+        return false;
 
     if (SMTP_IsAuthCtxIgnored(start, length))
-        return auth_changed;
+        return false;
 
     /* if authentication mechanism is set, compare it with current one*/
+    bool auth_changed = false;
     if (smtp_ssn->auth_name)
     {
         if (smtp_ssn->auth_name->length != length)
@@ -717,29 +722,16 @@ static const uint8_t* SMTP_HandleCommand(SMTP_PROTO_CONF* config, Packet* p, SMT
          * state.  Check to see if we're encrypted */
         if (smtp_ssn->state == STATE_UNKNOWN)
         {
-            DebugMessage(DEBUG_SMTP, "Command not found, but state is "
-                "unknown - checking for SSL\n");
-
             /* check for encrypted */
 
             if ((smtp_ssn->session_flags & SMTP_FLAG_CHECK_SSL) &&
                 (IsSSL(ptr, end - ptr, p->packet_flags)))
             {
-                DebugMessage(DEBUG_SMTP, "Packet is SSL encrypted\n");
-
                 smtp_ssn->state = STATE_TLS_DATA;
-
-                /* Ignore data */
-                if (config->ignore_tls_data)
-                {
-                    DebugMessage(DEBUG_SMTP, "Ignoring encrypted data\n");
-                }
-
                 return end;
             }
             else
             {
-                DebugMessage(DEBUG_SMTP, "Not SSL - try data state\n");
                 /* don't check for ssl again in this packet */
                 if (smtp_ssn->session_flags & SMTP_FLAG_CHECK_SSL)
                     smtp_ssn->session_flags &= ~SMTP_FLAG_CHECK_SSL;
@@ -752,8 +744,6 @@ static const uint8_t* SMTP_HandleCommand(SMTP_PROTO_CONF* config, Packet* p, SMT
         }
         else
         {
-            DebugMessage(DEBUG_SMTP, "No known command found\n");
-
             if (smtp_ssn->state != STATE_AUTH)
             {
                 DetectionEngine::queue_event(GID_SMTP,SMTP_UNKNOWN_CMD);
@@ -869,15 +859,8 @@ static const uint8_t* SMTP_HandleCommand(SMTP_PROTO_CONF* config, Packet* p, SMT
             if ((smtp_ssn->state_flags & SMTP_FLAG_GOT_RCPT_CMD) ||
                 smtp_ssn->state == STATE_UNKNOWN)
             {
-                DebugMessage(DEBUG_SMTP, "Set to data state.\n");
-
                 smtp_ssn->state = STATE_DATA;
                 smtp_ssn->state_flags &= ~(SMTP_FLAG_GOT_MAIL_CMD | SMTP_FLAG_GOT_RCPT_CMD);
-            }
-            else
-            {
-                DebugMessage(DEBUG_SMTP, "Didn't get MAIL -> RCPT command sequence - "
-                    "stay in command state.\n");
             }
 
             break;
@@ -1004,7 +987,6 @@ static void SMTP_ProcessClientPacket(SMTP_PROTO_CONF* config, Packet* p, SMTPDat
     const uint8_t* ptr = p->data;
     const uint8_t* end = p->data + p->dsize;
 
-
     if (smtp_ssn->state == STATE_CONNECT)
     {
         smtp_ssn->state = STATE_COMMAND;
@@ -1018,14 +1000,12 @@ static void SMTP_ProcessClientPacket(SMTP_PROTO_CONF* config, Packet* p, SMTPDat
         switch (smtp_ssn->state)
         {
         case STATE_COMMAND:
-            DebugMessage(DEBUG_SMTP, "COMMAND STATE ~~~~~~~~~~~~~~~~~~~~~~~~~~\n");
             ptr = SMTP_HandleCommand(config, p, smtp_ssn, ptr, end);
             break;
         case STATE_DATA:
         case STATE_BDATA:
-            DebugMessage(DEBUG_SMTP, "DATA STATE ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n");
             position = get_file_position(p);
-            ptr = smtp_ssn->mime_ssn->process_mime_data(p->flow, ptr, len, true, position);
+            ptr = smtp_ssn->mime_ssn->process_mime_data(p, ptr, len, true, position);
             //ptr = SMTP_HandleData(p, ptr, end, &(smtp_ssn->mime_ssn));
             break;
         case STATE_XEXCH50:
@@ -1038,13 +1018,11 @@ static void SMTP_ProcessClientPacket(SMTP_PROTO_CONF* config, Packet* p, SMTPDat
             ptr = SMTP_HandleCommand(config, p, smtp_ssn, ptr, end);
             break;
         case STATE_UNKNOWN:
-            DebugMessage(DEBUG_SMTP, "UNKNOWN STATE ~~~~~~~~~~~~~~~~~~~~~~~~~~\n");
             /* If state is unknown try command state to see if we can
              * regain our bearings */
             ptr = SMTP_HandleCommand(config, p, smtp_ssn, ptr, end);
             break;
         default:
-            DebugMessage(DEBUG_SMTP, "Bad SMTP state\n");
             return;
         }
     }
@@ -1071,17 +1049,10 @@ static void SMTP_ProcessServerPacket(
         {
             smtp_ssn->state = STATE_TLS_DATA;
         }
-        else if (!(p->flow->get_session_flags() & SSNFLAG_MIDSTREAM)
+        else if ( !p->test_session_flags(SSNFLAG_MIDSTREAM)
             && !Stream::missed_packets(p->flow, SSN_DIR_BOTH))
         {
-            /* Check to see if the raw packet is in order */
-            if (p->packet_flags & PKT_STREAM_ORDER_OK)
-            {
-                /* revert back to command state - assume server didn't accept STARTTLS */
-                smtp_ssn->state = STATE_COMMAND;
-            }
-            else
-                return;
+            smtp_ssn->state = STATE_COMMAND;
         }
     }
 
@@ -1133,36 +1104,13 @@ static void SMTP_ProcessServerPacket(
                 }
                 break;
             }
-
-#ifdef DEBUG_MSGS
-            const uint8_t* dash = ptr + smtp_search_info.index + smtp_search_info.length;
-
-            /* only add response if not a dash after response code */
-            if ((dash == eolm) || ((dash < eolm) && (*dash != '-')))
-            {
-                DebugFormat(DEBUG_SMTP, "Server sent %s response\n",
-                    smtp_resps[smtp_search_info.id].name);
-            }
-#endif
         }
         else
         {
-            DebugMessage(DEBUG_SMTP,
-                "Server response not found - see if it's SSL data\n");
-
             if ((smtp_ssn->session_flags & SMTP_FLAG_CHECK_SSL) &&
                 (IsSSL(ptr, end - ptr, p->packet_flags)))
             {
-                DebugMessage(DEBUG_SMTP, "Server response is an SSL packet\n");
-
                 smtp_ssn->state = STATE_TLS_DATA;
-
-                /* Ignore data */
-                if (config->ignore_tls_data)
-                {
-                    DebugMessage(DEBUG_SMTP, "Ignoring Server TLS encrypted data\n");
-                }
-
                 return;
             }
             else if (smtp_ssn->session_flags & SMTP_FLAG_CHECK_SSL)
@@ -1215,13 +1163,10 @@ static void snort_smtp(SMTP_PROTO_CONF* config, Packet* p)
 
     /* reset normalization stuff */
     smtp_normalizing = false;
-    SetDetectLimit(p, 0);
 
     if (pkt_dir == SMTP_PKT_FROM_SERVER)
     {
         int next_state = 0;
-
-        DebugMessage(DEBUG_SMTP, "SMTP server packet\n");
 
         /* Process as a server packet */
         SMTP_ProcessServerPacket(config, p, smtp_ssn, &next_state);
@@ -1231,29 +1176,14 @@ static void snort_smtp(SMTP_PROTO_CONF* config, Packet* p)
     }
     else
     {
-#ifdef DEBUG_MSGS
-        if (pkt_dir == SMTP_PKT_FROM_CLIENT)
-        {
-            DebugMessage(DEBUG_SMTP, "SMTP client packet\n");
-        }
-        else
-        {
-            DebugMessage(DEBUG_SMTP, "SMTP packet NOT from client or server! "
-                "Processing as a client packet\n");
-        }
-#endif
-
         /* This packet should be a tls client hello */
         if (smtp_ssn->state == STATE_TLS_CLIENT_PEND)
         {
             if (IsTlsClientHello(p->data, p->data + p->dsize))
             {
-                DebugMessage(DEBUG_SMTP,
-                    "TLS DATA STATE ~~~~~~~~~~~~~~~~~~~~~~~~~\n");
-
                 smtp_ssn->state = STATE_TLS_SERVER_PEND;
             }
-            else if (p->packet_flags & PKT_STREAM_ORDER_OK)
+            else
             {
                 /* reset state - server may have rejected STARTTLS command */
                 smtp_ssn->state = STATE_COMMAND;
@@ -1275,7 +1205,6 @@ static void snort_smtp(SMTP_PROTO_CONF* config, Packet* p)
             if ( !InspectPacket(p))
             {
                 /* Packet will be rebuilt, so wait for it */
-                DebugMessage(DEBUG_SMTP, "Client packet will be reassembled\n");
                 return;
             }
             else if (!(p->packet_flags & PKT_REBUILT_STREAM))
@@ -1295,9 +1224,6 @@ static void snort_smtp(SMTP_PROTO_CONF* config, Packet* p)
                  * that were not rebuilt, state is going to be messed up
                  * so set state to unknown. It's likely this was the
                  * beginning of the conversation so reset state */
-                DebugMessage(DEBUG_SMTP, "Got non-rebuilt packets before "
-                    "this rebuilt packet\n");
-
                 smtp_ssn->state = STATE_UNKNOWN;
                 smtp_ssn->session_flags &= ~SMTP_FLAG_GOT_NON_REBUILT;
             }
@@ -1370,7 +1296,7 @@ static void SMTP_RegXtraDataFuncs(SMTP_PROTO_CONF* config)
 }
 
 int SmtpMime::handle_header_line(
-    const uint8_t* ptr, const uint8_t* eol, int max_header_len)
+    const uint8_t* ptr, const uint8_t* eol, int max_header_len, Packet* p)
 {
     /* get length of header line */
     int header_line_len = eol - ptr;
@@ -1382,14 +1308,13 @@ int SmtpMime::handle_header_line(
         (header_line_len > config->max_header_line_len))
     {
         DetectionEngine::queue_event(GID_SMTP, SMTP_DATA_HDR_OVERFLOW);
-
     }
 
-    /* XXX Does VRT want data headers normalized?
+    /* Does VRT want data headers normalized?
      * currently the code does not normalize headers */
     if (smtp_normalizing)
     {
-        int ret = SMTP_CopyToAltBuffer(nullptr, ptr, eol - ptr);
+        int ret = SMTP_CopyToAltBuffer(p, ptr, eol - ptr);
 
         if (ret == -1)
             return (-1);
@@ -1406,7 +1331,7 @@ int SmtpMime::handle_header_line(
     return 0;
 }
 
-int SmtpMime::normalize_data(const uint8_t* ptr, const uint8_t* data_end)
+int SmtpMime::normalize_data(const uint8_t* ptr, const uint8_t* data_end, Packet* p)
 {
     /* if we're ignoring data and not already normalizing, copy everything
      * up to here into alt buffer so detection engine doesn't have
@@ -1419,7 +1344,7 @@ int SmtpMime::normalize_data(const uint8_t* ptr, const uint8_t* data_end)
     else */
     if (!config->decode_conf.is_ignore_data() && smtp_normalizing)
     {
-        return SMTP_CopyToAltBuffer(nullptr, ptr, data_end - ptr);
+        return SMTP_CopyToAltBuffer(p, ptr, data_end - ptr);
     }
 
     return 0;
@@ -1444,11 +1369,15 @@ void SmtpMime::decode_alert()
     }
 }
 
+void SmtpMime::decompress_alert()
+{
+    DetectionEngine::queue_event(GID_SMTP, SMTP_FILE_DECOMP_FAILED);
+}
+
 void SmtpMime::reset_state(Flow* ssn)
 {
     SMTP_ResetState(ssn);
 }
-
 
 bool SmtpMime::is_end_of_data(Flow* session)
 {
@@ -1631,7 +1560,7 @@ const InspectApi smtp_api =
         mod_dtor
     },
     IT_SERVICE,
-    (uint16_t)PktType::PDU,
+    PROTO_BIT__PDU,
     nullptr,                // buffers
     "smtp",
     smtp_init,
@@ -1644,8 +1573,6 @@ const InspectApi smtp_api =
     nullptr                 // reset
 };
 
-#undef BUILDING_SO  // FIXIT-L can't be linked dynamically yet
-
 #ifdef BUILDING_SO
 SO_PUBLIC const BaseApi* snort_plugins[] =
 {
@@ -1654,5 +1581,58 @@ SO_PUBLIC const BaseApi* snort_plugins[] =
 };
 #else
 const BaseApi* sin_smtp = &smtp_api.base;
+#endif
+
+#ifdef UNIT_TEST
+TEST_CASE("handle_header_line", "[smtp]")
+{
+    // Setup
+    MailLogConfig log_config;
+    DecodeConfig decode_conf;
+    log_config.log_email_hdrs = 0;
+    SmtpMime mime_ssn(&decode_conf, &log_config);
+    smtp_normalizing = true;
+    SMTP_PROTO_CONF config;
+    mime_ssn.config = &config;
+    uint8_t ptr[68] = "Date: Tue, 1 Mar 2016 22:37:56 -0500\r\nFrom: acc2 <acc2@localhost>\r\n";
+    uint8_t* eol = ptr + 38;
+    Packet p;
+    p.context = new IpsContext(1);
+    SMTP_ResetAltBuffer(&p);
+    int res = mime_ssn.handle_header_line(ptr, eol, 0, &p);
+    REQUIRE((res == 0));
+    unsigned len = 0;
+    const uint8_t* header = SMTP_GetAltBuffer(&p, len);
+    REQUIRE((len == 38));
+    REQUIRE((memcmp(header, ptr, len)== 0));
+
+    // Cleanup
+    delete p.context;
+}
+
+TEST_CASE("normalize_data", "[smtp]")
+{
+    // Setup
+    MailLogConfig log_config;
+    DecodeConfig decode_conf;
+    SmtpMime mime_ssn(&decode_conf, &log_config);
+    smtp_normalizing = true;
+    SMTP_PROTO_CONF config;
+    mime_ssn.config = &config;
+    uint8_t ptr[23] = "\r\n--wac7ysb48OaltWcw\r\n";
+    uint8_t* data_end = ptr + 22;
+    Packet p;
+    p.context = new IpsContext(1);
+    SMTP_ResetAltBuffer(&p);
+    int res = mime_ssn.normalize_data(ptr, data_end, &p);
+    REQUIRE((res == 0));
+    unsigned len = 0;
+    const uint8_t* data = SMTP_GetAltBuffer(&p, len);
+    REQUIRE((len == 22));
+    REQUIRE((memcmp(data, ptr, len)== 0));
+
+    // Cleanup
+    delete p.context;
+}
 #endif
 

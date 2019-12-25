@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 // Copyright (C) 2003-2004 Daniel Roelker
 // Copyright (C) 2002-2004 Marc Norton
@@ -123,6 +123,8 @@
 #include "log/messages.h"
 #include "utils/stats.h"
 #include "utils/util.h"
+
+using namespace snort;
 
 #define printf LogMessage
 
@@ -648,7 +650,7 @@ static void Build_NFA(ACSM_STRUCT2* acsm)
         {
             if ( !queue_array[s] )
             {
-                queue.push_back(s);
+                queue.emplace_back(s);
                 queue_array[s] = true;
             }
             FailState[s] = 0;
@@ -669,7 +671,7 @@ static void Build_NFA(ACSM_STRUCT2* acsm)
             {
                 if ( !queue_array[s] )
                 {
-                    queue.push_back(s);
+                    queue.emplace_back(s);
                     queue_array[s] = true;
                 }
                 int fs = FailState[r];
@@ -741,7 +743,7 @@ static void Convert_NFA_To_DFA(ACSM_STRUCT2* acsm)
         {
             if ( !queue_array[s] )
             {
-                queue.push_back(s);
+                queue.emplace_back(s);
                 queue_array[s] = true;
             }
         }
@@ -761,7 +763,7 @@ static void Convert_NFA_To_DFA(ACSM_STRUCT2* acsm)
             {
                 if ( !queue_array[s] )
                 {
-                    queue.push_back(s);
+                    queue.emplace_back(s);
                     queue_array[s] = true;
                 }
             }
@@ -1363,8 +1365,7 @@ static inline int _acsmCompile2(ACSM_STRUCT2* acsm)
     return 0;
 }
 
-int acsmCompile2(
-    SnortConfig* sc, ACSM_STRUCT2* acsm)
+int acsmCompile2(SnortConfig* sc, ACSM_STRUCT2* acsm)
 {
     if ( int rval = _acsmCompile2(acsm) )
         return rval;
@@ -2197,210 +2198,4 @@ int acsmPrintSummaryInfo2()
 
     return 0;
 }
-
-#ifdef ACSMX2S_MAIN
-// Write a state table to disk
-static void Write_DFA(ACSM_STRUCT2* acsm, char* f)
-{
-    acstate_t** NextState = acsm->acsmNextState;
-    printf("Dump DFA - %d active states\n",acsm->acsmNumStates);
-
-    FILE* fp = fopen(f,"wb");
-
-    if (!fp)
-    {
-        printf("WARNING: could not write dfa to file - %s.\n",f);
-        return;
-    }
-
-    fwrite( &acsm->acsmNumStates, 4, 1, fp);
-
-    for (int k=0; k<acsm->acsmNumStates; k++)
-    {
-        acstate_t* p = NextState[k];
-
-        if ( !p )
-            continue;
-
-        acstate_t fmt = *p++;
-        acstate_t bmatch = *p++;
-
-        fwrite(&fmt,    sizeof(acstate_t), 1, fp);
-        fwrite(&bmatch, sizeof(acstate_t), 1, fp);
-
-        if ( fmt == ACF_SPARSE )
-        {
-            acstate_t n = *p++;
-            fwrite(&n, sizeof(acstate_t), 1, fp);
-            fwrite(p, n*2*sizeof(acstate_t), 1, fp);
-        }
-        else if ( fmt ==ACF_BANDED )
-        {
-            acstate_t n = *p++;
-            fwrite(&n, sizeof(acstate_t), 1, fp);
-
-            acstate_t index = *p++;
-            fwrite(&index, sizeof(acstate_t), 1, fp);
-
-            fwrite(p, sizeof(acstate_t), n, fp);
-        }
-        else if ( fmt ==ACF_SPARSE_BANDS )
-        {
-            acstate_t nb = *p++;
-            fwrite(&nb, sizeof(acstate_t), 1, fp);
-
-            for (int i=0; i<nb; i++)
-            {
-                acstate_t n = *p++;
-                fwrite(&n, sizeof(acstate_t), 1, fp);
-
-                acstate_t index = *p++;
-                fwrite(&index,sizeof(acstate_t), 1, fp);
-
-                fwrite(p, sizeof(acstate_t), 1, fp);
-            }
-        }
-        else if ( fmt == ACF_FULL )
-        {
-            fwrite(p, sizeof(acstate_t), acsm->acsmAlphabetSize,  fp);
-        }
-
-        //Print_DFA_MatchList( acsm, k);
-    }
-
-    fclose(fp);
-}
-
-static int acsmSearch2(
-    ACSM_STRUCT2* acsm, uint8_t* Tx, int n, MpseMatch match,
-    void* context, int* current_state)
-{
-    if ( !acsm->dfa )
-        return acsm_search_nfa(acsm, Tx, n, match, context, current_state);
-
-    switch ( acsm->acsmFormat )
-    {
-    case ACF_FULL:
-        return acsm_search_dfa_full(acsm, Tx, n, match, context, current_state);
-
-    case ACF_BANDED:
-        return acsm_search_dfa_banded(acsm, Tx, n, match, context, current_state);
-
-    case ACF_SPARSE:
-    case ACF_SPARSE_BANDS:
-        return acsm_search_dfa_sparse(acsm, Tx, n, match, context, current_state);
-    }
-    return 0;
-}
-
-/*
-*  Text Data Buffer
-*/
-uint8_t text[512];
-
-/*
-*    A Match is found
-*/
-int MatchFound(void* id, int index, void* data)
-{
-    fprintf (stdout, "%s\n", (char*)id);
-    return 0;
-}
-
-int main(int argc, char** argv)
-{
-    int i, nc, nocase = 0;
-    ACSM_STRUCT2* acsm;
-    char* p;
-
-    if (argc < 3)
-    {
-        fprintf (stderr,"Usage: %s search-text pattern +pattern... [flags]\n",argv[0]);
-        fprintf (stderr, "  flags: -nfa -nocase -full -sparse -bands -sparsebands "
-            "-z zcnt (sparsebands) -sparsetree -v\n");
-        exit (0);
-    }
-
-    acsm = acsmNew2 ();
-
-    if ( !acsm )
-    {
-        printf("acsm-no memory\n");
-        exit(0);
-    }
-
-    strncpy (text, argv[1], sizeof(text) - 1);
-    text[sizeof(text) - 1] = '\0';
-
-    acsm->acsmFormat = ACF_FULL;
-
-    for (i = 1; i < argc; i++)
-    {
-        if (strcmp (argv[i], "-nocase") == 0)
-        {
-            nocase = 1;
-        }
-        if (strcmp (argv[i], "-full") == 0)
-        {
-            acsm->acsmFormat = ACF_FULL;
-        }
-        if (strcmp (argv[i], "-sparse") == 0)
-        {
-            acsm->acsmFormat = ACF_SPARSE;
-            acsm->acsmSparseMaxRowNodes = 10;
-        }
-        if (strcmp (argv[i], "-bands") == 0)
-        {
-            acsm->acsmFormat = ACF_BANDED;
-        }
-
-        if (strcmp (argv[i], "-sparsebands") == 0)
-        {
-            acsm->acsmFormat = ACF_SPARSE_BANDS;
-            acsm->acsmSparseMaxZcnt = 10;
-        }
-        if (strcmp (argv[i], "-z") == 0)
-        {
-            acsm->acsmSparseMaxZcnt = atoi(argv[++i]);
-        }
-    }
-
-    for (i = 2; i < argc; i++)
-    {
-        if (argv[i][0] == '-')
-            continue;
-
-        p = argv[i];
-
-        if ( *p == '+')
-        {
-            nc=1;
-            p++;
-        }
-        else
-        {
-            nc = nocase;
-        }
-
-        acsmAddPattern2 (acsm, (uint8_t*)p, strlen(p), nc, 0, 0,(void*)p, i - 2);
-    }
-
-    Print_DFA (acsm);
-
-    acsmCompile2 (acsm);
-
-    Write_DFA(acsm, "acsmx2-snort.dfa");
-
-    acsmPrintSummaryInfo2(acsm);
-
-    acsmSearch2 (acsm, text, strlen (text), MatchFound, (void*)0);
-
-    acsmFree2 (acsm);
-
-    printf ("normal pgm end\n");
-
-    return 0;
-}
-
-#endif
 

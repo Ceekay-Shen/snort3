@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -46,6 +46,7 @@ extern const ConvertMap* normalizer_ip6_map;
 extern const ConvertMap* normalizer_tcp_map;
 extern const ConvertMap* perfmonitor_map;
 extern const ConvertMap* reputation_map;
+extern const ConvertMap* rna_map;
 extern const ConvertMap* rpc_decode_map;
 extern const ConvertMap* sip_map;
 extern const ConvertMap* ssh_map;
@@ -61,6 +62,7 @@ extern const ConvertMap* stream_ip_map;
 extern const ConvertMap* stream_global_map;
 extern const ConvertMap* stream_tcp_map;
 extern const ConvertMap* stream_udp_map;
+extern const ConvertMap* stream_ha_map;
 
 std::vector<const ConvertMap*> preprocessor_api =
 {
@@ -91,6 +93,7 @@ std::vector<const ConvertMap*> preprocessor_api =
     perfmonitor_map,
     pop_map,
     reputation_map,
+    rna_map,
     rpc_decode_map,
     sdf_map,
     sfportscan_map,
@@ -98,8 +101,9 @@ std::vector<const ConvertMap*> preprocessor_api =
     smtp_map,
     ssh_map,
     ssl_map,
-    stream_ip_map,
     stream_global_map,
+    stream_ha_map,
+    stream_ip_map,
     stream_tcp_map,
     stream_udp_map,
 };

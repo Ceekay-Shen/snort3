@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -22,12 +22,16 @@
 #define PROFILER_DEFS_H
 
 #include "main/snort_types.h"
+#include "main/thread.h"
 #include "memory_defs.h"
 #include "memory_profiler_defs.h"
 #include "rule_profiler_defs.h"
 #include "time_profiler_defs.h"
 
+namespace snort
+{
 #define ROOT_NODE "total"
+#define FLEX_NODE "other"
 
 struct ProfilerConfig
 {
@@ -69,30 +73,63 @@ inline ProfileStats& ProfileStats::operator+=(const ProfileStats& rhs)
     return *this;
 }
 
-class ProfileContext
+class SO_PUBLIC ProfileContext
 {
 public:
-    ProfileContext(ProfileStats& stats) :
-        time(stats.time), memory(stats.memory) { }
+    ProfileContext(ProfileStats& stats) : time(stats.time), memory(stats.memory)
+    {
+        prev_time = curr_time;
+        if ( prev_time )
+            prev_time->pause();
+        curr_time = &time;
+    }
+
+    ~ProfileContext()
+    {
+        if ( prev_time )
+            prev_time->resume();
+        curr_time = prev_time;
+    }
 
 private:
     TimeContext time;
     MemoryContext memory;
-};
-
-class SO_PUBLIC ProfileExclude
-{
-public:
-    ProfileExclude(ProfileStats& stats) : ProfileExclude(stats.time, stats.memory) { }
-    ProfileExclude(TimeProfilerStats& time, MemoryTracker&) : time(time) { }
-
-private:
-    TimeExclude time;
-    MemoryExclude memory;
+    TimeContext* prev_time;
+    static THREAD_LOCAL TimeContext* curr_time;
 };
 
 using get_profile_stats_fn = ProfileStats* (*)(const char*);
 
-using Profile = ProfileContext;
+class NoMemContext
+{
+public:
+    NoMemContext(ProfileStats& stats) :
+        time(stats.time) { }
 
+private:
+    TimeContext time;
+};
+
+class ProfileDisabled
+{
+public:
+    ProfileDisabled(ProfileStats&) { }
+    ProfileDisabled(TimeProfilerStats&, MemoryTracker&) { }
+};
+
+#ifdef NO_PROFILER
+using Profile = ProfileDisabled;
+#else
+#ifdef NO_MEM_MGR
+using Profile = NoMemContext;
+#else
+using Profile = ProfileContext;
+#endif
+#endif
+
+// developer enable for profiling rule options
+//using RuleProfile = ProfileContext;
+using RuleProfile = ProfileDisabled;
+
+}
 #endif

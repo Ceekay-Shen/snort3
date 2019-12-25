@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2003-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -40,6 +40,8 @@
 
 #include "primetable.h"
 
+using namespace snort;
+
 HashFnc* hashfcn_new(int m)
 {
     HashFnc* p;
@@ -63,7 +65,7 @@ HashFnc* hashfcn_new(int m)
     {
         p->seed     = nearest_prime( (rand()%m)+3191);
         p->scale    = nearest_prime( (rand()%m)+709);
-        p->hardener = (rand()*rand()) + 133824503;
+        p->hardener = ((unsigned) rand() * rand()) + 133824503;
     }
 
     p->hash_fcn   = &hashfcn_hash;
@@ -114,6 +116,8 @@ int hashfcn_set_keyops(HashFnc* h,
     return -1;
 }
 
+namespace snort
+{
 void mix_str(
     uint32_t& a, uint32_t& b, uint32_t& c,
     const char* s, unsigned n)
@@ -133,7 +137,7 @@ void mix_str(
 
         for (unsigned l=0; l<k; l++)
         {
-            tmp |= s[i + l] << l*8;
+            tmp |= (unsigned char) s[i + l] << l*8;
         }
 
         switch (j)
@@ -204,4 +208,4 @@ size_t str_to_hash(const uint8_t *str, int length )
     finalize(a,b,c);
     return c;
 }
-
+} //namespace snort

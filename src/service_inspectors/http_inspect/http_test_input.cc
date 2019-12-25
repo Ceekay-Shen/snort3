@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -25,9 +25,12 @@
 
 #include "http_test_input.h"
 
+#include "http_common.h"
+#include "http_enum.h"
 #include "http_module.h"
 #include "http_test_manager.h"
 
+using namespace HttpCommon;
 using namespace HttpEnums;
 
 static unsigned convert_num_octets(const char buffer[], unsigned length)
@@ -49,6 +52,11 @@ HttpTestInput::HttpTestInput(const char* file_name)
         throw std::runtime_error("Cannot open test input file");
 }
 
+HttpTestInput::~HttpTestInput()
+{
+    fclose(test_data_file);
+}
+
 void HttpTestInput::reset()
 {
     flushed = false;
@@ -56,9 +64,6 @@ void HttpTestInput::reset()
     just_flushed = true;
     tcp_closed = false;
     flush_octets = 0;
-    close_pending = false;
-    close_notified = false;
-    finish_expected = false;
     need_break = false;
 
     for (int k = 0; k <= 1; k++)
@@ -81,14 +86,10 @@ void HttpTestInput::reset()
 // function is to read dev_notes.txt.
 void HttpTestInput::scan(uint8_t*& data, uint32_t& length, SourceId source_id, uint64_t seq_num)
 {
-    bool skip_to_break = false;
     if (seq_num != curr_seq_num)
     {
         assert(source_id == SRC_CLIENT);
         curr_seq_num = seq_num;
-        // If we have not yet found the break command we need to skim past everything and not
-        // return any data until we find it.
-        skip_to_break = !need_break;
         reset();
     }
 
@@ -184,28 +185,21 @@ void HttpTestInput::scan(uint8_t*& data, uint32_t& length, SourceId source_id, u
                     strlen("request")))
                 {
                     last_source_id = SRC_CLIENT;
-                    if (!skip_to_break)
-                    {
-                        length = 0;
-                        return;
-                    }
+                    length = 0;
+                    return;
                 }
                 else if ((command_length == strlen("response")) && !memcmp(command_value,
                     "response", strlen("response")))
                 {
                     last_source_id = SRC_SERVER;
-                    if (!skip_to_break)
-                    {
-                        length = 0;
-                        return;
-                    }
+                    length = 0;
+                    return;
                 }
                 else if ((command_length == strlen("break")) && !memcmp(command_value, "break",
                     strlen("break")))
                 {
                     reset();
-                    if (!skip_to_break)
-                        need_break = true;
+                    need_break = true;
                     length = 0;
                     return;
                 }
@@ -213,6 +207,8 @@ void HttpTestInput::scan(uint8_t*& data, uint32_t& length, SourceId source_id, u
                     "tcpclose", strlen("tcpclose")))
                 {
                     tcp_closed = true;
+                    length = 0;
+                    return;
                 }
                 else if ((command_length > strlen("fill")) && !memcmp(command_value, "fill",
                     strlen("fill")))
@@ -225,13 +221,15 @@ void HttpTestInput::scan(uint8_t*& data, uint32_t& length, SourceId source_id, u
                         // auto-fill ABCDEFGHIJABCD ...
                         msg_buf[last_source_id][end_offset[last_source_id]++] = 'A' + k%10;
                     }
-                    if (skip_to_break)
-                        end_offset[last_source_id] = 0;
-                    else
-                    {
-                        length = end_offset[last_source_id] - previous_offset[last_source_id];
-                        return;
-                    }
+                    length = end_offset[last_source_id] - previous_offset[last_source_id];
+                    return;
+                }
+                else if ((command_length == strlen("partial")) && !memcmp(command_value,
+                    "partial", strlen("partial")))
+                {
+                    partial = true;
+                    length = 0;
+                    return;
                 }
                 else if ((command_length > strlen("fileset")) && !memcmp(command_value, "fileset",
                     strlen("fileset")))
@@ -265,13 +263,8 @@ void HttpTestInput::scan(uint8_t*& data, uint32_t& length, SourceId source_id, u
                         assert(new_octet != EOF);
                         msg_buf[last_source_id][end_offset[last_source_id]++] = new_octet;
                     }
-                    if (skip_to_break)
-                        end_offset[last_source_id] = 0;
-                    else
-                    {
-                        length = end_offset[last_source_id] - previous_offset[last_source_id];
-                        return;
-                    }
+                    length = end_offset[last_source_id] - previous_offset[last_source_id];
+                    return;
                 }
                 else if ((command_length > strlen("fileskip")) && !memcmp(command_value,
                     "fileskip", strlen("fileskip")))
@@ -283,15 +276,6 @@ void HttpTestInput::scan(uint8_t*& data, uint32_t& length, SourceId source_id, u
                     for (unsigned k=0; k < amount; k++)
                     {
                         getc(include_file[last_source_id]);
-                    }
-                }
-                else if ((command_length == strlen("fileclose")) && !memcmp(command_value,
-                    "fileclose", strlen("fileclose")))
-                {
-                    if (include_file[last_source_id] != nullptr)
-                    {
-                        fclose(include_file[last_source_id]);
-                        include_file[last_source_id] = nullptr;
                     }
                 }
                 else if (command_length > 0)
@@ -343,12 +327,6 @@ void HttpTestInput::scan(uint8_t*& data, uint32_t& length, SourceId source_id, u
                     ending = true;
                 }
                 // Found the second consecutive blank line that ends the paragraph.
-                else if (skip_to_break)
-                {
-                    end_offset[last_source_id] = 0;
-                    ending = false;
-                    state = WAITING;
-                }
                 else
                 {
                     length = end_offset[last_source_id] - previous_offset[last_source_id];
@@ -420,123 +398,63 @@ void HttpTestInput::scan(uint8_t*& data, uint32_t& length, SourceId source_id, u
         assert(end_offset[last_source_id] < sizeof(msg_buf[last_source_id]));
     }
     // End-of-file. Return everything we have so far.
-    if (skip_to_break)
-        end_offset[last_source_id] = 0;
     length = end_offset[last_source_id] - previous_offset[last_source_id];
 }
 
 void HttpTestInput::flush(uint32_t num_octets)
 {
     flush_octets = previous_offset[last_source_id] + num_octets;
+    assert(flush_octets <= end_offset[last_source_id]);
     assert(flush_octets <= MAX_OCTETS);
     flushed = true;
 }
 
 void HttpTestInput::reassemble(uint8_t** buffer, unsigned& length, SourceId source_id,
-    bool& tcp_close)
+    bool& tcp_close, bool& partial_flush)
 {
     *buffer = nullptr;
+    partial_flush = false;
     tcp_close = false;
 
     // Only piggyback on data moving in the same direction.
-    // Need flushed data unless the connection is closing.
-    if ((source_id != last_source_id) || (!flushed && !tcp_closed))
+    if (source_id != last_source_id)
+        return;
+
+    if (tcp_closed)
+    {
+        // Give the caller a chance to call finish()
+        tcp_close = true;
+        return;
+    }
+
+    // Need flushed data unless it's a partial flush.
+    if (!flushed && !partial)
     {
         return;
     }
 
-    // How we process TCP close situations depends on the size of the flush relative to the data
-    // buffer.
-    // 1. less than whole buffer - not the final flush, ignore pending close
-    // 2. exactly equal - process data now and signal the close next time around
-    // 3. more than whole buffer - signal the close now and truncate and send next time around
-    // 4. there was no flush - signal the close now and send the leftovers next time around
-    if (tcp_closed && (!flushed || (flush_octets >= end_offset[last_source_id])))
+    if (partial)
     {
-        if (close_pending)
-        {
-            // There is no more data. Clean up and notify caller about close.
-            just_flushed = true;
-            flushed = false;
-            end_offset[last_source_id] = 0;
-            previous_offset[last_source_id] = 0;
-            close_pending = false;
-            tcp_closed = false;
-            tcp_close = true;
-            finish_expected = true;
-        }
-        else if (!flushed)
-        {
-            // Failure to flush means scan() reached end of paragraph and returned PAF_SEARCH.
-            // Notify caller about close and they will do a zero-length flush().
-            previous_offset[last_source_id] = end_offset[last_source_id];
-            tcp_close = true;
-            close_notified = true;
-            finish_expected = true;
-        }
-        else if (flush_octets == end_offset[last_source_id])
-        {
-            // The flush point is the end of the paragraph. Supply the data now and if necessary
-            // notify the caller about close next time or otherwise just clean up.
-            *buffer = msg_buf[last_source_id];
-            length = flush_octets;
-            if (close_notified)
-            {
-                just_flushed = true;
-                flushed = false;
-                close_notified = false;
-                tcp_closed = false;
-            }
-            else
-            {
-                close_pending = true;
-            }
-        }
-        else
-        {
-            // Flushed more body data than is actually available. Truncate the size of the flush,
-            // notify caller about close, and supply the data next time.
-            flush_octets = end_offset[last_source_id];
-            tcp_close = true;
-            close_notified = true;
-            finish_expected = true;
-        }
+        // Give the caller a chance to set up for a partial flush before giving him the data
+        partial_flush = true;
+        partial = false;
         return;
     }
 
-    // Normal case with no TCP close or at least not yet
     *buffer = msg_buf[last_source_id];
     length = flush_octets;
-    if (flush_octets > end_offset[last_source_id])
-    {
-        // We need to generate additional data to fill out the body or chunk section.
-        for (uint32_t k = end_offset[last_source_id]; k < flush_octets; k++)
-        {
-            if (include_file[last_source_id] == nullptr)
-            {
-                msg_buf[last_source_id][k] = 'A' + k % 26;
-            }
-            else
-            {
-                int new_octet = getc(include_file[last_source_id]);
-                assert(new_octet != EOF);
-                msg_buf[last_source_id][k] = new_octet;
-            }
-        }
-    }
     just_flushed = true;
     flushed = false;
 }
 
 bool HttpTestInput::finish()
 {
-    if (finish_expected)
+    if (tcp_closed)
     {
-        finish_expected = false;
+        tcp_closed = false;
         return true;
     }
     return false;
 }
-
 #endif
 

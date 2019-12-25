@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -37,6 +37,7 @@
 #include "piglet/piglet_manager.h"
 #endif
 
+using namespace snort;
 using namespace std;
 
 // FIXIT-P this approach results in N * K lua states where
@@ -114,7 +115,7 @@ LogLuaApi::LogLuaApi(string& s, string& c, unsigned v) : LuaApi(s, c)
 // lua foo
 //-------------------------------------------------------------------------
 
-// FIXIT-L could be a template
+// could be a template
 static bool get_field(lua_State* L, const char* key, int& value)
 {
     lua_pushstring(L, key);
@@ -219,10 +220,10 @@ static void load_script(const char* f)
     }
 
     if ( type == IpsLuaApi::type )
-        lua_api.push_back(new IpsLuaApi(name, chunk, ver));
+        lua_api.emplace_back(new IpsLuaApi(name, chunk, ver));
 
     else if ( type == LogLuaApi::type )
-        lua_api.push_back(new LogLuaApi(name, chunk, ver));
+        lua_api.emplace_back(new LogLuaApi(name, chunk, ver));
 
 #ifdef PIGLET
     else if ( type == "piglet" )
@@ -285,9 +286,9 @@ const BaseApi** ScriptManager::get_plugins()
     base_api.clear();
 
     for ( auto p : lua_api )
-        base_api.push_back(p->get_base());
+        base_api.emplace_back(p->get_base());
 
-    base_api.push_back(nullptr);
+    base_api.emplace_back(nullptr);
 
     return (const BaseApi**)&base_api[0];
 }

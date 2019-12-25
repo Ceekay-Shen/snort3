@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -24,17 +24,19 @@
 #include "protocols/packet.h"
 
 #include "http_inspect.h"
+#include "http_module.h"
 #include "http_stream_splitter.h"
 #include "http_test_input.h"
 
 using namespace HttpEnums;
+using namespace snort;
 
 void HttpStreamSplitter::chunk_spray(HttpFlowData* session_data, uint8_t* buffer,
     const uint8_t* data, unsigned length) const
 {
     ChunkState& curr_state = session_data->chunk_state[source_id];
     uint32_t& expected = session_data->chunk_expected_length[source_id];
-    bool& is_broken_chunk = session_data->is_broken_chunk[source_id];
+    const bool& is_broken_chunk = session_data->is_broken_chunk[source_id];
     uint32_t& num_good_chunks = session_data->num_good_chunks[source_id];
 
     if (is_broken_chunk && (num_good_chunks == 0))
@@ -45,7 +47,9 @@ void HttpStreamSplitter::chunk_spray(HttpFlowData* session_data, uint8_t* buffer
         switch (curr_state)
         {
         case CHUNK_NEWLINES:
-            if (!is_cr_lf[data[k]])
+        case CHUNK_LEADING_WS:
+            // Cases are combined in reassemble(). CHUNK_LEADING_WS here to avoid compiler warning.
+            if (!is_sp_tab_cr_lf[data[k]])
             {
                 curr_state = CHUNK_NUMBER;
                 k--;
@@ -64,13 +68,13 @@ void HttpStreamSplitter::chunk_spray(HttpFlowData* session_data, uint8_t* buffer
             else if (data[k] == ';')
                 curr_state = CHUNK_OPTIONS;
             else if (is_sp_tab[data[k]])
-                curr_state = CHUNK_WHITESPACE;
+                curr_state = CHUNK_TRAILING_WS;
             else
                 expected = expected * 16 + as_hex[data[k]];
             break;
+        case CHUNK_TRAILING_WS:
         case CHUNK_OPTIONS:
-        case CHUNK_WHITESPACE:
-            // No practical difference between white space and options in reassemble()
+            // No practical difference between trailing white space and options in reassemble()
             if (data[k] == '\r')
                 curr_state = CHUNK_HCRLF;
             else if (data[k] == '\n')
@@ -141,7 +145,7 @@ void HttpStreamSplitter::decompress_copy(uint8_t* buffer, uint32_t& offset, cons
 {
     if ((compression == CMP_GZIP) || (compression == CMP_DEFLATE))
     {
-        compress_stream->next_in = (Bytef*)data;
+        compress_stream->next_in = const_cast<Bytef*>(data);
         compress_stream->avail_in = length;
         compress_stream->next_out = buffer + offset;
         compress_stream->avail_out = MAX_OCTETS - offset;
@@ -157,11 +161,11 @@ void HttpStreamSplitter::decompress_copy(uint8_t* buffer, uint32_t& offset, cons
                 {
                     // The zipped data stream ended but there is more input data
                     *infractions += INF_GZIP_EARLY_END;
-                    events->create_event(EVENT_GZIP_FAILURE);
+                    events->create_event(EVENT_GZIP_EARLY_END);
                     const uInt num_copy =
                         (compress_stream->avail_in <= compress_stream->avail_out) ?
                         compress_stream->avail_in : compress_stream->avail_out;
-                    memcpy(buffer + offset, data, num_copy);
+                    memcpy(buffer + offset, data + (length - compress_stream->avail_in), num_copy);
                     offset += num_copy;
                 }
                 else
@@ -182,10 +186,10 @@ void HttpStreamSplitter::decompress_copy(uint8_t* buffer, uint32_t& offset, cons
         {
             // Some incorrect implementations of deflate don't use the expected header. Feed a
             // dummy header to zlib and retry the inflate.
-            static constexpr char zlib_header[2] = { 0x78, 0x01 };
+            static constexpr uint8_t zlib_header[2] = { 0x78, 0x01 };
 
             inflateReset(compress_stream);
-            compress_stream->next_in = (Bytef*)zlib_header;
+            compress_stream->next_in = const_cast<Bytef*>(zlib_header);
             compress_stream->avail_in = sizeof(zlib_header);
             inflate(compress_stream, Z_SYNC_FLUSH);
 
@@ -218,9 +222,11 @@ void HttpStreamSplitter::decompress_copy(uint8_t* buffer, uint32_t& offset, cons
     offset += length;
 }
 
-const StreamBuffer HttpStreamSplitter::reassemble(Flow* flow, unsigned total, unsigned,
-    const uint8_t* data, unsigned len, uint32_t flags, unsigned& copied)
+const StreamBuffer HttpStreamSplitter::reassemble(Flow* flow, unsigned total,
+    unsigned, const uint8_t* data, unsigned len, uint32_t flags, unsigned& copied)
 {
+    Profile profile(HttpModule::get_profile_stats());
+
     StreamBuffer http_buf { nullptr, 0 };
 
     copied = len;
@@ -229,26 +235,32 @@ const StreamBuffer HttpStreamSplitter::reassemble(Flow* flow, unsigned total, un
     assert(session_data != nullptr);
 
 #ifdef REG_TEST
-    if (HttpTestManager::use_test_output())
+    if (HttpTestManager::use_test_output(HttpTestManager::IN_HTTP))
     {
-        if (HttpTestManager::use_test_input())
+        if (HttpTestManager::use_test_input(HttpTestManager::IN_HTTP))
         {
             if (!(flags & PKT_PDU_TAIL))
             {
                 return http_buf;
             }
             bool tcp_close;
+            bool partial_flush;
             uint8_t* test_buffer;
             HttpTestManager::get_test_input_source()->reassemble(&test_buffer, len, source_id,
-                tcp_close);
+                tcp_close, partial_flush);
             if (tcp_close)
             {
                 finish(flow);
             }
+            if (partial_flush)
+            {
+                init_partial_flush(flow);
+            }
             if (test_buffer == nullptr)
             {
-                // Source ID does not match test data, no test data was flushed, or there is no
-                // more test data
+                // Source ID does not match test data, no test data was flushed, preparing for a
+                // partial flush, preparing for a TCP connection close, or there is no more test
+                // data
                 return http_buf;
             }
             data = test_buffer;
@@ -256,8 +268,9 @@ const StreamBuffer HttpStreamSplitter::reassemble(Flow* flow, unsigned total, un
         }
         else
         {
-            printf("Reassemble from flow data %" PRIu64 " direction %d total %u length %u\n",
-                session_data->seq_num, source_id, total, len);
+            printf("Reassemble from flow data %" PRIu64
+                " direction %d total %u length %u partial %d\n", session_data->seq_num, source_id,
+                total, len, session_data->partial_flush[source_id]);
             fflush(stdout);
         }
     }
@@ -277,13 +290,15 @@ const StreamBuffer HttpStreamSplitter::reassemble(Flow* flow, unsigned total, un
     }
 
     assert(session_data->section_type[source_id] != SEC__NOT_COMPUTE);
-    assert(total <= MAX_OCTETS);
+    uint8_t*& partial_buffer = session_data->partial_buffer[source_id];
+    uint32_t& partial_buffer_length = session_data->partial_buffer_length[source_id];
+    uint32_t& partial_raw_bytes = session_data->partial_raw_bytes[source_id];
+    assert(partial_raw_bytes + total <= MAX_OCTETS);
 
     // FIXIT-H this is a precaution/workaround for stream issues. When they are fixed replace this
     // block with an assert.
-    if ( !((session_data->octets_expected[source_id] == total) ||
-        (!session_data->strict_length[source_id] &&
-        (total <= session_data->octets_expected[source_id]))) )
+    if ((session_data->section_offset[source_id] == 0) &&
+        (session_data->octets_expected[source_id] != partial_raw_bytes + total))
     {
         if (session_data->octets_expected[source_id] == 0)
         {
@@ -296,7 +311,11 @@ const StreamBuffer HttpStreamSplitter::reassemble(Flow* flow, unsigned total, un
         else
         {
 #ifdef REG_TEST
-            assert(false);
+	    // FIXIT-M: known case: if session clears w/o a flush point,
+	    // stream_tcp will flush to paf max which could be well below what
+	    // has been scanned so far.  since no flush point was specified,
+	    // NHI should just deal with what it gets.
+            //assert(false);
 #endif
             return http_buf;
         }
@@ -310,12 +329,13 @@ const StreamBuffer HttpStreamSplitter::reassemble(Flow* flow, unsigned total, un
     if (session_data->section_type[source_id] == SEC_DISCARD)
     {
 #ifdef REG_TEST
-        if (HttpTestManager::use_test_output())
+        if (HttpTestManager::use_test_output(HttpTestManager::IN_HTTP))
         {
             fprintf(HttpTestManager::get_output_file(), "Discarded %u octets\n\n", len);
             fflush(HttpTestManager::get_output_file());
         }
 #endif
+        assert(partial_buffer == nullptr);
         if (flags & PKT_PDU_TAIL)
         {
             assert(session_data->running_total[source_id] == total);
@@ -352,11 +372,23 @@ const StreamBuffer HttpStreamSplitter::reassemble(Flow* flow, unsigned total, un
         if (is_body)
             buffer = new uint8_t[MAX_OCTETS];
         else
-            buffer = new uint8_t[total];
-        session_data->section_total[source_id] = total;
+        {
+            const uint32_t buffer_size = (total > 0) ? total : 1;
+            buffer = new uint8_t[buffer_size];
+        }
     }
-    else
-        assert(session_data->section_total[source_id] == total);
+
+    // FIXIT-H there is no support for partial flush with compression
+    assert((partial_buffer_length == 0) || (session_data->compression[source_id] == CMP_NONE));
+    if (partial_buffer_length > 0)
+    {
+        assert(session_data->section_offset[source_id] == 0);
+        memcpy(buffer, partial_buffer, partial_buffer_length);
+        session_data->section_offset[source_id] = partial_buffer_length;
+        partial_buffer_length = 0;
+        delete[] partial_buffer;
+        partial_buffer = nullptr;
+    }
 
     if (session_data->section_type[source_id] != SEC_BODY_CHUNK)
     {
@@ -380,19 +412,19 @@ const StreamBuffer HttpStreamSplitter::reassemble(Flow* flow, unsigned total, un
         const uint16_t buf_size =
             session_data->section_offset[source_id] - session_data->num_excess[source_id];
 
-        // FIXIT-M kludge until we work out issues with returning an empty buffer
-        http_buf.data = buffer;
-        if (buf_size > 0)
+        if (session_data->partial_flush[source_id])
         {
-            http_buf.length = buf_size;
-            session_data->zero_byte_workaround[source_id] = false;
+            // Store the data from a partial flush for reuse
+            partial_buffer = buffer;
+            partial_buffer_length = buf_size;
+            partial_raw_bytes += total;
         }
         else
-        {
-            buffer[0] = '\0';
-            http_buf.length = 1;
-            session_data->zero_byte_workaround[source_id] = true;
-        }
+            partial_raw_bytes = 0;
+
+        http_buf.data = buffer;
+        http_buf.length = buf_size;
+
         buffer = nullptr;
         session_data->section_offset[source_id] = 0;
     }

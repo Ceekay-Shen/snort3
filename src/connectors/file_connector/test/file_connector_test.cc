@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -31,6 +31,8 @@
 #include <CppUTest/CommandLineTestRunner.h>
 #include <CppUTest/TestHarness.h>
 
+using namespace snort;
+
 extern const BaseApi* file_connector;
 ConnectorApi* fc_api = nullptr;
 
@@ -49,15 +51,13 @@ Connector* connector_tb;
 Connector* connector_rb;
 
 void show_stats(PegCount*, const PegInfo*, unsigned, const char*) { }
-void show_stats(PegCount*, const PegInfo*, IndexVec&, const char*) { }
-void show_stats(PegCount*, const PegInfo*, IndexVec&, const char*, FILE*) { }
+void show_stats(PegCount*, const PegInfo*, const IndexVec&, const char*, FILE*) { }
 
+namespace snort
+{
 const char* get_instance_file(std::string& file, const char* name)
 { file += name; return nullptr; }
-
-#ifdef DEBUG_MSGS
-void Debug::print(const char*, int, uint64_t, const char*, ...) { }
-#endif
+}
 
 FileConnectorModule::FileConnectorModule() :
     Module("FC", "FC Help", nullptr)
@@ -71,7 +71,7 @@ FileConnectorConfig::FileConnectorConfigSet* FileConnectorModule::get_and_clear_
     return config_set;
 }
 
-FileConnectorModule::~FileConnectorModule() { }
+FileConnectorModule::~FileConnectorModule() = default;
 
 ProfileStats* FileConnectorModule::get_profile() const { return nullptr; }
 
@@ -84,9 +84,9 @@ PegCount* FileConnectorModule::get_counts() const { return nullptr; }
 
 TEST_GROUP(file_connector)
 {
-    void setup()
+    void setup() override
     {
-        // FIXIT-L workaround for CppUTest mem leak detector issue
+        // FIXIT-RC workaround for CppUTest mem leak detector issue
         MemoryLeakWarningPlugin::turnOffNewDeleteOverloads();
         fc_api = (ConnectorApi*)file_connector;
         connector_tx_text_config.direction = Connector::CONN_TRANSMIT;
@@ -107,7 +107,7 @@ TEST_GROUP(file_connector)
         connector_rx_binary_config.text_format = false;
     }
 
-    void teardown()
+    void teardown() override
     {
         MemoryLeakWarningPlugin::turnOnNewDeleteOverloads();
     }
@@ -134,9 +134,9 @@ TEST(file_connector, mod_instance_ctor_dtor)
 
 TEST_GROUP(file_connector_tinit_tterm)
 {
-    void setup()
+    void setup() override
     {
-        // FIXIT-L workaround for CppUTest mem leak detector issue
+        // FIXIT-RC workaround for CppUTest mem leak detector issue
         MemoryLeakWarningPlugin::turnOffNewDeleteOverloads();
         fc_api = (ConnectorApi*)file_connector;
         connector_tx_text_config.direction = Connector::CONN_TRANSMIT;
@@ -170,7 +170,7 @@ TEST_GROUP(file_connector_tinit_tterm)
         CHECK(connector_rb != nullptr);
     }
 
-    void teardown()
+    void teardown() override
     {
         fc_api->tterm(connector_tt);
         fc_api->tterm(connector_rt);
@@ -196,9 +196,9 @@ TEST(file_connector_tinit_tterm, alloc_discard)
 
 TEST_GROUP(file_connector_text)
 {
-    void setup()
+    void setup() override
     {
-        // FIXIT-L workaround for CppUTest mem leak detector issue
+        // FIXIT-RC workaround for CppUTest mem leak detector issue
         MemoryLeakWarningPlugin::turnOffNewDeleteOverloads();
         fc_api = (ConnectorApi*)file_connector;
         connector_tx_text_config.direction = Connector::CONN_TRANSMIT;
@@ -212,7 +212,7 @@ TEST_GROUP(file_connector_text)
         CHECK(file_connector != nullptr);
     }
 
-    void teardown()
+    void teardown() override
     {
         MemoryLeakWarningPlugin::turnOnNewDeleteOverloads();
     }
@@ -262,9 +262,9 @@ TEST(file_connector_text, alloc_transmit_rename_receive_discard)
 
 TEST_GROUP(file_connector_binary)
 {
-    void setup()
+    void setup() override
     {
-        // FIXIT-L workaround for CppUTest mem leak detector issue
+        // FIXIT-RC workaround for CppUTest mem leak detector issue
         MemoryLeakWarningPlugin::turnOffNewDeleteOverloads();
         fc_api = (ConnectorApi*)file_connector;
         connector_tx_binary_config.direction = Connector::CONN_TRANSMIT;
@@ -278,7 +278,7 @@ TEST_GROUP(file_connector_binary)
         CHECK(file_connector != nullptr);
     }
 
-    void teardown()
+    void teardown() override
     {
         MemoryLeakWarningPlugin::turnOnNewDeleteOverloads();
     }
@@ -328,11 +328,11 @@ TEST(file_connector_binary, alloc_transmit_rename_receive_discard)
 
 TEST_GROUP(file_connector_msg_handle)
 {
-    void setup()
+    void setup() override
     {
     }
 
-    void teardown()
+    void teardown() override
     {
     }
 };

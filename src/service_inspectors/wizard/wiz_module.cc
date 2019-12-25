@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -27,6 +27,7 @@
 #include "curses.h"
 #include "magic.h"
 
+using namespace snort;
 using namespace std;
 
 //-------------------------------------------------------------------------
@@ -139,10 +140,10 @@ bool WizardModule::set(const char*, Value& v, SnortConfig*)
         return true;
 
     else if ( v.is("hex") )
-        spells.push_back(v.get_string());
+        spells.emplace_back(v.get_string());
 
     else if ( v.is("spell") )
-        spells.push_back(v.get_string());
+        spells.emplace_back(v.get_string());
 
     else if ( v.is("curses") )
         curses->add_curse(v.get_string());

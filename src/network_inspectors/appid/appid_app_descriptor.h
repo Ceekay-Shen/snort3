@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2017-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2017-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -30,7 +30,16 @@
 
 #include <string>
 
+#include "protocols/packet.h"
+#include "pub_sub/appid_events.h"
+
+#include "app_info_table.h"
+#include "appid_module.h"
 #include "appid_peg_counts.h"
+#include "appid_types.h"
+
+class AppIdDetector;
+class AppIdSession;
 
 class ApplicationDescriptor
 {
@@ -45,11 +54,10 @@ public:
         my_version.clear();
     }
 
-    virtual void update(AppId id, char* vendor, char* version)
+    virtual void update(AppId id, AppidChangeBits& change_bits, char* version)
     {
         set_id(id);
-        set_vendor(vendor);
-        set_version(version);
+        set_version(version, change_bits);
     }
 
     virtual void update_stats(AppId id) = 0;
@@ -59,7 +67,7 @@ public:
         return my_id;
     }
 
-    void set_id(AppId app_id)
+    virtual void set_id(AppId app_id)
     {
         if ( my_id != app_id )
         {
@@ -67,9 +75,11 @@ public:
             if ( app_id > APP_ID_NONE )
                 update_stats(app_id);
             else if ( app_id == APP_ID_UNKNOWN )
-                AppIdPegCounts::inc_disco_peg(AppIdPegCounts::DiscoveryPegs::APPID_UNKNOWN);
+                appid_stats.appid_unknown++;
         }
     }
+
+    virtual void set_id(const snort::Packet& p, AppIdSession& asd, AppidSessionDirection dir, AppId app_id, AppidChangeBits& change_bits);
 
     const char* get_vendor() const
     {
@@ -87,10 +97,13 @@ public:
         return my_version.empty() ? nullptr : my_version.c_str();
     }
 
-    void set_version(const char* version)
+    void set_version(const char* version, AppidChangeBits& change_bits)
     {
         if ( version )
+        {
             my_version = version;
+            change_bits.set(APPID_VERSION_BIT);
+        }
     }
 
 private:
@@ -103,6 +116,16 @@ class ServiceAppDescriptor : public ApplicationDescriptor
 {
 public:
     ServiceAppDescriptor() = default;
+
+    void set_id(AppId app_id) override
+    {
+        if (get_id() != app_id)
+        {
+            ApplicationDescriptor::set_id(app_id);
+            AppInfoManager* app_info_mgr = &AppInfoManager::get_instance();
+            deferred = app_info_mgr->get_app_info_flags(app_id, APPINFO_FLAG_DEFER);
+        }
+    }
 
     void reset() override
     {
@@ -130,8 +153,14 @@ public:
         }
     }
 
+    bool get_deferred()
+    {
+        return deferred;
+    }
+
 private:
     AppId port_service_id = APP_ID_NONE;
+    bool deferred = false;
 };
 
 class ClientAppDescriptor : public ApplicationDescriptor
@@ -193,9 +222,6 @@ public:
     {
         AppIdPegCounts::inc_payload_count(id);
     }
-
-private:
-
 };
 
 #endif

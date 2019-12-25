@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 // Copyright (C) 1998-2002 Martin Roesch <roesch@sourcefire.com>
 //
@@ -36,45 +36,65 @@
 
 #include "extract.h"
 
+using namespace snort;
+
 #define MAX_PATTERN_SIZE 2048
 
 #define s_name "content"
 
 static THREAD_LOCAL ProfileStats contentPerfStats;
 
-static IpsOption::EvalStatus CheckANDPatternMatch(struct ContentData*, Cursor&);
+static IpsOption::EvalStatus CheckANDPatternMatch(class ContentData*, Cursor&);
 
 //-------------------------------------------------------------------------
 // instance data
 //-------------------------------------------------------------------------
 
-struct ContentData
+class ContentData
 {
-    PatternMatchData pmd;
+public:
+    ContentData();
+
+    ~ContentData();
+
+    void setup_bm();
+    void set_max_jump_size();
+
+    PatternMatchData pmd = {};
+
+    BoyerMoore* boyer_moore;
 
     int8_t offset_var;      /* byte_extract variable indices for offset, */
     int8_t depth_var;       /* depth, distance, within */
 
     unsigned match_delta;   /* Maximum distance we can jump to search for this pattern again. */
-
-    int* skip_stride;       /* B-M skip array */
-    int* shift_stride;      /* B-M shift array */
-
-    void init();
-    void setup_bm();
-    void set_max_jump_size();
 };
 
-void ContentData::init()
+ContentData::ContentData()
 {
+    boyer_moore = nullptr;
     offset_var = IPS_OPTIONS_NO_VAR;
     depth_var = IPS_OPTIONS_NO_VAR;
+    match_delta = 0;
+}
+
+ContentData::~ContentData()
+{
+    if ( boyer_moore )
+        delete boyer_moore;
+
+    if ( pmd.pattern_buf )
+        snort_free(const_cast<char*>(pmd.pattern_buf));
+
+    if ( pmd.last_check )
+        snort_free(pmd.last_check);
 }
 
 void ContentData::setup_bm()
 {
-    skip_stride = make_skip(pmd.pattern_buf, pmd.pattern_size);
-    shift_stride = make_shift(pmd.pattern_buf, pmd.pattern_size);
+    const uint8_t* pattern = (const uint8_t*)pmd.pattern_buf;
+
+    boyer_moore = new BoyerMoore(pattern, pmd.pattern_size);
 }
 
 // find the maximum number of characters we can jump ahead
@@ -111,7 +131,8 @@ public:
     ContentOption(ContentData* c) : IpsOption(s_name, RULE_OPTION_TYPE_CONTENT)
     { config = c; }
 
-    ~ContentOption() override;
+    ~ContentOption() override
+    { delete config; }
 
     uint32_t hash() const override;
     bool operator==(const IpsOption&) const override;
@@ -133,34 +154,12 @@ public:
     EvalStatus eval(Cursor& c, Packet*) override
     { return CheckANDPatternMatch(config, c); }
 
-    PatternMatchData* get_pattern(int, RuleDirection) override
+    PatternMatchData* get_pattern(SnortProtocolId, RuleDirection) override
     { return &config->pmd; }
 
 protected:
     ContentData* config;
 };
-
-ContentOption::~ContentOption()
-{
-    ContentData* cd = config;
-
-    if ( !cd )
-        return;
-
-    if ( cd->pmd.pattern_buf )
-        snort_free(const_cast<char*>(cd->pmd.pattern_buf));
-
-    if ( cd->pmd.last_check )
-        snort_free(cd->pmd.last_check);
-
-    if ( cd->skip_stride )
-        snort_free(cd->skip_stride);
-
-    if ( cd->shift_stride )
-        snort_free(cd->shift_stride);
-
-    snort_free(cd);
-}
 
 bool ContentOption::retry(Cursor& c)
 {
@@ -350,15 +349,11 @@ static int uniSearchReal(ContentData* cd, Cursor& c)
 
     if ( cd->pmd.is_no_case() )
     {
-        found = mSearchCI(
-            (const char*)base, depth, cd->pmd.pattern_buf, cd->pmd.pattern_size,
-            cd->skip_stride, cd->shift_stride);
+        found = cd->boyer_moore->search_nocase(base, depth);
     }
     else
     {
-        found = mSearch(
-            (const char*)base, depth, cd->pmd.pattern_buf, cd->pmd.pattern_size,
-            cd->skip_stride, cd->shift_stride);
+        found = cd->boyer_moore->search(base, depth);
     }
 
     if ( found >= 0 )
@@ -374,9 +369,7 @@ static int uniSearchReal(ContentData* cd, Cursor& c)
 
 static IpsOption::EvalStatus CheckANDPatternMatch(ContentData* idx, Cursor& c)
 {
-    Profile profile(contentPerfStats);
-
-    DebugMessage(DEBUG_PATTERN_MATCH, "CheckPatternANDMatch: ");
+    RuleProfile profile(contentPerfStats);
 
     int found = uniSearchReal(idx, c);
 
@@ -395,12 +388,10 @@ static IpsOption::EvalStatus CheckANDPatternMatch(ContentData* idx, Cursor& c)
 
     if ( found )
     {
-        DebugMessage(DEBUG_PATTERN_MATCH, "Pattern match found\n");
         return IpsOption::MATCH;
     }
     else
     {
-        DebugMessage(DEBUG_PATTERN_MATCH, "Pattern match failed\n");
         return IpsOption::NO_MATCH;
     }
 }
@@ -488,7 +479,6 @@ static void parse_offset(ContentData* cd, const char* data)
         }
     }
 
-    DebugFormat(DEBUG_PARSER, "Pattern offset = %d\n", cd->pmd.offset);
 }
 
 static void parse_depth(ContentData* cd, const char* data)
@@ -528,7 +518,6 @@ static void parse_depth(ContentData* cd, const char* data)
         }
     }
 
-    DebugFormat(DEBUG_PATTERN_MATCH, "Pattern depth = %d\n", cd->pmd.depth);
 }
 
 static void parse_distance(ContentData* cd, const char* data)
@@ -598,7 +587,6 @@ static void parse_within(ContentData* cd, const char* data)
         }
     }
 
-    DebugFormat(DEBUG_PATTERN_MATCH, "Pattern within = %d\n", cd->pmd.depth);
 
     cd->pmd.set_relative();
 }
@@ -618,10 +606,10 @@ static const Parameter s_params[] =
     { "fast_pattern", Parameter::PT_IMPLIED, nullptr, nullptr,
       "use this content in the fast pattern matcher instead of the content selected by default" },
 
-    { "fast_pattern_offset", Parameter::PT_INT, "0:", "0",
+    { "fast_pattern_offset", Parameter::PT_INT, "0:65535", "0",
       "number of leading characters of this content the fast pattern matcher should exclude" },
 
-    { "fast_pattern_length", Parameter::PT_INT, "1:", nullptr,
+    { "fast_pattern_length", Parameter::PT_INT, "1:65535", nullptr,
       "maximum number of characters from this content the fast pattern matcher should use" },
 
     { "offset", Parameter::PT_STRING, nullptr, nullptr,
@@ -676,8 +664,7 @@ ContentData* ContentModule::get_data()
 
 bool ContentModule::begin(const char*, int, SnortConfig*)
 {
-    cd = (ContentData*)snort_calloc(sizeof(ContentData));
-    cd->init();
+    cd = new ContentData();
     return true;
 }
 
@@ -735,12 +722,12 @@ bool ContentModule::set(const char*, Value& v, SnortConfig*)
 
     else if ( v.is("fast_pattern_offset") )
     {
-        cd->pmd.fp_offset = v.get_long();
+        cd->pmd.fp_offset = v.get_uint16();
         cd->pmd.set_fast_pattern();
     }
     else if ( v.is("fast_pattern_length") )
     {
-        cd->pmd.fp_length = v.get_long();
+        cd->pmd.fp_length = v.get_uint16();
         cd->pmd.set_fast_pattern();
     }
     else

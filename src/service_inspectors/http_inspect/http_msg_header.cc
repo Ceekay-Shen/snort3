@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -27,11 +27,15 @@
 #include "file_api/file_flows.h"
 #include "file_api/file_service.h"
 #include "http_api.h"
+#include "http_common.h"
+#include "http_enum.h"
 #include "http_msg_request.h"
 #include "http_msg_body.h"
 #include "pub_sub/http_events.h"
 #include "sfip/sf_ip.h"
 
+using namespace snort;
+using namespace HttpCommon;
 using namespace HttpEnums;
 
 HttpMsgHeader::HttpMsgHeader(const uint8_t* buffer, const uint16_t buf_size,
@@ -40,6 +44,7 @@ HttpMsgHeader::HttpMsgHeader(const uint8_t* buffer, const uint16_t buf_size,
     HttpMsgHeadShared(buffer, buf_size, session_data_, source_id_, buf_owner, flow_, params_)
 {
     transaction->set_header(this, source_id);
+    get_related_sections();
 }
 
 void HttpMsgHeader::publish()
@@ -47,7 +52,7 @@ void HttpMsgHeader::publish()
     HttpEvent http_event(this);
 
     const char* key = (source_id == SRC_CLIENT) ?
-        HTTP_REQUEST_HEADER_EVENT_KEY : HTTP_RESPONSE_HEADER_EVENT_KEY; 
+        HTTP_REQUEST_HEADER_EVENT_KEY : HTTP_RESPONSE_HEADER_EVENT_KEY;
 
     DataBus::publish(key, http_event, flow);
 }
@@ -139,8 +144,6 @@ void HttpMsgHeader::gen_events()
 
 void HttpMsgHeader::update_flow()
 {
-    session_data->section_type[source_id] = SEC__NOT_COMPUTE;
-
     // The following logic to determine body type is by no means the last word on this topic.
     if (tcp_close)
     {
@@ -149,7 +152,8 @@ void HttpMsgHeader::update_flow()
         return;
     }
 
-    if ((source_id == SRC_SERVER) && ((status_code_num <= 199) || (status_code_num == 204) ||
+    if ((source_id == SRC_SERVER) &&
+        ((100 <= status_code_num && status_code_num <= 199) || (status_code_num == 204) ||
         (status_code_num == 304)))
     {
         // No body allowed by RFC for these response codes. The message is over regardless of the
@@ -171,8 +175,8 @@ void HttpMsgHeader::update_flow()
         return;
     }
 
-    if ((source_id == SRC_SERVER) && (transaction->get_request() != nullptr) &&
-        (transaction->get_request()->get_method_id() == METH_HEAD))
+    if ((source_id == SRC_SERVER) && (request != nullptr) &&
+        (request->get_method_id() == METH_HEAD))
     {
         // No body allowed by RFC for response to HEAD method
         session_data->half_reset(SRC_SERVER);
@@ -292,17 +296,14 @@ void HttpMsgHeader::prepare_body()
     const int64_t& depth = (source_id == SRC_CLIENT) ? params->request_depth :
         params->response_depth;
     session_data->detect_depth_remaining[source_id] = (depth != -1) ? depth : INT64_MAX;
-    if (session_data->detect_depth_remaining[source_id] > 0)
-    {
-        // Depth must be positive because first body section must actually go to detection in order
-        // to be the detection section
-        detection_section = false;
-    }
     setup_file_processing();
     setup_encoding_decompression();
     setup_utf_decoding();
-    setup_pdf_swf_decompression();
+    setup_file_decompression();
     update_depth();
+    // Limitations on detained inspection will be lifted as the feature is built out
+    session_data->detained_inspection[source_id] = params->detained_inspection &&
+        (source_id == SRC_SERVER) && (session_data->compression[source_id] == CMP_NONE);
     if (source_id == SRC_CLIENT)
     {
         HttpModule::increment_peg_counts(PEG_REQUEST_BODY);
@@ -337,10 +338,11 @@ void HttpMsgHeader::setup_file_processing()
                     // FIXIT-L develop a proper interface for passing the boundary string.
                     // This interface is a leftover from when OHI pushed whole messages through
                     // this interface.
-                    session_data->mime_state[source_id]->process_mime_data(flow,
+                    Packet* p = DetectionEngine::get_current_packet();
+                    session_data->mime_state[source_id]->process_mime_data(p,
                         content_type.start(), content_type.length(), true,
                         SNORT_FILE_POSITION_UNKNOWN);
-                    session_data->mime_state[source_id]->process_mime_data(flow,
+                    session_data->mime_state[source_id]->process_mime_data(p,
                         (const uint8_t*)"\r\n", 2, true, SNORT_FILE_POSITION_UNKNOWN);
                 }
             }
@@ -393,13 +395,6 @@ void HttpMsgHeader::setup_encoding_decompression()
         case CONTENTCODE_DEFLATE:
             compression = CMP_DEFLATE;
             break;
-        case CONTENTCODE_COMPRESS:
-        case CONTENTCODE_EXI:
-        case CONTENTCODE_PACK200_GZIP:
-        case CONTENTCODE_X_COMPRESS:
-            add_infraction(INF_UNSUPPORTED_ENCODING);
-            create_event(EVENT_UNSUPPORTED_ENCODING);
-            break;
         case CONTENTCODE_IDENTITY:
             break;
         case CONTENTCODE_CHUNKED:
@@ -407,8 +402,14 @@ void HttpMsgHeader::setup_encoding_decompression()
             create_event(EVENT_CONTENT_ENCODING_CHUNKED);
             break;
         case CONTENTCODE__OTHER:
+            // The ones we never heard of
             add_infraction(INF_UNKNOWN_ENCODING);
             create_event(EVENT_UNKNOWN_ENCODING);
+            break;
+        default:
+            // The ones we know by name but don't support
+            add_infraction(INF_UNSUPPORTED_ENCODING);
+            create_event(EVENT_UNSUPPORTED_ENCODING);
             break;
         }
     }
@@ -479,15 +480,17 @@ void HttpMsgHeader::setup_utf_decoding()
     session_data->utf_state->set_decode_utf_state_charset(charset_code);
 }
 
-void HttpMsgHeader::setup_pdf_swf_decompression()
+void HttpMsgHeader::setup_file_decompression()
 {
-    if (source_id == SRC_CLIENT || (!params->decompress_pdf && !params->decompress_swf))
+    if (source_id == SRC_CLIENT ||
+       (!params->decompress_pdf && !params->decompress_swf && !params->decompress_zip))
         return;
 
     session_data->fd_state = File_Decomp_New();
     session_data->fd_state->Modes =
         (params->decompress_pdf ? FILE_PDF_DEFL_BIT : 0) |
-        (params->decompress_swf ? (FILE_SWF_ZLIB_BIT | FILE_SWF_LZMA_BIT) : 0);
+        (params->decompress_swf ? (FILE_SWF_ZLIB_BIT | FILE_SWF_LZMA_BIT) : 0) |
+        (params->decompress_zip ? FILE_ZIP_DEFL_BIT : 0);
     session_data->fd_state->Alert_Callback = HttpMsgBody::fd_event_callback;
     session_data->fd_state->Alert_Context = &session_data->fd_alert_context;
     session_data->fd_state->Compr_Depth = 0;
@@ -517,4 +520,3 @@ void HttpMsgHeader::print_section(FILE* output)
     HttpMsgSection::print_section_wrapup(output);
 }
 #endif
-

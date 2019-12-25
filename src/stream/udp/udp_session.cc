@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -24,13 +24,17 @@
 #include "udp_session.h"
 
 #include "flow/session.h"
-#include "perf_monitor/flow_ip_tracker.h"
+#include "framework/data_bus.h"
+#include "hash/xhash.h"
+#include "memory/memory_cap.h"
 #include "profiler/profiler_defs.h"
 #include "protocols/packet.h"
 
 #include "udp_ha.h"
 #include "udp_module.h"
 #include "stream_udp.h"
+
+using namespace snort;
 
 // NOTE:  sender is assumed to be client
 //        responder is assumed to be server
@@ -58,7 +62,7 @@ static int ProcessUdp(
 {
     assert(lwssn->pkt_type == PktType::UDP);
 
-    if ( Stream::blocked_flow(lwssn, p) )
+    if ( Stream::blocked_flow(p) )
         return 0;
 
     if ( Stream::ignored_flow(lwssn, p) )
@@ -70,15 +74,11 @@ static int ProcessUdp(
     /* if both seen, mark established */
     if (p->is_from_server())
     {
-        DebugMessage(DEBUG_STREAM_STATE,
-            "Stream: Updating on packet from responder\n");
         lwssn->ssn_state.session_flags |= SSNFLAG_SEEN_RESPONDER;
         lwssn->set_ttl(p, false);
     }
     else
     {
-        DebugMessage(DEBUG_STREAM_STATE,
-            "Stream: Updating on packet from client\n");
         lwssn->ssn_state.session_flags |= SSNFLAG_SEEN_SENDER;
         lwssn->set_ttl(p, true);
     }
@@ -89,6 +89,7 @@ static int ProcessUdp(
             (lwssn->ssn_state.session_flags & SSNFLAG_SEEN_RESPONDER))
         {
             lwssn->ssn_state.session_flags |= SSNFLAG_ESTABLISHED;
+            DataBus::publish(STREAM_UDP_BIDIRECTIONAL_EVENT, p);
         }
     }
 
@@ -103,8 +104,10 @@ static int ProcessUdp(
 //-------------------------------------------------------------------------
 
 UdpSession::UdpSession(Flow* flow) : Session(flow)
-{
-}
+{ memory::MemoryCap::update_allocations(sizeof(*this)); }
+
+UdpSession::~UdpSession()
+{ memory::MemoryCap::update_deallocations(sizeof(*this)); }
 
 bool UdpSession::setup(Packet* p)
 {
@@ -117,15 +120,11 @@ bool UdpSession::setup(Packet* p)
     flow->ssn_state.direction = FROM_CLIENT;
 
     StreamUdpConfig* pc = get_udp_cfg(flow->ssn_server);
-    flow->set_expire(p, pc->session_timeout);
+    flow->set_default_session_timeout(pc->session_timeout, false);
 
     SESSION_STATS_ADD(udpStats);
 
-    if (perfmon_config && (perfmon_config->perf_flags & PERF_FLOWIP))
-    {
-        perf_flow_ip->update_state(&flow->client_ip,
-            &flow->server_ip, SFS_STATE_UDP_CREATED);
-    }
+    DataBus::publish(FLOW_STATE_EVENT, p);
 
     if ( Stream::expected_flow(flow, p) )
     {
@@ -139,7 +138,7 @@ bool UdpSession::setup(Packet* p)
 void UdpSession::clear()
 {
     UdpSessionCleanup(flow);
-    UdpHAManager::process_deletion(flow);
+    UdpHAManager::process_deletion(*flow);
     flow->clear();
 }
 
@@ -153,7 +152,7 @@ void UdpSession::update_direction(
     {
         if ((dir == SSN_DIR_FROM_CLIENT) && (flow->ssn_state.direction == FROM_CLIENT))
         {
-            /* Direction already set as CLIENT */
+            // Direction already set as CLIENT
             return;
         }
     }
@@ -161,12 +160,12 @@ void UdpSession::update_direction(
     {
         if ((dir == SSN_DIR_FROM_SERVER) && (flow->ssn_state.direction == FROM_SERVER))
         {
-            /* Direction already set as SERVER */
+            // Direction already set as SERVER
             return;
         }
     }
 
-    /* Swap them -- leave flow->ssn_state.direction the same */
+    // Swap them -- leave flow->ssn_state.direction the same
     tmpIp = flow->client_ip;
     tmpPort = flow->client_port;
     flow->client_ip = flow->server_ip;
@@ -189,12 +188,13 @@ int UdpSession::process(Packet* p)
         flow->restart();
         flow->ssn_state.session_flags |= SSNFLAG_SEEN_SENDER;
         udpStats.created++;
-        UdpHAManager::process_deletion(flow);
+        UdpHAManager::process_deletion(*flow);
     }
 
     ProcessUdp(flow, p, pc, nullptr);
     flow->markup_packet_flags(p);
-    flow->set_expire(p, pc->session_timeout);
+    
+    flow->set_expire(p, flow->default_session_timeout);
 
     return 0;
 }

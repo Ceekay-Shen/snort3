@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -33,6 +33,8 @@
 #include "profiler/profiler.h"
 
 #include "extract.h"
+
+using namespace snort;
 
 enum HashPsIdx
 {
@@ -195,7 +197,7 @@ int HashOption::match(Cursor& c)
 
 IpsOption::EvalStatus HashOption::eval(Cursor& c, Packet*)
 {
-    Profile profile(hash_ps[idx]);
+    RuleProfile profile(hash_ps[idx]);
 
     int found = match(c);
 
@@ -334,7 +336,7 @@ bool HashModule::set(const char*, Value& v, SnortConfig*)
         hmd->relative = true;
 
     else if ( v.is("length") )
-        hmd->length = v.get_long();
+        hmd->length = v.get_uint16();
 
     else
         return false;

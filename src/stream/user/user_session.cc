@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -25,13 +25,16 @@
 
 #include "detection/detection_engine.h"
 #include "detection/rules.h"
-#include "main/snort.h"
+#include "main/analyzer.h"
+#include "memory/memory_cap.h"
 #include "profiler/profiler_defs.h"
 #include "protocols/packet.h"
 #include "utils/util.h"
 
 #include "stream_user.h"
 #include "user_module.h"
+
+using namespace snort;
 
 THREAD_LOCAL ProfileStats user_perf_stats;
 
@@ -51,8 +54,12 @@ THREAD_LOCAL ProfileStats user_perf_stats;
 UserSegment* UserSegment::init(const uint8_t* p, unsigned n)
 {
     unsigned bucket = (n > BUCKET) ? n : BUCKET;
-    UserSegment* us = (UserSegment*)snort_alloc(sizeof(*us)+bucket-1);
+    unsigned size = sizeof(UserSegment) + bucket -1;
 
+    memory::MemoryCap::update_allocations(size);
+    UserSegment* us = (UserSegment*)snort_alloc(size);
+
+    us->size = size;
     us->len = 0;
     us->offset = 0;
     us->used = 0;
@@ -63,6 +70,7 @@ UserSegment* UserSegment::init(const uint8_t* p, unsigned n)
 
 void UserSegment::term(UserSegment* us)
 {
+    memory::MemoryCap::update_deallocations(us->size);
     snort_free(us);
 }
 
@@ -158,7 +166,7 @@ void UserTracker::detect(
     up->packet_flags |= (p->packet_flags & (PKT_STREAM_EST|PKT_STREAM_UNEST_UNI));
 
     trace_logf(stream_user, "detect[%d]\n", up->dsize);
-    Snort::inspect(up);
+    Analyzer::get_local_analyzer()->inspect_rebuilt(up);
 }
 
 int UserTracker::scan(Packet* p, uint32_t& flags)
@@ -166,7 +174,6 @@ int UserTracker::scan(Packet* p, uint32_t& flags)
     if ( seg_list.empty() )
         return -1;
 
-    DetectionEngine::onload(p->flow);
     std::list<UserSegment*>::iterator it;
 
     for ( it = seg_list.begin(); it != seg_list.end(); ++it)
@@ -181,7 +188,7 @@ int UserTracker::scan(Packet* p, uint32_t& flags)
         trace_logf(stream_user, "scan[%d]\n", len);
 
         int32_t flush_amt = paf_check(
-            splitter, &paf_state, p->flow, us->get_unused_data(), len,
+            splitter, &paf_state, p, us->get_unused_data(), len,
             total, paf_state.seq, &flags);
 
         if ( flush_amt >= 0 )
@@ -203,10 +210,9 @@ int UserTracker::scan(Packet* p, uint32_t& flags)
 void UserTracker::flush(Packet* p, unsigned flush_amt, uint32_t flags)
 {
     unsigned bytes_flushed = 0;
-    StreamBuffer sb = { nullptr, 0 };
     trace_logf(stream_user, "flush[%d]\n", flush_amt);
     uint32_t rflags = flags & ~PKT_PDU_TAIL;
-    Packet* up = DetectionEngine::set_next_packet();
+    Packet* up = DetectionEngine::set_next_packet(p);
 
     while ( !seg_list.empty() and bytes_flushed < flush_amt )
     {
@@ -225,7 +231,7 @@ void UserTracker::flush(Packet* p, unsigned flush_amt, uint32_t flags)
         }
 
         trace_logf(stream_user, "reassemble[%d]\n", len);
-        sb = splitter->reassemble(
+        StreamBuffer sb = splitter->reassemble(
             p->flow, flush_amt, bytes_flushed, data, len, rflags, bytes_copied);
 
         bytes_flushed += bytes_copied;
@@ -250,8 +256,6 @@ void UserTracker::flush(Packet* p, unsigned flush_amt, uint32_t flags)
 
 void UserTracker::process(Packet* p)
 {
-    DetectionEngine::onload(p->flow);
-
     uint32_t flags = 0;
     int flush_amt = scan(p, flags);
 
@@ -290,7 +294,7 @@ void UserTracker::add_data(Packet* p)
     if ( avail < p->dsize )
     {
         UserSegment* us = UserSegment::init(p->data+avail, p->dsize-avail);
-        seg_list.push_back(us);
+        seg_list.emplace_back(us);
     }
     total += p->dsize;
     process(p);
@@ -363,7 +367,7 @@ void UserSession::start(Packet* p, Flow* flow)
 
         StreamUpdatePerfBaseState(&sfBase, tmp->flow, TCP_STATE_SYN_SENT);
 
-        EventInternal(INTERNAL_EVENT_SESSION_ADD);
+        EventInternal(SESSION_EVENT_SETUP);
 #endif
     }
 }
@@ -400,8 +404,7 @@ void UserSession::update(Packet* p, Flow* flow)
         }
     }
 
-    StreamUserConfig* pc = get_user_cfg(flow->ssn_server);
-    flow->set_expire(p, pc->session_timeout);
+    flow->set_expire(p, flow->default_session_timeout);
 }
 
 void UserSession::restart(Packet* p)
@@ -425,13 +428,19 @@ void UserSession::restart(Packet* p)
 // UserSession methods
 //-------------------------------------------------------------------------
 
-UserSession::UserSession(Flow* flow) : Session(flow) { }
+UserSession::UserSession(Flow* flow) : Session(flow)
+{ memory::MemoryCap::update_allocations(sizeof(*this)); }
 
+UserSession::~UserSession()
+{ memory::MemoryCap::update_deallocations(sizeof(*this)); }
 
 bool UserSession::setup(Packet*)
 {
     client.init();
     server.init();
+
+    StreamUserConfig* pc = get_user_cfg(flow->ssn_server);
+    flow->set_default_session_timeout(pc->session_timeout, false);
 
 #ifdef ENABLE_EXPECTED_USER
     if ( Stream::expected_flow(flow, p) )
@@ -444,7 +453,6 @@ void UserSession::clear()
 {
     client.term();
     server.term();
-    flow->restart();
 }
 
 void UserSession::set_splitter(bool c2s, StreamSplitter* ss)
@@ -462,7 +470,7 @@ void UserSession::set_splitter(bool c2s, StreamSplitter* ss)
 
 StreamSplitter* UserSession::get_splitter(bool c2s)
 {
-    UserTracker& ut = c2s ? server : client;
+    const UserTracker& ut = c2s ? server : client;
     return ut.splitter;
 }
 
@@ -483,7 +491,7 @@ int UserSession::process(Packet* p)
 
     flow->set_direction(p);
 
-    if ( Stream::blocked_flow(flow, p) || Stream::ignored_flow(flow, p) )
+    if ( Stream::blocked_flow(p) || Stream::ignored_flow(flow, p) )
         return 0;
 
     update(p, flow);
@@ -507,8 +515,6 @@ int UserSession::process(Packet* p)
 // FIXIT-M these are TBD after tcp is updated
 // some will be deleted, some refactored, some implemented
 //-------------------------------------------------------------------------
-
-void UserSession::update_direction(char /*dir*/, const SfIp*, uint16_t /*port*/) { }
 
 bool UserSession::add_alert(Packet*, uint32_t /*gid*/, uint32_t /*sid*/) { return true; }
 bool UserSession::check_alerted(Packet*, uint32_t /*gid*/, uint32_t /*sid*/) { return false; }

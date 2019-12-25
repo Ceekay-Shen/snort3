@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -28,14 +28,22 @@
 
 #include "dce_udp.h"
 
+using namespace snort;
 using namespace std;
+
+Trace TRACE_NAME(dce_udp);
 
 static const Parameter s_params[] =
 {
+    { "limit_alerts", Parameter::PT_BOOL, nullptr, "true",
+      "limit DCE alert to at most one per signature per flow" },
+
     { "disable_defrag", Parameter::PT_BOOL, nullptr, "false",
-      " Disable DCE/RPC defragmentation" },
+      "disable DCE/RPC defragmentation" },
+
     { "max_frag_len", Parameter::PT_INT, "1514:65535", "65535",
-      " Maximum fragment size for defragmentation" },
+      "maximum fragment size for defragmentation" },
+
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
 };
 
@@ -76,7 +84,7 @@ static const PegInfo dce2_udp_pegs[] =
     { CountType::END, nullptr, nullptr }
 };
 
-Dce2UdpModule::Dce2UdpModule() : Module(DCE2_UDP_NAME, DCE2_UDP_HELP, s_params)
+Dce2UdpModule::Dce2UdpModule() : Module(DCE2_UDP_NAME, DCE2_UDP_HELP, s_params, false, &TRACE_NAME(dce_udp))
 {
 }
 
@@ -95,60 +103,17 @@ PegCount* Dce2UdpModule::get_counts() const
     return (PegCount*)&dce2_udp_stats;
 }
 
-ProfileStats* Dce2UdpModule::get_profile(
-    unsigned index, const char*& name, const char*& parent) const
+ProfileStats* Dce2UdpModule::get_profile() const
 {
-    switch ( index )
-    {
-    case 0:
-        name = "dce_udp_main";
-        parent = nullptr;
-        return &dce2_udp_pstat_main;
-
-    case 1:
-        name = "dce_udp_session";
-        parent = "dce_udp_main";
-        return &dce2_udp_pstat_session;
-
-    case 2:
-        name = "dce_udp_new_session";
-        parent = "dce_udp_session";
-        return &dce2_udp_pstat_new_session;
-
-    case 3:
-        name = "dce_udp_detect";
-        parent = "dce_udp_main";
-        return &dce2_udp_pstat_detect;
-
-    case 4:
-        name = "dce_udp_log";
-        parent = "dce_udp_main";
-        return &dce2_udp_pstat_log;
-
-    case 5:
-        name = "dce_udp_cl_acts";
-        parent = "dce_udp_main";
-        return &dce2_udp_pstat_cl_acts;
-
-    case 6:
-        name = "dce_udp_cl_frag";
-        parent = "dce_udp_main";
-        return &dce2_udp_pstat_cl_frag;
-
-    case 7:
-        name = "dce_udp_cl_reass";
-        parent = "dce_udp_main";
-        return &dce2_udp_pstat_cl_reass;
-    }
-    return nullptr;
+    return &dce2_udp_pstat_main;
 }
 
-bool Dce2UdpModule::set(const char*, Value& v, SnortConfig*)
+bool Dce2UdpModule::set(const char* fqn, Value& v, SnortConfig* c)
 {
     if (dce2_set_common_config(v,config.common))
         return true;
     else
-        return false;
+        return Module::set(fqn, v, c);
 }
 
 void Dce2UdpModule::get_data(dce2UdpProtoConf& dce2_udp_config)

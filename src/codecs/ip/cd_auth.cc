@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -24,6 +24,8 @@
 #include "codecs/codec_module.h"
 #include "framework/codec.h"
 #include "main/snort_config.h"
+
+using namespace snort;
 
 #define CD_AUTH_NAME "auth"
 #define CD_AUTH_HELP "support for IP authentication header"
@@ -75,7 +77,7 @@ constexpr uint8_t MIN_AUTH_LEN = 16; // this is in minimum number of bytes ...
 } // anonymous namespace
 
 void AuthCodec::get_protocol_ids(std::vector<ProtocolId>& v)
-{ v.push_back(ProtocolId::AUTH); }
+{ v.emplace_back(ProtocolId::AUTH); }
 
 bool AuthCodec::decode(const RawData& raw, CodecData& codec, DecodeData& snort)
 {

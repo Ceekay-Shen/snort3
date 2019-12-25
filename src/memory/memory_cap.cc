@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -37,8 +37,10 @@
 #include "prune_handler.h"
 
 #ifdef UNIT_TEST
-#include "catch/catch.hpp"
+#include "catch/snort_catch.h"
 #endif
+
+using namespace snort;
 
 namespace memory
 {
@@ -48,34 +50,29 @@ namespace
 
 struct Tracker
 {
-    size_t allocated = 0;
-    size_t deallocated = 0;
-
-    uint64_t allocations = 0;
-    uint64_t deallocations = 0;
-
     void allocate(size_t n)
-    { allocated += n; ++allocations; }
+    { mem_stats.allocated += n; ++mem_stats.allocations; }
 
     void deallocate(size_t n)
-    { deallocated += n; ++deallocations; }
+    {
+        mem_stats.deallocated += n; ++mem_stats.deallocations;
+        assert(mem_stats.deallocated <= mem_stats.allocated);
+        assert(mem_stats.deallocations <= mem_stats.allocations);
+        assert(mem_stats.allocated or !mem_stats.allocations);
+    }
 
     size_t used() const
     {
-        // FIXIT-H this assertion fails at analyzer.cc:93 / starting packet thread
-        // {allocated = 0, deallocated = 48, allocations = 0, deallocations = 1}
-        //assert(allocated >= deallocated);
-
-        if ( allocated < deallocated )
+        if ( mem_stats.allocated < mem_stats.deallocated )
+        {
+            assert(false);
             return 0;
-
-        return allocated - deallocated;
+        }
+        return mem_stats.allocated - mem_stats.deallocated;
     }
-
-    constexpr Tracker() = default;
 };
 
-static THREAD_LOCAL Tracker s_tracker;
+static Tracker s_tracker;
 
 // -----------------------------------------------------------------------------
 // helpers
@@ -86,11 +83,6 @@ inline bool free_space(size_t requested, size_t cap, Tracker& trk, Handler& hand
 {
     if ( requested > cap )
     {
-        DebugFormat(
-            DEBUG_MEMORY,
-            "Requested memory (%zu bytes) > cap (%zu bytes)\n",
-            requested, cap);
-
         return false;
     }
 
@@ -99,21 +91,20 @@ inline bool free_space(size_t requested, size_t cap, Tracker& trk, Handler& hand
     if ( used + requested <= cap )
         return true;
 
+    ++mem_stats.reap_attempts;
+
     while ( used + requested > cap )
     {
         handler();
-
-        // check if the handler freed any space
         auto tmp = trk.used();
+
         if ( tmp >= used )
         {
-            // nope
+            ++mem_stats.reap_failures;
             return false;
         }
-
         used = tmp;
     }
-
     return true;
 }
 
@@ -141,18 +132,37 @@ bool MemoryCap::free_space(size_t n)
     if ( !thread_cap )
         return true;
 
-    const auto& config = *SnortConfig::get_conf()->memory;
-    return memory::free_space(n, thread_cap, s_tracker, prune_handler) || config.soft;
+    static THREAD_LOCAL bool entered = false;
+    assert(!entered);
+
+    if ( entered )
+        return false;
+
+    entered = true;
+    bool avail = memory::free_space(n, thread_cap, s_tracker, prune_handler);
+    entered = false;
+
+    return avail;
 }
+
+static size_t fudge_it(size_t n)
+{ return ((n >> 7) + 1) << 7; }
 
 void MemoryCap::update_allocations(size_t n)
 {
+    size_t k = n;
+    n = fudge_it(n);
+    mem_stats.total_fudge += (n - k);
     s_tracker.allocate(n);
+    auto in_use = s_tracker.used();
+    if ( in_use > mem_stats.max_in_use )
+        mem_stats.max_in_use = in_use;
     mp_active_context.update_allocs(n);
 }
 
 void MemoryCap::update_deallocations(size_t n)
 {
+    n = fudge_it(n);
     s_tracker.deallocate(n);
     mp_active_context.update_deallocs(n);
 }
@@ -211,21 +221,20 @@ void MemoryCap::print()
 
     const MemoryConfig& config = *SnortConfig::get_conf()->memory;
 
-    if ( SnortConfig::log_verbose() or s_tracker.allocations )
+    if ( SnortConfig::log_verbose() or mem_stats.allocations )
         LogLabel("memory (heap)");
 
     if ( SnortConfig::log_verbose() )
     {
         LogMessage("    global cap: %zu\n", config.cap);
-        LogMessage("    global preemptive threshold percent: %zu\n", config.threshold);
-        LogMessage("    cap type: %s\n", config.soft? "soft" : "hard");
+        LogMessage("    global preemptive threshold percent: %u\n", config.threshold);
     }
 
-    if ( s_tracker.allocations )
+    if ( mem_stats.allocations )
     {
         LogMessage("    main thread usage: %zu\n", s_tracker.used());
-        LogMessage("    allocations: %" PRIu64 "\n", s_tracker.allocations);
-        LogMessage("    deallocations: %" PRIu64 "\n", s_tracker.deallocations);
+        LogMessage("    allocations: %" PRIu64 "\n", mem_stats.allocations);
+        LogMessage("    deallocations: %" PRIu64 "\n", mem_stats.deallocations);
         LogMessage("    thread cap: %zu\n", thread_cap);
         LogMessage("    preemptive threshold: %zu\n", preemptive_threshold);
     }

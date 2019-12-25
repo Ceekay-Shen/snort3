@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -27,6 +27,12 @@
 #include "log/messages.h"
 #include "protocols/packet.h"
 
+#include "perf_pegs.h"
+
+using namespace snort;
+
+// The default number of rows used for the xhash ip_map
+#define DEFAULT_XHASH_NROWS 1021
 #define TRACKER_NAME PERF_NAME "_flow_ip"
 
 struct FlowStateKey
@@ -35,39 +41,42 @@ struct FlowStateKey
     SfIp ipB;
 };
 
-THREAD_LOCAL FlowIPTracker* perf_flow_ip;
-
 FlowStateValue* FlowIPTracker::find_stats(const SfIp* src_addr, const SfIp* dst_addr,
     int* swapped)
 {
     FlowStateKey key;
-    FlowStateValue* value;
+    FlowStateValue* value = nullptr;
+    bool prune_required = false;
 
     if (src_addr->less_than(*dst_addr))
     {
-        key.ipA.set(*src_addr);
-        key.ipB.set(*dst_addr);
+        key.ipA = *src_addr;
+        key.ipB = *dst_addr;
         *swapped = 0;
     }
     else
     {
-        key.ipA.set(*dst_addr);
-        key.ipB.set(*src_addr);
+        key.ipA = *dst_addr;
+        key.ipB = *src_addr;
         *swapped = 1;
     }
 
     value = (FlowStateValue*)xhash_find(ip_map, &key);
     if (!value)
     {
-        XHashNode* node = xhash_get_node(ip_map, &key);
+        XHashNode* node = xhash_get_node_with_prune(ip_map, &key, &prune_required);
 
         if (!node)
         {
-            DEBUG_WRAP(DebugMessage(DEBUG_STREAM,
-                "Key/Value pair didn't exist in the flow stats table and we couldn't add it!\n");
-                );
             return nullptr;
         }
+
+        if (prune_required)
+        {
+            ++pmstats.total_frees;
+            ++pmstats.alloc_prunes;
+        }
+
         memset(node->data, 0, sizeof(FlowStateValue));
         value = (FlowStateValue*)node->data;
     }
@@ -75,8 +84,27 @@ FlowStateValue* FlowIPTracker::find_stats(const SfIp* src_addr, const SfIp* dst_
     return value;
 }
 
-FlowIPTracker::FlowIPTracker(PerfConfig* perf) :
-    PerfTracker(perf, perf->output == PERF_FILE, TRACKER_NAME)
+bool FlowIPTracker::initialize(size_t new_memcap)
+{
+    bool need_pruning = false;
+
+    if (!ip_map)
+    {
+        ip_map = xhash_new(DEFAULT_XHASH_NROWS, sizeof(FlowStateKey), sizeof(FlowStateValue),
+            new_memcap, 1, nullptr, nullptr, 1);
+    }
+    else
+    {
+        need_pruning = (new_memcap < memcap);
+        memcap = new_memcap;
+        ip_map->mc.memcap = memcap;
+    }
+
+    return need_pruning;
+}
+
+FlowIPTracker::FlowIPTracker(PerfConfig* perf) : PerfTracker(perf, TRACKER_NAME),
+    perf_flags(perf->perf_flags), perf_conf(perf)
 {
     formatter->register_section("flow_ip");
     formatter->register_field("ip_a", ip_a);
@@ -113,8 +141,10 @@ FlowIPTracker::FlowIPTracker(PerfConfig* perf) :
         &stats.state_changes[SFS_STATE_UDP_CREATED]);
     formatter->finalize_fields();
 
-    ip_map = xhash_new(1021, sizeof(FlowStateKey), sizeof(FlowStateValue),
-        perfmon_config->flowip_memcap, 1, nullptr, nullptr, 1);
+    memcap = perf->flowip_memcap;
+
+    ip_map = xhash_new(DEFAULT_XHASH_NROWS, sizeof(FlowStateKey), sizeof(FlowStateValue),
+        memcap, 1, nullptr, nullptr, 1);
 
     if (!ip_map)
         FatalError("Unable to allocate memory for FlowIP stats\n");
@@ -122,7 +152,7 @@ FlowIPTracker::FlowIPTracker(PerfConfig* perf) :
 
 FlowIPTracker::~FlowIPTracker()
 {
-    if (ip_map)
+    if ( ip_map )
         xhash_delete(ip_map);
 }
 
@@ -140,7 +170,7 @@ void FlowIPTracker::update(Packet* p)
 
         const SfIp* src_addr = p->ptrs.ip_api.get_src();
         const SfIp* dst_addr = p->ptrs.ip_api.get_dst();
-        int len = p->pkth->caplen;
+        int len = p->pktlen;
 
         if (p->ptrs.tcph)
             type = SFS_TYPE_TCP;
@@ -182,7 +212,7 @@ void FlowIPTracker::process(bool)
         write();
     }
 
-    if ( !(config->perf_flags & PERF_SUMMARY) )
+    if ( !(perf_flags & PERF_SUMMARY) )
         reset();
 }
 

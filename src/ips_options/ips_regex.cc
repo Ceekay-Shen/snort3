@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -23,8 +23,6 @@
 #include "config.h"
 #endif
 
-#include "ips_regex.h"
-
 #include <hs_compile.h>
 #include <hs_runtime.h>
 
@@ -38,6 +36,8 @@
 #include "log/messages.h"
 #include "main/snort_config.h"
 #include "profiler/profiler.h"
+
+using namespace snort;
 
 #define s_name "regex"
 
@@ -72,6 +72,7 @@ struct RegexConfig
 // rules.
 
 static hs_scratch_t* s_scratch = nullptr;
+static unsigned scratch_index;
 static THREAD_LOCAL unsigned s_to = 0;
 static THREAD_LOCAL ProfileStats regex_perf_stats;
 
@@ -96,7 +97,7 @@ public:
 
     bool retry(Cursor&) override;
 
-    PatternMatchData* get_pattern(int, RuleDirection) override
+    PatternMatchData* get_pattern(SnortProtocolId, RuleDirection) override
     { return &config.pmd; }
 
     EvalStatus eval(Cursor&, Packet*) override;
@@ -112,7 +113,7 @@ RegexOption::RegexOption(const RegexConfig& c) :
 
     if ( /*hs_error_t err =*/ hs_alloc_scratch(config.db, &s_scratch) )
     {
-        // FIXIT-L why is this failing but everything is working?
+        // FIXIT-RC why is this failing but everything is working?
         //ParseError("can't initialize regex for '%s' (%d) %p",
         //    config.re.c_str(), err, s_scratch);
     }
@@ -165,7 +166,7 @@ static int hs_match(
 
 IpsOption::EvalStatus RegexOption::eval(Cursor& c, Packet*)
 {
-    Profile profile(regex_perf_stats);
+    RuleProfile profile(regex_perf_stats);
 
     unsigned pos = c.get_delta();
 
@@ -175,17 +176,18 @@ IpsOption::EvalStatus RegexOption::eval(Cursor& c, Packet*)
     if ( pos > c.size() )
         return NO_MATCH;
 
-    SnortState* ss = SnortConfig::get_conf()->state + get_instance_id();
-    assert(ss->regex_scratch);
+    hs_scratch_t* ss =
+        (hs_scratch_t*)SnortConfig::get_conf()->state[get_instance_id()][scratch_index];
 
     s_to = 0;
 
     hs_error_t stat = hs_scan(
         config.db, (const char*)c.buffer()+pos, c.size()-pos, 0,
-        (hs_scratch_t*)ss->regex_scratch, hs_match, nullptr);
+        ss, hs_match, nullptr);
 
     if ( s_to and stat == HS_SCAN_TERMINATED )
     {
+        s_to += pos;
         c.set_pos(s_to);
         c.set_delta(s_to);
         return MATCH;
@@ -228,7 +230,11 @@ static const Parameter s_params[] =
 class RegexModule : public Module
 {
 public:
-    RegexModule() : Module(s_name, s_help, s_params) { }
+    RegexModule() : Module(s_name, s_help, s_params)
+    {
+        scratch_index = SnortConfig::request_scratch(
+            RegexModule::scratch_setup, RegexModule::scratch_cleanup);
+    }
     ~RegexModule() override;
 
     bool begin(const char*, int, SnortConfig*) override;
@@ -249,6 +255,8 @@ public:
 
 private:
     RegexConfig config;
+    static void scratch_setup(SnortConfig* sc);
+    static void scratch_cleanup(SnortConfig* sc);
 };
 
 RegexModule::~RegexModule()
@@ -319,33 +327,29 @@ bool RegexModule::end(const char*, int, SnortConfig*)
     return true;
 }
 
-//-------------------------------------------------------------------------
-// public methods
-//-------------------------------------------------------------------------
-
-void regex_setup(SnortConfig* sc)
+void RegexModule::scratch_setup(SnortConfig* sc)
 {
     for ( unsigned i = 0; i < sc->num_slots; ++i )
     {
-        SnortState* ss = sc->state + i;
+        hs_scratch_t** ss = (hs_scratch_t**) &sc->state[i][scratch_index];
 
         if ( s_scratch )
-            hs_clone_scratch(s_scratch, (hs_scratch_t**)&ss->regex_scratch);
+            hs_clone_scratch(s_scratch, ss);
         else
-            ss->regex_scratch = nullptr;
+            ss = nullptr;
     }
 }
 
-void regex_cleanup(SnortConfig* sc)
+void RegexModule::scratch_cleanup(SnortConfig* sc)
 {
     for ( unsigned i = 0; i < sc->num_slots; ++i )
     {
-        SnortState* ss = sc->state + i;
+        hs_scratch_t* ss = (hs_scratch_t*) sc->state[i][scratch_index];
 
-        if ( ss->regex_scratch )
+        if ( ss )
         {
-            hs_free_scratch((hs_scratch_t*)ss->regex_scratch);
-            ss->regex_scratch = nullptr;
+            hs_free_scratch(ss);
+            ss = nullptr;
         }
     }
 }
@@ -404,5 +408,12 @@ static const IpsApi regex_api =
     nullptr
 };
 
-const BaseApi* ips_regex = &regex_api.base;
-
+#ifdef BUILDING_SO
+SO_PUBLIC const BaseApi* snort_plugins[] =
+#else
+const BaseApi* ips_regex[] =
+#endif
+{
+    &regex_api.base,
+    nullptr
+};

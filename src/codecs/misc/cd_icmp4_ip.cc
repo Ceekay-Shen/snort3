@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -30,6 +30,8 @@
 #include "protocols/tcp.h"
 #include "protocols/udp.h"
 
+using namespace snort;
+
 namespace
 {
 #define ICMP4_IP_NAME "icmp4_ip"
@@ -47,7 +49,7 @@ public:
 } // namespace
 
 void Icmp4IpCodec::get_protocol_ids(std::vector<ProtocolId>& v)
-{ v.push_back(ProtocolId::IP_EMBEDDED_IN_ICMP4); }
+{ v.emplace_back(ProtocolId::IP_EMBEDDED_IN_ICMP4); }
 
 bool Icmp4IpCodec::decode(const RawData& raw, CodecData& codec, DecodeData& snort)
 {
@@ -58,7 +60,7 @@ bool Icmp4IpCodec::decode(const RawData& raw, CodecData& codec, DecodeData& snor
     }
 
     /* lay the IP struct over the raw data */
-    const IP4Hdr* const ip4h = reinterpret_cast<const IP4Hdr*>(raw.data);
+    const ip::IP4Hdr* const ip4h = reinterpret_cast<const ip::IP4Hdr*>(raw.data);
 
     /*
      * with datalink DLT_RAW it's impossible to differ ARP datagrams from IP.
@@ -140,7 +142,7 @@ struct ip4_addr
 void Icmp4IpCodec::log(TextLog* const text_log, const uint8_t* raw_pkt,
     const uint16_t /*lyr_len*/)
 {
-    const IP4Hdr* const ip4h = reinterpret_cast<const IP4Hdr*>(raw_pkt);
+    const ip::IP4Hdr* const ip4h = reinterpret_cast<const ip::IP4Hdr*>(raw_pkt);
     TextLog_Puts(text_log, "\n\t**** ORIGINAL DATAGRAM DUMP: ****");
     TextLog_NewLine(text_log);
     TextLog_Puts(text_log, "\tIPv4\n\t\t");
@@ -148,7 +150,7 @@ void Icmp4IpCodec::log(TextLog* const text_log, const uint8_t* raw_pkt,
     // COPIED DIRECTLY FROM ipv4 CODEC.  This is specifically replicated since
     //      the two are not necessarily the same.
 
-    // FIXIT-H this does NOT obfuscate correctly
+    // FIXIT-RC this does NOT obfuscate correctly
     if (SnortConfig::obfuscate())
     {
         TextLog_Print(text_log, "xxx.xxx.xxx.xxx -> xxx.xxx.xxx.xxx");

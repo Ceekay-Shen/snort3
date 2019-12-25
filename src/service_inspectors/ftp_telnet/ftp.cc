@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2004-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -41,10 +41,9 @@
 #include "pp_ftp.h"
 #include "telnet.h"
 
-int16_t ftp_data_app_id = SFTARGET_UNKNOWN_PROTOCOL;
+using namespace snort;
 
-#define client_key "ftp_client"
-#define server_key "ftp_server"
+SnortProtocolId ftp_data_snort_protocol_id = UNKNOWN_PROTOCOL_ID;
 
 #define client_help "FTP inspector client module"
 #define server_help "FTP inspector server module"
@@ -80,29 +79,12 @@ static int SnortFTP(
 
     if (iInspectMode == FTPP_SI_SERVER_MODE)
     {
-        DebugFormat(DEBUG_FTPTELNET,
-            "Server packet: %.*s\n", p->dsize, p->data);
-
         // FIXIT-L breaks target-based non-standard ports
         //if ( !ScPafEnabled() )
         Stream::flush_client(p);
     }
-    else
-    {
-        if ( !InspectClientPacket(p) )
-        {
-            DebugMessage(DEBUG_FTPTELNET,
-                "Client packet will be reassembled\n");
-            return FTPP_SUCCESS;
-        }
-        else
-        {
-            DebugFormat(DEBUG_FTPTELNET,
-                "Client packet: rebuilt %s: %.*s\n",
-                (p->packet_flags & PKT_REBUILT_STREAM) ? "yes" : "no",
-                p->dsize, p->data);
-        }
-    }
+    else if ( !InspectClientPacket(p) )
+        return FTPP_SUCCESS;
 
     int ret = initialize_ftp(FTPsession, p, iInspectMode);
     if ( ret )
@@ -111,8 +93,6 @@ static int SnortFTP(
     ret = check_ftp(FTPsession, p, iInspectMode);
     if ( ret == FTPP_SUCCESS )
     {
-        ProfileExclude exclude(ftpPerfStats);
-
         // FIXIT-L ideally do_detection will look at the cmd & param buffers
         // or the rsp & msg buffers.  We should call it from inside check_ftp
         // each time we process a pipelined FTP command.
@@ -169,7 +149,7 @@ static int snort_ftp(Packet* p)
             }
             else
             {
-                /* XXX - Not FTP or Telnet */
+                /* Not FTP or Telnet */
                 assert(false);
                 p->flow->free_flow_data(FtpFlowData::inspector_id);
                 return 0;
@@ -199,114 +179,6 @@ static int snort_ftp(Packet* p)
 
     /* Uh, shouldn't get here  */
     return FTPP_INVALID_PROTO;
-}
-
-/*
- * Function: ResetStringFormat (FTP_PARAM_FMT *Fmt)
- *
- * Purpose: Recursively sets nodes that allow strings to nodes that check
- *          for a string format attack within the FTP parameter validation tree
- *
- * Arguments: Fmt       => pointer to the FTP Parameter configuration
- *
- * Returns: None
- *
- */
-static void ResetStringFormat(FTP_PARAM_FMT* Fmt)
-{
-    int i;
-    if (!Fmt)
-        return;
-
-    if (Fmt->type == e_unrestricted)
-        Fmt->type = e_strformat;
-
-    ResetStringFormat(Fmt->optional_fmt);
-    for (i=0; i<Fmt->numChoices; i++)
-    {
-        ResetStringFormat(Fmt->choices[i]);
-    }
-    ResetStringFormat(Fmt->next_param_fmt);
-}
-
-static int ProcessFTPDataChanCmdsList(
-    FTP_SERVER_PROTO_CONF* ServerConf, const FtpCmd* fc)
-{
-    const char* cmd = fc->name.c_str();
-    int iRet;
-
-    FTP_CMD_CONF* FTPCmd =
-        ftp_cmd_lookup_find(ServerConf->cmd_lookup, cmd, strlen(cmd), &iRet);
-
-    if (FTPCmd == nullptr)
-    {
-        /* Add it to the list */
-        // note that struct includes 1 byte for null, so just add len
-        FTPCmd = (FTP_CMD_CONF*)snort_calloc(sizeof(FTP_CMD_CONF)+strlen(cmd));
-        strncpy(FTPCmd->cmd_name, cmd, strlen(cmd) + 1);
-
-        // FIXIT-L make sure pulled from server conf when used if not overridden
-        //FTPCmd->max_param_len = ServerConf->def_max_param_len;
-
-        ftp_cmd_lookup_add(ServerConf->cmd_lookup, cmd,
-            strlen(cmd), FTPCmd);
-    }
-    if ( fc->flags & CMD_DIR )
-        FTPCmd->dir_response = fc->number;
-
-    if ( fc->flags & CMD_LEN )
-    {
-        FTPCmd->max_param_len = fc->number;
-        FTPCmd->max_param_len_overridden = 1;
-    }
-    if ( fc->flags & CMD_DATA )
-        FTPCmd->data_chan_cmd = true;
-
-    if ( fc->flags & CMD_REST )
-        FTPCmd->data_rest_cmd = true;
-
-    if ( fc->flags & CMD_XFER )
-        FTPCmd->data_xfer_cmd = true;
-
-    if ( fc->flags & CMD_PUT )
-        FTPCmd->file_put_cmd = true;
-
-    if ( fc->flags & CMD_GET )
-        FTPCmd->file_get_cmd = true;
-
-    if ( fc->flags & CMD_CHECK )
-    {
-        FTP_PARAM_FMT* Fmt = FTPCmd->param_format;
-        if (Fmt)
-        {
-            ResetStringFormat(Fmt);
-        }
-        else
-        {
-            Fmt = (FTP_PARAM_FMT*)snort_calloc(sizeof(FTP_PARAM_FMT));
-            Fmt->type = e_head;
-            FTPCmd->param_format = Fmt;
-
-            Fmt = (FTP_PARAM_FMT*)snort_calloc(sizeof(FTP_PARAM_FMT));
-            Fmt->type = e_strformat;
-            FTPCmd->param_format->next_param_fmt = Fmt;
-            Fmt->prev_param_fmt = FTPCmd->param_format;
-        }
-        FTPCmd->check_validity = true;
-    }
-    if ( fc->flags & CMD_VALID )
-    {
-        char err[1024];
-        ProcessFTPCmdValidity(
-            ServerConf, cmd, fc->format.c_str(), err, sizeof(err));
-    }
-    if ( fc->flags & CMD_ENCR )
-        FTPCmd->encr_cmd = true;
-
-    if ( fc->flags & CMD_LOGIN )
-        FTPCmd->login_cmd = true;
-
-    return 0;
 }
 
 //-------------------------------------------------------------------------
@@ -342,6 +214,7 @@ FtpServer::~FtpServer ()
 
 bool FtpServer::configure(SnortConfig* sc)
 {
+    ftp_data_snort_protocol_id = sc->proto_ref->add("ftp-data");
     return !FTPCheckConfigs(sc, ftp_server);
 }
 
@@ -373,7 +246,7 @@ FTP_CLIENT_PROTO_CONF* get_ftp_client(Packet* p)
     FtpClient* client = (FtpClient*)p->flow->data;
     if ( !client )
     {
-        client = (FtpClient*)InspectorManager::get_inspector(client_key);
+        client = (FtpClient*)InspectorManager::get_inspector(FTP_CLIENT_NAME);
         assert(client);
         p->flow->set_data(client);
     }
@@ -427,13 +300,13 @@ static const InspectApi fc_api =
         0,
         API_RESERVED,
         API_OPTIONS,
-        client_key,
+        FTP_CLIENT_NAME,
         client_help,
         fc_mod_ctor,
         mod_dtor
     },
     IT_PASSIVE,
-    (uint16_t)PktType::NONE,
+    PROTO_BIT__NONE,
     nullptr, // buffers
     "ftp",
     nullptr, // init,
@@ -453,7 +326,6 @@ static Module* fs_mod_ctor()
 
 static void fs_init()
 {
-    ftp_data_app_id = SnortConfig::get_conf()->proto_ref->add("ftp-data");
     FtpFlowData::init();
 }
 
@@ -461,10 +333,6 @@ static Inspector* fs_ctor(Module* mod)
 {
     FtpServerModule* fsm = (FtpServerModule*)mod;
     FTP_SERVER_PROTO_CONF* conf = fsm->get_data();
-    unsigned i = 0;
-
-    while ( const FtpCmd* cmd = fsm->get_cmd(i++) )
-        ProcessFTPDataChanCmdsList(conf, cmd);
 
     return new FtpServer(conf);
 }
@@ -483,13 +351,13 @@ static const InspectApi fs_api =
         0,
         API_RESERVED,
         API_OPTIONS,
-        server_key,
+        FTP_SERVER_NAME,
         server_help,
         fs_mod_ctor,
         mod_dtor
     },
     IT_SERVICE,
-    (uint16_t)PktType::PDU,
+    PROTO_BIT__PDU,
     nullptr, // buffers
     "ftp",
     fs_init,

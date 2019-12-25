@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -25,9 +25,11 @@
 
 #include <sstream>
 
+#include "http_enum.h"
 #include "log/messages.h"
 
 using namespace HttpEnums;
+using namespace snort;
 
 void UriNormalizer::normalize(const Field& input, Field& result, bool do_path, uint8_t* buffer,
     const HttpParaList::UriParam& uri_param, HttpInfractions* infractions, HttpEventGen* events)

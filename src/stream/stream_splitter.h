@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -22,7 +22,10 @@
 
 #include "main/snort_types.h"
 
+namespace snort
+{
 class Flow;
+struct Packet;
 
 struct StreamBuffer
 {
@@ -52,7 +55,7 @@ public:
     // (scan (reassemble)*)* finish (reassemble)*
 
     virtual Status scan(
-        Flow*,
+        Packet*,
         const uint8_t* data,   // in order segment data as it arrives
         uint32_t len,          // length of data
         uint32_t flags,        // packet flags indicating direction of data
@@ -62,6 +65,7 @@ public:
     // finish indicates end of scanning
     // return false to discard any unflushed data
     virtual bool finish(Flow*) { return true; }
+    virtual bool init_partial_flush(Flow*) { return false; }
 
     // the last call to reassemble() will be made with len == 0 if
     // finish() returned true as an opportunity for a final flush
@@ -78,9 +82,6 @@ public:
     virtual bool is_paf() { return false; }
     virtual unsigned max(Flow*);
 
-    // FIXIT-L reset is not currently used and may not be needed at all.
-    //         determine if this is so and remove if possible
-    virtual void reset() { }
     virtual void update() { }
 
     unsigned get_max_pdu() { return max_pdu; }
@@ -104,9 +105,11 @@ class AtomSplitter : public StreamSplitter
 public:
     AtomSplitter(bool, uint16_t size = 0);
 
-    Status scan(Flow*, const uint8_t*, uint32_t, uint32_t, uint32_t*) override;
-    void reset() override;
+    Status scan(Packet*, const uint8_t*, uint32_t, uint32_t, uint32_t*) override;
     void update() override;
+
+private:
+    void reset();
 
 private:
     uint16_t base;
@@ -118,12 +121,12 @@ private:
 //-------------------------------------------------------------------------
 // length of given segment splitter (pass-thru)
 
-class LogSplitter : public StreamSplitter
+class SO_PUBLIC LogSplitter : public StreamSplitter
 {
 public:
     LogSplitter(bool);
 
-    Status scan(Flow*, const uint8_t*, uint32_t, uint32_t, uint32_t*) override;
+    Status scan(Packet*, const uint8_t*, uint32_t, uint32_t, uint32_t*) override;
 };
 
 //-------------------------------------------------------------------------
@@ -134,16 +137,18 @@ class StopAndWaitSplitter : public StreamSplitter
 public:
     StopAndWaitSplitter(bool b) : StreamSplitter(b) { }
 
-    Status scan(Flow*, const uint8_t*, uint32_t, uint32_t, uint32_t*) override;
+    Status scan(Packet*, const uint8_t*, uint32_t, uint32_t, uint32_t*) override;
 
+private:
     bool saw_data()
     { return byte_count > 0; }
 
-    void reset() override
+    void reset()
     { byte_count = 0; }
 
 private:
     unsigned byte_count = 0;
 };
+}
 #endif
 

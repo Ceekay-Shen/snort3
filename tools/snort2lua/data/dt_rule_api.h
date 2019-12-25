@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -20,15 +20,18 @@
 #ifndef DATA_DT_RULE_API_H
 #define DATA_DT_RULE_API_H
 
-#include <string>
 #include <iostream>
-#include <vector>
+#include <set>
 #include <stack>
+#include <string>
+#include <vector>
 
 class Rule;
 class RuleOption;
 class Comments;
 class RuleApi;
+
+using GidSid = std::pair<std::string, std::string>;
 
 // FIXIT-L simplify this API. Several options functions are no longer necessary
 
@@ -44,6 +47,7 @@ public:
     std::size_t num_errors() const;
     bool empty() const;
     void reset_state();
+    void clear();
 
     friend std::ostream& operator<<(std::ostream&, const RuleApi&);
     void print_rules(std::ostream&, bool in_rule_file);
@@ -63,13 +67,22 @@ public:
     void update_rule_action(const std::string& new_type);
     void add_option(const std::string& keyword);
     void add_option(const std::string& keyword, const std::string& val);
+    std::string get_option(const std::string& keyword);
+    void update_option(const std::string& keyword, const std::string& val);
     void add_suboption(const std::string& keyword);
     void add_suboption(const std::string& keyword, const std::string& val);
+    void reset_sticky(void);
     void set_curr_options_buffer(const std::string& buffer, bool add_option=false);
+    void set_rule_old_action(const std::string&);
+    std::string& get_rule_old_action();
 
     void add_comment(const std::string& comment);
     void make_rule_a_comment();
+    bool enable_addr_anomaly_detection();
     void bad_rule(std::istringstream& stream, const std::string& bad_option);
+    void old_http_rule();
+    bool is_old_http_rule();
+    void resolve_pcre_buffer_options();
 
 private:
     static std::size_t error_count;
@@ -79,6 +92,7 @@ private:
     Comments* bad_rules;
     Rule* curr_rule;
     bool curr_data_bad;
+    static std::set<GidSid> address_anomaly_rules;
 
     // Create a new rule object.
     void begin_rule();

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2004-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -31,11 +31,12 @@
 #include "stream/stream.h"
 #include "utils/util.h"
 
+#include "ft_main.h"
 #include "ftp_module.h"
 #include "ftpp_si.h"
 #include "ftpdata_splitter.h"
 
-#define s_name "ftp_data"
+using namespace snort;
 
 #define s_help \
     "FTP data channel handler"
@@ -58,7 +59,7 @@ static void FTPDataProcess(
 
     if (data_ssn->packet_flags & FTPDATA_FLG_REST)
     {
-        Active::block_again();
+        p->active->block_again();
         return;
     }
 
@@ -74,10 +75,10 @@ static void FTPDataProcess(
     else
         file_flows->set_sig_gen_state( false );
 
-    status = file_flows->file_process(file_data, data_length,
-        data_ssn->position, data_ssn->direction);
+    status = file_flows->file_process(p, file_data, data_length,
+        data_ssn->position, data_ssn->direction, data_ssn->path_hash);
 
-    if (Active::packet_force_dropped())
+    if ( p->active->packet_force_dropped() )
     {
         FtpFlowData* fd = (FtpFlowData*)Stream::get_flow_data(
                             &data_ssn->ftp_key, FtpFlowData::inspector_id);
@@ -132,12 +133,8 @@ static int SnortFTPData(Packet* p)
 
         if (!PROTO_IS_FTP(ftp_ssn))
         {
-            DebugMessage(DEBUG_FTPTELNET,
-                "FTP-DATA Invalid FTP_SESSION retrieved during lookup\n");
-
             if (data_ssn->data_chan)
                 p->flow->set_ignore_direction(SSN_DIR_BOTH);
-
 
             return -2;
         }
@@ -160,7 +157,9 @@ static int SnortFTPData(Packet* p)
             data_ssn->file_xfer_info = ftp_ssn->file_xfer_info;
             ftp_ssn->file_xfer_info  = 0;
             data_ssn->filename  = ftp_ssn->filename;
+            data_ssn->path_hash = ftp_ssn->path_hash;
             ftp_ssn->filename   = nullptr;
+            ftp_ssn->path_hash = 0;
             break;
         }
     }
@@ -208,9 +207,8 @@ FtpDataFlowData::~FtpDataFlowData()
 
 void FtpDataFlowData::handle_expected(Packet* p)
 {
-    // FIXIT-M X This is an ugly, ugly hack, but it's the way Wizard is doing it
     if (!p->flow->service)
-        p->flow->service = fd_svc_name;
+        p->flow->set_service(p, fd_svc_name);
 }
 
 void FtpDataFlowData::handle_eof(Packet* p)
@@ -241,7 +239,7 @@ public:
 class FtpDataModule : public Module
 {
 public:
-    FtpDataModule() : Module(s_name, s_help) { }
+    FtpDataModule() : Module(FTP_DATA_NAME, s_help) { }
 
     const PegInfo* get_pegs() const override;
     PegCount* get_counts() const override;
@@ -317,13 +315,13 @@ const InspectApi fd_api =
         0,
         API_RESERVED,
         API_OPTIONS,
-        s_name,
+        FTP_DATA_NAME,
         s_help,
         mod_ctor,
         mod_dtor
     },
     IT_SERVICE,
-    (uint16_t)PktType::PDU,
+    PROTO_BIT__PDU,
     nullptr, // buffers
     fd_svc_name,
     fd_init,

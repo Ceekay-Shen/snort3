@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -29,6 +29,8 @@
 #include "icmp_module.h"
 #include "icmp_session.h"
 
+using namespace snort;
+
 //-------------------------------------------------------------------------
 // helpers
 //-------------------------------------------------------------------------
@@ -57,7 +59,7 @@ public:
     void show(SnortConfig*) override;
     NORETURN_ASSERT void eval(Packet*) override;
 
-private:
+public:
     StreamIcmpConfig* config;
 };
 
@@ -80,6 +82,12 @@ NORETURN_ASSERT void StreamIcmp::eval(Packet*)
 {
     // session::process() instead
     assert(false);
+}
+
+StreamIcmpConfig* get_icmp_cfg(Inspector* ins)
+{
+    assert(ins);
+    return ((StreamIcmp*)ins)->config;
 }
 
 //-------------------------------------------------------------------------
@@ -131,7 +139,7 @@ static const InspectApi icmp_api =
         mod_dtor
     },
     IT_STREAM,
-    (unsigned)PktType::ICMP,
+    PROTO_BIT__ICMP,
     nullptr, // buffers
     nullptr, // service
     nullptr, // init

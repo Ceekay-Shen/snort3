@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2013-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -38,8 +38,11 @@
 
 #include "file_api.h"
 
-class FileInfo;
 class FileMemPool;
+
+namespace snort
+{
+class FileInfo;
 
 struct FileCaptureBlock
 {
@@ -47,7 +50,7 @@ struct FileCaptureBlock
     FileCaptureBlock* next;  /* next block of file data */
 };
 
-class FileCapture
+class SO_PUBLIC FileCapture
 {
 public:
     FileCapture(int64_t capture_min_size, int64_t capture_max_size);
@@ -62,7 +65,7 @@ public:
         FilePosition pos);
 
     // Preserve the file in memory until it is released
-    FileCaptureState reserve_file(const FileInfo*);
+    FileCaptureState reserve_file(const snort::FileInfo*);
 
     // Get the file that is reserved in memory, this should be called repeatedly
     // until nullptr is returned to get the full file
@@ -88,7 +91,11 @@ public:
 
     static int64_t get_block_size() { return capture_block_size; }
 
-    FileInfo* get_file_info() { return file_info; }
+    snort::FileInfo* get_file_info() { return file_info; }
+
+    int64_t get_max_file_capture_size() { return capture_max_size; }
+    int64_t get_file_capture_size() { return capture_size; }
+    void get_file_reset() { current_block = head; }
 
 private:
 
@@ -114,10 +121,11 @@ private:
     const uint8_t* current_data;  /*current file data*/
     uint32_t current_data_len;
     FileCaptureState capture_state;
-    FileInfo* file_info = nullptr;
+    snort::FileInfo* file_info = nullptr;
     int64_t capture_min_size;
     int64_t capture_max_size;
 };
+}
 
 #endif
 

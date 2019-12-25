@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -23,6 +23,9 @@
 
 #include "http_msg_section.h"
 
+#include "http_context_data.h"
+#include "http_common.h"
+#include "http_enum.h"
 #include "http_msg_body.h"
 #include "http_msg_head_shared.h"
 #include "http_msg_header.h"
@@ -32,30 +35,27 @@
 #include "http_test_manager.h"
 #include "stream/flush_bucket.h"
 
+using namespace HttpCommon;
 using namespace HttpEnums;
+using namespace snort;
 
 HttpMsgSection::HttpMsgSection(const uint8_t* buffer, const uint16_t buf_size,
        HttpFlowData* session_data_, SourceId source_id_, bool buf_owner, Flow* flow_,
        const HttpParaList* params_) :
     msg_text(buf_size, buffer, buf_owner),
     session_data(session_data_),
-    source_id(source_id_),
     flow(flow_),
-    trans_num(session_data->expected_trans_num[source_id]),
     params(params_),
-    transaction(HttpTransaction::attach_my_transaction(session_data, source_id)),
-    tcp_close(session_data->tcp_close[source_id]),
+    transaction(HttpTransaction::attach_my_transaction(session_data, source_id_)),
+    trans_num(session_data->expected_trans_num[source_id_]),
+    status_code_num((source_id_ == SRC_SERVER) ? session_data->status_code_num : STAT_NOT_PRESENT),
+    source_id(source_id_),
     version_id(session_data->version_id[source_id]),
     method_id((source_id == SRC_CLIENT) ? session_data->method_id : METH__NOT_PRESENT),
-    status_code_num((source_id == SRC_SERVER) ? session_data->status_code_num : STAT_NOT_PRESENT)
+    tcp_close(session_data->tcp_close[source_id])
 {
     assert((source_id == SRC_CLIENT) || (source_id == SRC_SERVER));
-}
-
-bool HttpMsgSection::detection_required() const
-{
-    return ((msg_text.length() > 0) && (get_inspection_section() != IS_NONE)) ||
-           (get_inspection_section() == IS_DETECTION);
+    HttpContextData::save_snapshot(this);
 }
 
 void HttpMsgSection::add_infraction(int infraction)
@@ -70,34 +70,48 @@ void HttpMsgSection::create_event(int sid)
 
 void HttpMsgSection::update_depth() const
 {
-    if ((session_data->file_depth_remaining[source_id] <= 0) &&
-        (session_data->detect_depth_remaining[source_id] <= 0))
+    const int64_t& file_depth_remaining = session_data->file_depth_remaining[source_id];
+    const int64_t& detect_depth_remaining = session_data->detect_depth_remaining[source_id];
+
+    if ((detect_depth_remaining <= 0) &&
+        (session_data->detection_status[source_id] == DET_ON))
     {
-        // Don't need any more of the body
-        session_data->section_size_target[source_id] = 0;
-        session_data->section_size_max[source_id] = 0;
+        session_data->detection_status[source_id] = DET_DEACTIVATING;
+    }
+
+    if (detect_depth_remaining <= 0)
+    {
+        if (file_depth_remaining <= 0)
+        {
+            // Don't need any more of the body
+            session_data->section_size_target[source_id] = 0;
+        }
+        else
+        {
+            // Just for file processing
+            session_data->section_size_target[source_id] = SnortConfig::get_conf()->max_pdu;
+            session_data->stretch_section_to_packet[source_id] = true;
+        }
         return;
     }
 
-    const int random_increment = FlushBucket::get_size() - 192;
-    assert((random_increment >= -64) && (random_increment <= 63));
+    const unsigned target_size = (session_data->compression[source_id] == CMP_NONE) ?
+        SnortConfig::get_conf()->max_pdu : GZIP_BLOCK_SIZE;
 
-    switch (session_data->compression[source_id])
+    if (detect_depth_remaining <= target_size)
     {
-    case CMP_NONE:
-      {
-        unsigned max_pdu = SnortConfig::get_conf()->max_pdu;
-        session_data->section_size_target[source_id] = max_pdu + random_increment;
-        session_data->section_size_max[source_id] = max_pdu + (max_pdu >> 1);
-        break;
-      }
-    case CMP_GZIP:
-    case CMP_DEFLATE:
-        session_data->section_size_target[source_id] = GZIP_BLOCK_SIZE + random_increment;
-        session_data->section_size_max[source_id] = FINAL_GZIP_BLOCK_SIZE;
-        break;
-    default:
-        assert(false);
+        // Go to detection as soon as detect depth is reached
+        session_data->section_size_target[source_id] = detect_depth_remaining;
+        session_data->stretch_section_to_packet[source_id] = true;
+    }
+    else
+    {
+        // Randomize the split point a little bit to make it harder to evade detection.
+        // FlushBucket provides pseudo random numbers in the range 128 to 255.
+        const int random_increment = FlushBucket::get_size() - 192;
+        assert((random_increment >= -64) && (random_increment <= 63));
+        session_data->section_size_target[source_id] = target_size + random_increment;
+        session_data->stretch_section_to_packet[source_id] = false;
     }
 }
 
@@ -127,81 +141,71 @@ const Field& HttpMsgSection::get_classic_buffer(unsigned id, uint64_t sub_id, ui
       {
         if (source_id != SRC_CLIENT)
             return Field::FIELD_NULL;
-        HttpMsgBody* body = transaction->get_body();
-        return (body != nullptr) ? body->get_classic_client_body() : Field::FIELD_NULL;
+        return (get_body() != nullptr) ? get_body()->get_classic_client_body() : Field::FIELD_NULL;
       }
     case HTTP_BUFFER_COOKIE:
     case HTTP_BUFFER_RAW_COOKIE:
       {
-        HttpMsgHeader* header = transaction->get_header(buffer_side);
-        if (header == nullptr)
+        if (header[buffer_side] == nullptr)
             return Field::FIELD_NULL;
-        return (id == HTTP_BUFFER_COOKIE) ? header->get_classic_norm_cookie() :
-            header->get_classic_raw_cookie();
+        return (id == HTTP_BUFFER_COOKIE) ? header[buffer_side]->get_classic_norm_cookie() :
+            header[buffer_side]->get_classic_raw_cookie();
       }
     case HTTP_BUFFER_HEADER:
     case HTTP_BUFFER_TRAILER:
       {
         // FIXIT-L Someday want to be able to return field name or raw field value
-        HttpMsgHeadShared* const header = (id == HTTP_BUFFER_HEADER) ?
-            (HttpMsgHeadShared*)transaction->get_header(buffer_side) :
-            (HttpMsgHeadShared*)transaction->get_trailer(buffer_side);
-        if (header == nullptr)
+        HttpMsgHeadShared* const head = (id == HTTP_BUFFER_HEADER) ?
+            (HttpMsgHeadShared*)header[buffer_side] : (HttpMsgHeadShared*)trailer[buffer_side];
+        if (head == nullptr)
             return Field::FIELD_NULL;
         if (sub_id == 0)
-            return header->get_classic_norm_header();
-        return header->get_header_value_norm((HeaderId)sub_id);
+            return head->get_classic_norm_header();
+        return head->get_header_value_norm((HeaderId)sub_id);
       }
     case HTTP_BUFFER_METHOD:
       {
-        HttpMsgRequest* request = transaction->get_request();
         return (request != nullptr) ? request->get_method() : Field::FIELD_NULL;
       }
     case HTTP_BUFFER_RAW_BODY:
       {
-        HttpMsgBody* body = transaction->get_body();
-        return (body != nullptr) ? body->msg_text : Field::FIELD_NULL;
+        return (get_body() != nullptr) ? get_body()->msg_text : Field::FIELD_NULL;
       }
     case HTTP_BUFFER_RAW_HEADER:
       {
-        HttpMsgHeader* header = transaction->get_header(buffer_side);
-        return (header != nullptr) ? header->get_classic_raw_header() : Field::FIELD_NULL;
+        return (header[buffer_side] != nullptr) ? header[buffer_side]->get_classic_raw_header() :
+            Field::FIELD_NULL;
       }
     case HTTP_BUFFER_RAW_REQUEST:
       {
-        HttpMsgRequest* request = transaction->get_request();
         return (request != nullptr) ? request->msg_text : Field::FIELD_NULL;
       }
     case HTTP_BUFFER_RAW_STATUS:
       {
-        HttpMsgStatus* status = transaction->get_status();
         return (status != nullptr) ? status->msg_text : Field::FIELD_NULL;
       }
     case HTTP_BUFFER_RAW_TRAILER:
       {
-        HttpMsgTrailer* trailer = transaction->get_trailer(buffer_side);
-        return (trailer != nullptr) ? trailer->get_classic_raw_header() : Field::FIELD_NULL;
+        return (trailer[buffer_side] != nullptr) ? trailer[buffer_side]->get_classic_raw_header() :
+            Field::FIELD_NULL;
       }
     case HTTP_BUFFER_STAT_CODE:
       {
-        HttpMsgStatus* status = transaction->get_status();
         return (status != nullptr) ? status->get_status_code() : Field::FIELD_NULL;
       }
     case HTTP_BUFFER_STAT_MSG:
       {
-        HttpMsgStatus* status = transaction->get_status();
         return (status != nullptr) ? status->get_reason_phrase() : Field::FIELD_NULL;
       }
     case HTTP_BUFFER_TRUE_IP:
       {
-        HttpMsgHeader* header = transaction->get_header(SRC_CLIENT);
-        return (header != nullptr) ? header->get_true_ip() : Field::FIELD_NULL;
+        return (header[SRC_CLIENT] != nullptr) ? header[SRC_CLIENT]->get_true_ip() :
+            Field::FIELD_NULL;
       }
     case HTTP_BUFFER_URI:
     case HTTP_BUFFER_RAW_URI:
       {
         const bool raw = (id == HTTP_BUFFER_RAW_URI);
-        HttpMsgRequest* request = transaction->get_request();
         if (request == nullptr)
             return Field::FIELD_NULL;
         if (sub_id == 0)
@@ -230,13 +234,31 @@ const Field& HttpMsgSection::get_classic_buffer(unsigned id, uint64_t sub_id, ui
     case HTTP_BUFFER_VERSION:
       {
         HttpMsgStart* start = (buffer_side == SRC_CLIENT) ?
-            (HttpMsgStart*)transaction->get_request() : (HttpMsgStart*)transaction->get_status();
+            (HttpMsgStart*)request : (HttpMsgStart*)status;
         return (start != nullptr) ? start->get_version() : Field::FIELD_NULL;
       }
     default:
         assert(false);
         return Field::FIELD_NULL;
     }
+}
+
+void HttpMsgSection::get_related_sections()
+{
+    // When a message section is created these relationships become fixed so we make copies for
+    // future reference.
+    request = transaction->get_request();
+    status = transaction->get_status();
+    header[SRC_CLIENT] = transaction->get_header(SRC_CLIENT);
+    header[SRC_SERVER] = transaction->get_header(SRC_SERVER);
+    trailer[SRC_CLIENT] = transaction->get_trailer(SRC_CLIENT);
+    trailer[SRC_SERVER] = transaction->get_trailer(SRC_SERVER);
+}
+
+void HttpMsgSection::clear()
+{
+    transaction->clear_section();
+    cleared = true;
 }
 
 #ifdef REG_TEST
@@ -249,10 +271,11 @@ void HttpMsgSection::print_section_title(FILE* output, const char* title) const
 
 void HttpMsgSection::print_section_wrapup(FILE* output) const
 {
-    fprintf(output, "Infractions: %016" PRIx64 " %016" PRIx64 ", Events: %016" PRIx64 " %016"
+    fprintf(output, "Infractions: %016" PRIx64 " %016" PRIx64 ", Events: %016" PRIx64 " %016" PRIx64 " %016"
         PRIx64 ", TCP Close: %s\n\n",
         transaction->get_infractions(source_id)->get_raw2(),
         transaction->get_infractions(source_id)->get_raw(),
+        transaction->get_events(source_id)->get_raw3(),
         transaction->get_events(source_id)->get_raw2(),
         transaction->get_events(source_id)->get_raw(),
         tcp_close ? "True" : "False");

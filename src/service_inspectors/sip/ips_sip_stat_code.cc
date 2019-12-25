@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2011-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -34,6 +34,8 @@
 #include "protocols/packet.h"
 
 #include "sip.h"
+
+using namespace snort;
 
 //-------------------------------------------------------------------------
 // sip_stat_code
@@ -88,9 +90,9 @@ bool SipStatCodeOption::operator==(const IpsOption& ips) const
 
 IpsOption::EvalStatus SipStatCodeOption::eval(Cursor&, Packet* p)
 {
-    Profile profile(sipStatCodeRuleOptionPerfStats);
+    RuleProfile profile(sipStatCodeRuleOptionPerfStats);
 
-    if ((!p->is_tcp() && !p->is_udp()) || !p->flow || !p->dsize)
+    if ((!p->has_tcp_data() && !p->is_udp()) || !p->flow || !p->dsize)
         return NO_MATCH;
 
     SIPData* sd = get_sip_session_data(p->flow);
@@ -126,7 +128,7 @@ IpsOption::EvalStatus SipStatCodeOption::eval(Cursor&, Packet* p)
 static const Parameter s_params[] =
 {
     { "*code", Parameter::PT_INT, "1:999", nullptr,
-      "stat code" },
+      "status code" },
 
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
 };
@@ -164,15 +166,14 @@ bool SipStatCodeModule::set(const char*, Value& v, SnortConfig*)
     {
         if ( v.is("*code") )
         {
-            unsigned long statCode = v.get_long();
+            uint16_t statCode = v.get_uint16();
 
-            if ((statCode > MAX_STAT_CODE) || ((statCode > NUM_OF_RESPONSE_TYPES - 1) &&
-                (statCode < MIN_STAT_CODE)))
+            if ( (statCode >= NUM_OF_RESPONSE_TYPES) && (statCode < MIN_STAT_CODE) )
             {
-                ParseError("Status code specified is not a 3 digit number or 1");
+                ParseError("Status code specified is not a single digit or a 3 digit number");
                 return false;
             }
-            ssod.stat_codes[num_tokens] = (uint16_t)statCode;
+            ssod.stat_codes[num_tokens] = statCode;
             num_tokens++;
         }
         else

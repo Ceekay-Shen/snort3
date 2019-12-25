@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2003-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -44,19 +44,18 @@ public:
 
     void* find(const void* key);
     void* get(const void* key, bool *new_node = nullptr);
-
-    bool remove(const void* key);
-    bool remove();
+    bool release(const void* key);
+    bool release();
+    void* remove(const void* key);
 
     inline unsigned get_count() { return count; }
-
     int set_keyops(
         unsigned (* hash_fcn)(HashFnc* p, const unsigned char* d, int n),
         int (* keycmp_fcn)(const void* s1, const void* s2, size_t n));
 
 private:
     ZHashNode* get_free_node();
-    ZHashNode* find_node_row(const void*, int*);
+    ZHashNode* find_node_row(const void*, int&);
 
     void glink_node(ZHashNode*);
     void gunlink_node(ZHashNode*);
@@ -67,14 +66,13 @@ private:
     void delete_free_list();
     void save_free_node(ZHashNode*);
 
-    bool remove(ZHashNode*);
+    bool move_to_free_list(ZHashNode*);
     void move_to_front(ZHashNode*);
     int nearest_powerof2(int nrows);
 
 private:
     HashFnc* hashfcn;
     int keysize;
-
     unsigned nrows;
     unsigned count;
 
@@ -82,7 +80,8 @@ private:
     unsigned find_success;
 
     ZHashNode** table;
-    ZHashNode* ghead, * gtail;
+    ZHashNode* ghead;
+    ZHashNode* gtail;
     ZHashNode* fhead;
     ZHashNode* cursor;
 };

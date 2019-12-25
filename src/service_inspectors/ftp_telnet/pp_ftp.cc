@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2004-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -42,6 +42,7 @@
 
 #include "detection/detection_engine.h"
 #include "detection/detection_util.h"
+#include "hash/hashfcn.h"
 #include "file_api/file_service.h"
 #include "protocols/packet.h"
 #include "stream/stream.h"
@@ -54,11 +55,11 @@
 #include "ftpp_return_codes.h"
 #include "pp_telnet.h"
 
+using namespace snort;
+
 #ifndef MAXHOSTNAMELEN /* Why doesn't Windows define this? */
 #define MAXHOSTNAMELEN 256
 #endif
-
-static THREAD_LOCAL DataBuffer DecodeBuffer;
 
 /*
  * Used to keep track of pipelined commands and the last one
@@ -918,39 +919,45 @@ static int check_ftp_param_validity(Packet* p,
  */
 int initialize_ftp(FTP_SESSION* session, Packet* p, int iMode)
 {
-    int iRet;
     const unsigned char* read_ptr = p->data;
     FTP_CLIENT_REQ* req;
-    char ignoreTelnetErase = FTPP_APPLY_TNC_ERASE_CMDS;
 
-    /* Normalize this packet ala telnet */
-    if (((iMode == FTPP_SI_CLIENT_MODE) &&
-        session->client_conf->ignore_telnet_erase_cmds) ||
-        ((iMode == FTPP_SI_SERVER_MODE) &&
-        session->server_conf->ignore_telnet_erase_cmds) )
-        ignoreTelnetErase = FTPP_IGNORE_TNC_ERASE_CMDS;
-
-    iRet = normalize_telnet(nullptr, p, iMode, ignoreTelnetErase);
-
-    if (iRet != FTPP_SUCCESS && iRet != FTPP_NORMALIZED)
+    if ( session->encr_state == NO_STATE )
     {
-        if (iRet == FTPP_ALERT)
-            DetectionEngine::queue_event(GID_FTP, FTP_EVASIVE_TELNET_CMD);
+        int iRet;
+        char ignoreTelnetErase = FTPP_APPLY_TNC_ERASE_CMDS;
+        /* Normalize this packet ala telnet */
+        if (((iMode == FTPP_SI_CLIENT_MODE) &&
+            session->client_conf->ignore_telnet_erase_cmds) ||
+            ((iMode == FTPP_SI_SERVER_MODE) &&
+            session->server_conf->ignore_telnet_erase_cmds) )
+            ignoreTelnetErase = FTPP_IGNORE_TNC_ERASE_CMDS;
 
-        return iRet;
-    }
+        DataBuffer& buf = DetectionEngine::get_alt_buffer(p);
 
-    if ( DecodeBuffer.len )
-    {
-        /* Normalized data will always be in decode buffer */
-        if ( (iMode == FTPP_SI_CLIENT_MODE) ||
-            (iMode == FTPP_SI_SERVER_MODE) )
+        iRet = normalize_telnet(nullptr, p, buf, iMode, ignoreTelnetErase, true);
+
+        if (iRet != FTPP_SUCCESS && iRet != FTPP_NORMALIZED)
         {
-            DetectionEngine::queue_event(GID_FTP, FTP_TELNET_CMD);
-            return FTPP_ALERT; /* Nothing else to do since we alerted */
+            if (iRet == FTPP_ALERT)
+                DetectionEngine::queue_event(GID_FTP, FTP_EVASIVE_TELNET_CMD);
+
+            return iRet;
         }
 
-        read_ptr = DecodeBuffer.data;
+
+        if ( buf.len )
+        {
+            /* Normalized data will always be in decode buffer */
+            if ( (iMode == FTPP_SI_CLIENT_MODE) ||
+                (iMode == FTPP_SI_SERVER_MODE) )
+            {
+                DetectionEngine::queue_event(GID_FTP, FTP_TELNET_CMD);
+                return FTPP_ALERT; /* Nothing else to do since we alerted */
+            }
+
+            read_ptr = buf.data;
+        }
     }
 
     if (iMode == FTPP_SI_CLIENT_MODE)
@@ -1052,13 +1059,13 @@ static int do_stateful_checks(FTP_SESSION* session, Packet* p,
                         if (iRet == FTPP_SUCCESS)
                         {
                             if (!ipAddr.is_set())
-                                session->serverIP.set(*p->ptrs.ip_api.get_src());
+                                session->serverIP = *p->ptrs.ip_api.get_src();
                             else
                             {
                                 session->serverIP = ipAddr;
                             }
                             session->serverPort = port;
-                            session->clientIP.set(*p->ptrs.ip_api.get_dst());
+                            session->clientIP = *p->ptrs.ip_api.get_dst();
                             session->clientPort = 0;
 
                             if ((FileService::get_max_file_depth() > 0) ||
@@ -1075,11 +1082,11 @@ static int do_stateful_checks(FTP_SESSION* session, Packet* p,
                                     session->datassn = ftpdata;
 
                                 /* Call into Streams to mark data channel as ftp-data */
-                                result = Stream::set_application_protocol_id_expected(
+                                result = Stream::set_snort_protocol_id_expected(
                                     p, PktType::TCP, IpProtocol::TCP,
                                     &session->clientIP, session->clientPort,
                                     &session->serverIP, session->serverPort,
-                                    ftp_data_app_id, fd);
+                                    ftp_data_snort_protocol_id, fd);
 
                                 if (result < 0)
                                 {
@@ -1095,7 +1102,7 @@ static int do_stateful_checks(FTP_SESSION* session, Packet* p,
                                     p, PktType::TCP, IpProtocol::TCP,
                                     &session->clientIP, session->clientPort,
                                     &session->serverIP, session->serverPort,
-                                    SSN_DIR_BOTH, FtpDataFlowData::inspector_id);
+                                    SSN_DIR_BOTH, (new FtpDataFlowData(p)));
                             }
                         }
                     }
@@ -1129,7 +1136,7 @@ static int do_stateful_checks(FTP_SESSION* session, Packet* p,
                         /* Server is listening/sending from its own IP,
                          * FTP Port -1 */
                         /* Client IP, Port specified via PORT command */
-                        session->serverIP.set(*p->ptrs.ip_api.get_src());
+                        session->serverIP = *p->ptrs.ip_api.get_src();
 
                         /* Can't necessarily guarantee this, especially
                          * in the case of a proxy'd connection where the
@@ -1153,11 +1160,11 @@ static int do_stateful_checks(FTP_SESSION* session, Packet* p,
                                 session->datassn = ftpdata;
 
                             /* Call into Streams to mark data channel as ftp-data */
-                            result = Stream::set_application_protocol_id_expected(
+                            result = Stream::set_snort_protocol_id_expected(
                                 p, PktType::TCP, IpProtocol::TCP,
                                 &session->clientIP, session->clientPort,
                                 &session->serverIP, session->serverPort,
-                                ftp_data_app_id, fd);
+                                ftp_data_snort_protocol_id, fd);
 
                             if (result < 0)
                             {
@@ -1173,7 +1180,7 @@ static int do_stateful_checks(FTP_SESSION* session, Packet* p,
                                 p, PktType::TCP, IpProtocol::TCP,
                                 &session->clientIP, session->clientPort,
                                 &session->serverIP, session->serverPort,
-                                SSN_DIR_BOTH, FtpDataFlowData::inspector_id);
+                                SSN_DIR_BOTH, (new FtpDataFlowData(p)));
                         }
                     }
                 }
@@ -1239,7 +1246,6 @@ static int do_stateful_checks(FTP_SESSION* session, Packet* p,
                 /* Could check that response msg includes "TLS" */
                 session->encr_state = AUTH_TLS_ENCRYPTED;
                 DetectionEngine::queue_event(GID_FTP, FTP_ENCRYPTED);
-                DebugMessage(DEBUG_FTPTELNET, "FTP stream is now TLS encrypted\n");
             }
             break;
         case AUTH_SSL_CMD_ISSUED:
@@ -1248,7 +1254,6 @@ static int do_stateful_checks(FTP_SESSION* session, Packet* p,
                 /* Could check that response msg includes "SSL" */
                 session->encr_state = AUTH_SSL_ENCRYPTED;
                 DetectionEngine::queue_event(GID_FTP, FTP_ENCRYPTED);
-                DebugMessage(DEBUG_FTPTELNET, "FTP stream is now SSL encrypted\n");
             }
             break;
         case AUTH_UNKNOWN_CMD_ISSUED:
@@ -1256,7 +1261,6 @@ static int do_stateful_checks(FTP_SESSION* session, Packet* p,
             {
                 session->encr_state = AUTH_UNKNOWN_ENCRYPTED;
                 DetectionEngine::queue_event(GID_FTP, FTP_ENCRYPTED);
-                DebugMessage(DEBUG_FTPTELNET, "FTP stream is now encrypted\n");
             }
             break;
         }
@@ -1306,8 +1310,9 @@ int check_ftp(FTP_SESSION* ftpssn, Packet* p, int iMode)
 
     const unsigned char* end = p->data + p->dsize;
 
-    if ( DecodeBuffer.len )
-        end = DecodeBuffer.data + DecodeBuffer.len;
+    const DataBuffer& buf = DetectionEngine::get_alt_buffer(p);
+    if ( buf.len )
+        end = buf.data + buf.len;
 
     if (iMode == FTPP_SI_CLIENT_MODE)
     {
@@ -1417,8 +1422,6 @@ int check_ftp(FTP_SESSION* ftpssn, Packet* p, int iMode)
                         /* Mark this session & packet as one to ignore */
                         Stream::stop_inspection(p->flow, p, SSN_DIR_BOTH, -1, 0);
                     }
-                    DebugMessage(DEBUG_FTPTELNET,
-                        "FTP client stream is now encrypted\n");
                 }
                 break;
             }
@@ -1496,8 +1499,6 @@ int check_ftp(FTP_SESSION* ftpssn, Packet* p, int iMode)
                         /* Mark this session & packet as one to ignore */
                         Stream::stop_inspection(p->flow, p, SSN_DIR_BOTH, -1, 0);
                     }
-                    DebugMessage(DEBUG_FTPTELNET,
-                        "FTP server stream is now encrypted\n");
                 }
                 break;
             }
@@ -1577,8 +1578,6 @@ int check_ftp(FTP_SESSION* ftpssn, Packet* p, int iMode)
                     }
                     else
                     {
-                        DebugMessage(DEBUG_FTPTELNET,
-                            "invalid FTP response code.");
                         ftpssn->server.response.state = FTP_RESPONSE_INV;
                     }
                 }
@@ -1605,13 +1604,9 @@ int check_ftp(FTP_SESSION* ftpssn, Packet* p, int iMode)
                 read_ptr++;
                 req->param_begin = nullptr;
                 req->param_end = nullptr;
+                req->param_size = 0;
             }
-            else if (!space && ftpssn->server.response.state == 0)
-            {
-                DebugMessage(DEBUG_FTPTELNET,
-                    "Missing LF from end of FTP command\n");
-            }
-            else
+            else if (space || ftpssn->server.response.state != 0)
             {
                 /* Now grab the command parameters/response message
                  * read_ptr < end already checked */
@@ -1619,6 +1614,7 @@ int check_ftp(FTP_SESSION* ftpssn, Packet* p, int iMode)
                 if ((read_ptr = (unsigned char*)memchr(read_ptr, CR, end - read_ptr)) == nullptr)
                     read_ptr = end;
                 req->param_end = (const char*)read_ptr;
+                req->param_size = req->param_end - req->param_begin;
                 read_ptr++;
 
                 if (read_ptr < end)
@@ -1628,14 +1624,7 @@ int check_ftp(FTP_SESSION* ftpssn, Packet* p, int iMode)
                      * the pipeline.
                      */
                     if (*read_ptr == LF)
-                    {
                         read_ptr++;
-                    }
-                    else
-                    {
-                        DebugMessage(DEBUG_FTPTELNET,
-                            "Missing LF from end of FTP command with params\n");
-                    }
                 }
             }
         }
@@ -1644,8 +1633,7 @@ int check_ftp(FTP_SESSION* ftpssn, Packet* p, int iMode)
             /* Nothing left --> no parameters/message.  Not even an LF */
             req->param_begin = nullptr;
             req->param_end = nullptr;
-            DebugMessage(DEBUG_FTPTELNET,
-                "Missing LF from end of FTP command sans params\n");
+            req->param_size = 0;
         }
 
         /* Set the pointer for the next request/response
@@ -1655,20 +1643,12 @@ int check_ftp(FTP_SESSION* ftpssn, Packet* p, int iMode)
         else
             req->pipeline_req = nullptr;
 
-        req->param_size = req->param_end - req->param_begin;
         switch (state)
         {
         case FTP_CMD_INV:
-            DebugFormat(DEBUG_FTPTELNET,
-                "Illegal FTP command found: %.*s\n",
-                req->cmd_size, req->cmd_begin);
             iRet = FTPP_ALERT;
             break;
         case FTP_RESPONSE: /* Response */
-            DebugFormat(DEBUG_FTPTELNET,
-                "FTP response: code: %.*s : M len %u : M %.*s\n",
-                req->cmd_size, req->cmd_begin, req->param_size,
-                req->param_size, req->param_begin);
             if ((ftpssn->client_conf->max_resp_len > 0) &&
                 (req->param_size > ftpssn->client_conf->max_resp_len))
             {
@@ -1684,10 +1664,6 @@ int check_ftp(FTP_SESSION* ftpssn, Packet* p, int iMode)
             }
             break;
         case FTP_RESPONSE_CONT: /* Response continued */
-            DebugFormat(DEBUG_FTPTELNET,
-                "FTP response: continuation of code: %d : M len %u : M %.*s\n",
-                ftpssn->server.response.state, req->param_size,
-                req->param_size, req->param_begin);
             if ((ftpssn->client_conf->max_resp_len > 0) &&
                 (req->param_size > ftpssn->client_conf->max_resp_len))
             {
@@ -1697,10 +1673,6 @@ int check_ftp(FTP_SESSION* ftpssn, Packet* p, int iMode)
             }
             break;
         case FTP_RESPONSE_ENDCONT: /* Continued response end */
-            DebugFormat(DEBUG_FTPTELNET,
-                "FTP response: final continue of code: %.*s : M len %u : "
-                "M %.*s\n", req->cmd_size, req->cmd_begin,
-                req->param_size, req->param_size, req->param_begin);
             if ((ftpssn->client_conf->max_resp_len > 0) &&
                 (req->param_size > ftpssn->client_conf->max_resp_len))
             {
@@ -1710,9 +1682,6 @@ int check_ftp(FTP_SESSION* ftpssn, Packet* p, int iMode)
             }
             break;
         default:
-            DebugFormat(DEBUG_FTPTELNET, "FTP command: CMD: %.*s : "
-                "P len %u : P %.*s\n", req->cmd_size, req->cmd_begin,
-                req->param_size, req->param_size, req->param_begin);
             if (CmdConf)
             {
                 unsigned max = CmdConf->max_param_len;
@@ -1723,9 +1692,6 @@ int check_ftp(FTP_SESSION* ftpssn, Packet* p, int iMode)
                 {
                     /* Alert on param length overrun */
                     DetectionEngine::queue_event(GID_FTP, FTP_PARAMETER_LENGTH_OVERFLOW);
-                    DebugFormat(DEBUG_FTPTELNET, "FTP command: %.*s"
-                        "parameter length overrun %u > %u \n",
-                        req->cmd_size, req->cmd_begin, req->param_size, max);
                     iRet = FTPP_ALERT;
                 }
 
@@ -1770,6 +1736,7 @@ int check_ftp(FTP_SESSION* ftpssn, Packet* p, int iMode)
                         {
                             snort_free(ftpssn->filename);
                             ftpssn->filename = nullptr;
+                            ftpssn->path_hash = 0;
                             ftpssn->file_xfer_info = FTPP_FILE_IGNORE;
                         }
 
@@ -1783,6 +1750,10 @@ int check_ftp(FTP_SESSION* ftpssn, Packet* p, int iMode)
                             memcpy(ftpssn->filename, req->param_begin, req->param_size);
                             ftpssn->filename[req->param_size] = '\0';
                             ftpssn->file_xfer_info = req->param_size;
+                            char *file_name = strrchr(ftpssn->filename, '/');
+                            if(!file_name)
+                                file_name = ftpssn->filename;
+                            ftpssn->path_hash = str_to_hash((uint8_t *)file_name, strlen(file_name));
 
                             // 0 for Download, 1 for Upload
                             ftpssn->data_xfer_dir = CmdConf->file_get_cmd ? false : true;

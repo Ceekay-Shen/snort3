@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2003-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -30,6 +30,8 @@
 
 #include "sfthd.h"
 
+using namespace snort;
+
 static THREAD_LOCAL XHash* detection_filter_hash = nullptr;
 
 DetectionFilterConfig* DetectionFilterConfigNew()
@@ -51,13 +53,7 @@ void DetectionFilterConfigFree(DetectionFilterConfig* config)
     snort_free(config);
 }
 
-void detection_filter_print_config(DetectionFilterConfig*)
-{ }
-
-int detection_filter_test(
-    void* pv,
-    const SfIp* sip, const SfIp* dip,
-    long curtime)
+int detection_filter_test(void* pv, const SfIp* sip, const SfIp* dip, long curtime)
 {
     if (pv == nullptr)
         return 0;

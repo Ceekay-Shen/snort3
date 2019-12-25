@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2013-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -23,6 +23,11 @@
 // SnortConfig encapsulates all data loaded from the config files.
 // FIXIT-L privatize most of this stuff.
 
+#include <sys/types.h>
+
+#include <list>
+#include <vector>
+
 #include "events/event_queue.h"
 #include "framework/bits.h"
 #include "main/policy.h"
@@ -36,7 +41,7 @@ enum RunFlag
     RUN_FLAG__READ                = 0x00000001,
     RUN_FLAG__DAEMON              = 0x00000002,
     RUN_FLAG__NO_PROMISCUOUS      = 0x00000004,
-    /* UNUSED                       0x00000008 */
+    // unused                     = 0x00000008,
 
     RUN_FLAG__INLINE              = 0x00000010,
     RUN_FLAG__STATIC_HASH         = 0x00000020,
@@ -53,7 +58,7 @@ enum RunFlag
     RUN_FLAG__INLINE_TEST         = 0x00004000,
     RUN_FLAG__PCAP_SHOW           = 0x00008000,
 
-    /* UNUSED                       0x00010000 */
+    RUN_FLAG__SHOW_FILE_CODES     = 0x00010000,
     RUN_FLAG__PAUSE               = 0x00020000,
     RUN_FLAG__NO_PCRE             = 0x00040000,
     /* If stream is configured, the STATEFUL flag is set.  This is
@@ -70,6 +75,8 @@ enum RunFlag
     RUN_FLAG__PIGLET              = 0x01000000,
 #endif
     RUN_FLAG__MEM_CHECK           = 0x02000000,
+    RUN_FLAG__TRACK_ON_SYN        = 0x04000000,
+    RUN_FLAG__IP_FRAGS_ONLY       = 0x08000000,
 };
 
 enum OutputFlag
@@ -113,36 +120,71 @@ enum TunnelFlags
     TUNNEL_MPLS   = 0x80
 };
 
-struct srmm_table_t;
-struct sopg_table_t;
-struct PORT_RULE_MAP;
-struct XHash;
-struct ProfilerConfig;
-struct MemoryConfig;
-struct LatencyConfig;
-struct SFDAQConfig;
+class FastPatternConfig;
+class RuleStateMap;
 class ThreadConfig;
 
-// SnortState members are updated during runtime. an array in SnortConfig is
-// used instead of thread_locals because these must get changed on reload
-// FIXIT-L register this data to avoid explicit dependency
-struct SnortState
-{
-    int* pcre_ovector;
+struct srmm_table_t;
+struct sopg_table_t;
+struct ClassType;
+struct DetectionFilterConfig;
+struct EventQueueConfig;
+struct FlowBitState;
+struct FrameworkConfig;
+struct HighAvailabilityConfig;
+struct IpsActionsConfig;
+struct LatencyConfig;
+struct MemoryConfig;
+struct PORT_RULE_MAP;
+struct RateFilterConfig;
+struct ReferenceSystemNode;
+struct RuleListNode;
+struct RulePortTables;
+struct SFDAQConfig;
+struct ThresholdConfig;
+struct VarNode;
 
-    // regex hyperscan and sdpattern are conditionally built but these are
-    // unconditional to avoid compatibility issues with plugins.  if these are
-    // conditional then API_OPTIONS must be updated.
-    // note: fwd decls don't work here.
-    void* regex_scratch;
-    void* hyperscan_scratch;
-    void* sdpattern_scratch;
+namespace snort
+{
+class ProtocolReference;
+struct ProfilerConfig;
+struct GHash;
+struct XHash;
+struct SnortConfig;
+
+typedef void (* ScScratchFunc)(SnortConfig* sc);
+
+class ReloadResourceTuner
+{
+public:
+    static const unsigned RELOAD_MAX_WORK_PER_PACKET = 3;
+    static const unsigned RELOAD_MAX_WORK_WHEN_IDLE = 10;
+
+    virtual ~ReloadResourceTuner() = default;
+
+    // returns true if resource tuning required, false otherwise
+    virtual bool tinit() = 0;
+
+    // each of these returns true if resource tuning is complete, false otherwise
+    virtual bool tune_packet_context() = 0;
+    virtual bool tune_idle_context() = 0;
+
+protected:
+    ReloadResourceTuner() = default;
+
+    unsigned max_work = RELOAD_MAX_WORK_PER_PACKET;
+    unsigned max_work_idle = RELOAD_MAX_WORK_WHEN_IDLE;
 };
 
 struct SnortConfig
 {
+private:
+    void init(const SnortConfig* const, ProtocolReference*);
+    bool verify_stream_inspectors();
+
 public:
-    SnortConfig(SnortConfig* other_conf = nullptr );
+    SnortConfig(const SnortConfig* const other_conf = nullptr);
+    SnortConfig(ProtocolReference* protocol_reference);
     ~SnortConfig();
 
     SnortConfig(const SnortConfig&) = delete;
@@ -152,7 +194,7 @@ public:
     bool verify();
 
     void merge(SnortConfig*);
-    void clone(SnortConfig*);
+    void clone(const SnortConfig* const);
 
 public:
     //------------------------------------------------------
@@ -162,7 +204,7 @@ public:
 
     //------------------------------------------------------
     // alert module stuff
-    bool default_rule_state = true;
+    std::string rule_order;
 
     SfCidr homenet;
 
@@ -176,9 +218,8 @@ public:
 #endif
     uint32_t logging_flags = 0;
 
+    uint32_t tagged_packet_limit = 256;
     uint16_t event_trace_max = 0;
-    long int tagged_packet_limit = 256;
-    bool enable_packet_trace = false;
 
     std::string log_dir;
 
@@ -200,6 +241,9 @@ public:
     unsigned offload_limit = 99999;  // disabled
     unsigned offload_threads = 0;    // disabled
 
+    bool global_rule_state = false;
+    bool global_default_rule_state = true;
+
     //------------------------------------------------------
     // process stuff
 
@@ -211,6 +255,7 @@ public:
     bool dirty_pig = false;
 
     std::string chroot_dir;        /* -t or config chroot */
+    std::string include_path;
     std::string plugin_path;
     std::vector<std::string> script_paths;
 
@@ -218,16 +263,18 @@ public:
 
     //------------------------------------------------------
     // decode module stuff
-    uint8_t mpls_payload_type = 0;
-    long int mpls_stack_depth = 0;
-
-    uint8_t enable_teredo = 0;
-    uint8_t enable_esp = 0;
     PortBitSet* gtp_ports = nullptr;
 
+    int mpls_stack_depth = 0;
+
+    uint8_t mpls_payload_type = 0;
     uint8_t num_layers = 0;
     uint8_t max_ip6_extensions = 0;
     uint8_t max_ip_layers = 0;
+
+    bool enable_teredo = false;
+    bool enable_esp = false;
+    bool address_anomaly_check_enabled = false;
 
     //------------------------------------------------------
     // active stuff
@@ -247,23 +294,25 @@ public:
 
     //------------------------------------------------------
     // packet module stuff
-    uint8_t vlan_agnostic = 0;
-    uint8_t addressspace_agnostic = 0;
+    bool vlan_agnostic = false;
+    bool addressspace_agnostic = false;
 
     uint64_t pkt_cnt = 0;           /* -n */
     uint64_t pkt_skip = 0;
+    uint64_t pkt_pause_cnt = 0;
 
     std::string bpf_file;          /* -F or config bpf_file */
 
     //------------------------------------------------------
     // various modules
-    class FastPatternConfig* fast_pattern_config = nullptr;
-    struct EventQueueConfig* event_queue_config = nullptr;
+    FastPatternConfig* fast_pattern_config = nullptr;
+    EventQueueConfig* event_queue_config = nullptr;
 
-    /* XXX XXX policy specific? */
-    struct ThresholdConfig* threshold_config = nullptr;
-    struct RateFilterConfig* rate_filter_config = nullptr;
-    struct DetectionFilterConfig* detection_filter_config = nullptr;
+    /* policy specific? */
+    ThresholdConfig* threshold_config = nullptr;
+    RateFilterConfig* rate_filter_config = nullptr;
+    DetectionFilterConfig* detection_filter_config = nullptr;
+    FlowBitState* flowbit_state = nullptr;
 
     //------------------------------------------------------
     // FIXIT-L command line only stuff, add to conf / module
@@ -280,28 +329,28 @@ public:
     bool id_zero = false;
 
     bool stdin_rules = false;
-    bool obfuscate_pii = false;
 
     std::string pid_filename;
     std::string orig_log_dir;      /* set in case of chroot */
 
     int thiszone = 0;
 
-    struct RuleState* rule_state_list = nullptr;
-    struct ClassType* classifications = nullptr;
-    struct ReferenceSystemNode* references = nullptr;
-    struct GHash* otn_map = nullptr;
+    RuleStateMap* rule_states = nullptr;
+    ClassType* classifications = nullptr;
+    ReferenceSystemNode* references = nullptr;
+    GHash* otn_map = nullptr;
 
-    class ProtocolReference* proto_ref = nullptr;
+    ProtocolReference* proto_ref = nullptr;
 
     int num_rule_types = 0;
-    struct RuleListNode* rule_lists = nullptr;
-    int evalOrder[RULE_TYPE__MAX + 1];
+    RuleListNode* rule_lists = nullptr;
+    int evalOrder[Actions::MAX + 1];
 
-    struct FrameworkConfig* framework_config = nullptr;
+    IpsActionsConfig* ips_actions_config = nullptr;
+    FrameworkConfig* framework_config = nullptr;
 
     /* master port list table */
-    struct RulePortTables* port_tables = nullptr;
+    RulePortTables* port_tables = nullptr;
 
     /* The port-rule-maps map the src-dst ports to rules for
      * udp and tcp, for Ip we map the dst port as the protocol,
@@ -325,7 +374,10 @@ public:
     XHash* rtn_hash_table = nullptr;
 
     PolicyMap* policy_map = nullptr;
-    struct VarNode* var_list = nullptr;
+    VarNode* var_list = nullptr;
+    std::string tweaks;
+
+    DataBus* global_dbus = nullptr;
 
     uint8_t tunnel_mask = 0;
 
@@ -336,9 +388,7 @@ public:
 
     //------------------------------------------------------
     ProfilerConfig* profiler = nullptr;
-
     LatencyConfig* latency = nullptr;
-    struct _IntelPmHandles* ipm_handles = nullptr;
 
     unsigned remote_control_port = 0;
     std::string remote_control_socket;
@@ -346,27 +396,22 @@ public:
     MemoryConfig* memory = nullptr;
     //------------------------------------------------------
 
-    SnortState* state = nullptr;
+    std::vector<void *>* state = nullptr;
     unsigned num_slots = 0;
 
     ThreadConfig* thread_config;
+    HighAvailabilityConfig* ha_config = nullptr;
 
     //------------------------------------------------------
     //Reload inspector related
 
     bool cloned = false;
 
+private:
+    std::list<ReloadResourceTuner*> reload_tuners;
+
+public:
     //------------------------------------------------------
-    // policy access
-    InspectionPolicy* get_inspection_policy()
-    { return policy_map->inspection_policy[0]; }
-
-    IpsPolicy* get_ips_policy()
-    { return policy_map->ips_policy[0]; }
-
-    NetworkPolicy* get_network_policy()
-    { return policy_map->network_policy[0]; }
-
     // decoding related
     uint8_t get_num_layers() const
     { return num_layers; }
@@ -382,6 +427,7 @@ public:
     //------------------------------------------------------
     // Non-static mutator methods
 
+    void add_plugin_path(const char*);
     void add_script_path(const char*);
     void enable_syslog();
     void set_alert_before_pass(bool);
@@ -401,18 +447,18 @@ public:
     void set_no_logging_timestamps(bool);
     void set_obfuscate(bool);
     void set_obfuscation_mask(const char*);
-    void set_plugin_path(const char*);
+    void set_include_path(const char*);
     void set_process_all_events(bool);
     void set_quiet(bool);
     void set_show_year(bool);
     void set_tunnel_verdicts(const char*);
     void set_treat_drop_as_alert(bool);
     void set_treat_drop_as_ignore(bool);
+    void set_tweaks(const char*);
     void set_uid(const char*);
-    void set_umask(const char*);
+    void set_umask(uint32_t);
     void set_utc(bool);
     void set_verbose(bool);
-    void free_rule_state_list();
 
     //------------------------------------------------------
     // Static convenience accessor methods
@@ -441,6 +487,9 @@ public:
     static bool esp_decoding()
     { return get_conf()->enable_esp; }
 
+    static bool is_address_anomaly_check_enabled()
+    { return get_conf()->address_anomaly_check_enabled; }
+
     // mode related
     static bool test_mode()
     { return get_conf()->run_flags & RUN_FLAG__TEST; }
@@ -455,10 +504,13 @@ public:
     { return get_conf()->run_flags & RUN_FLAG__READ; }
 
     static bool inline_mode()
-    { return ::get_ips_policy()->policy_mode == POLICY_MODE__INLINE; }
+    { return snort::get_ips_policy()->policy_mode == POLICY_MODE__INLINE; }
 
     static bool inline_test_mode()
-    { return ::get_ips_policy()->policy_mode == POLICY_MODE__INLINE_TEST; }
+    { return snort::get_ips_policy()->policy_mode == POLICY_MODE__INLINE_TEST; }
+
+    static bool show_file_codes()
+    { return get_conf()->run_flags & RUN_FLAG__SHOW_FILE_CODES; }
 
     static bool adaptor_inline_mode()
     { return get_conf()->run_flags & RUN_FLAG__INLINE; }
@@ -483,41 +535,54 @@ public:
     static bool process_all_events()
     { return get_conf()->event_queue_config->process_all_events; }
 
-    static int get_eval_index(RuleType type)
+    static int get_eval_index(Actions::Type type)
     { return get_conf()->evalOrder[type]; }
 
-    static int get_default_rule_state()
-    { return get_conf()->default_rule_state; }
+    static bool get_default_rule_state()
+    {
+        switch ( get_ips_policy()->default_rule_state )
+        {
+            case IpsPolicy::INHERIT_ENABLE:
+                return get_conf()->global_default_rule_state;
+
+            case IpsPolicy::ENABLED:
+                return true;
+
+            case IpsPolicy::DISABLED:
+                return false;
+        }
+        return true;
+    }
 
     SO_PUBLIC static bool tunnel_bypass_enabled(uint8_t proto);
 
     // checksum stuff
     static bool checksum_drop(uint16_t codec_cksum_err_flag)
-    { return ::get_network_policy()->checksum_drop & codec_cksum_err_flag; }
+    { return snort::get_network_policy()->checksum_drop & codec_cksum_err_flag; }
 
     static bool ip_checksums()
-    { return ::get_network_policy()->checksum_eval & CHECKSUM_FLAG__IP; }
+    { return snort::get_network_policy()->checksum_eval & CHECKSUM_FLAG__IP; }
 
     static bool ip_checksum_drops()
-    { return ::get_network_policy()->checksum_drop & CHECKSUM_FLAG__IP; }
+    { return snort::get_network_policy()->checksum_drop & CHECKSUM_FLAG__IP; }
 
     static bool udp_checksums()
-    { return ::get_network_policy()->checksum_eval & CHECKSUM_FLAG__UDP; }
+    { return snort::get_network_policy()->checksum_eval & CHECKSUM_FLAG__UDP; }
 
     static bool udp_checksum_drops()
-    { return ::get_network_policy()->checksum_drop & CHECKSUM_FLAG__UDP; }
+    { return snort::get_network_policy()->checksum_drop & CHECKSUM_FLAG__UDP; }
 
     static bool tcp_checksums()
-    { return ::get_network_policy()->checksum_eval & CHECKSUM_FLAG__TCP; }
+    { return snort::get_network_policy()->checksum_eval & CHECKSUM_FLAG__TCP; }
 
     static bool tcp_checksum_drops()
-    { return ::get_network_policy()->checksum_drop & CHECKSUM_FLAG__TCP; }
+    { return snort::get_network_policy()->checksum_drop & CHECKSUM_FLAG__TCP; }
 
     static bool icmp_checksums()
-    { return ::get_network_policy()->checksum_eval & CHECKSUM_FLAG__ICMP; }
+    { return snort::get_network_policy()->checksum_eval & CHECKSUM_FLAG__ICMP; }
 
     static bool icmp_checksum_drops()
-    { return ::get_network_policy()->checksum_drop & CHECKSUM_FLAG__ICMP; }
+    { return snort::get_network_policy()->checksum_drop & CHECKSUM_FLAG__ICMP; }
 
     // output stuff
     static bool output_include_year()
@@ -590,10 +655,10 @@ public:
 
     // other stuff
     static uint8_t min_ttl()
-    { return ::get_network_policy()->min_ttl; }
+    { return snort::get_network_policy()->min_ttl; }
 
     static uint8_t new_ttl()
-    { return ::get_network_policy()->new_ttl; }
+    { return snort::get_network_policy()->new_ttl; }
 
     static long int get_pcre_match_limit()
     { return get_conf()->pcre_match_limit; }
@@ -631,15 +696,38 @@ public:
             !get_conf()->chroot_dir.empty();
     }
 
-    static bool packet_trace_enabled()
-    {
-        return get_conf()->enable_packet_trace;
-    }
+    bool track_on_syn() const
+    { return (run_flags & RUN_FLAG__TRACK_ON_SYN) != 0; }
+
+    bool ip_frags_only() const
+    { return (run_flags & RUN_FLAG__IP_FRAGS_ONLY) != 0; }
+
+    void clear_run_flags(RunFlag flag)
+    { run_flags &= ~flag; }
+
+    void set_run_flags(RunFlag flag)
+    { run_flags |= flag; }
+
+    // This requests an entry in the scratch space vector and calls setup /
+    // cleanup as appropriate
+    SO_PUBLIC static int request_scratch(ScScratchFunc setup, ScScratchFunc cleanup);
 
     // Use this to access current thread's conf from other units
     static void set_conf(SnortConfig*);
+    static void set_parser_conf(SnortConfig*);
+
     SO_PUBLIC static SnortConfig* get_conf();
+    SO_PUBLIC static SnortConfig* get_parser_conf();  // main thread only!
+
+    SO_PUBLIC void register_reload_resource_tuner(ReloadResourceTuner& rrt)
+    { reload_tuners.push_back(&rrt); }
+
+    const std::list<ReloadResourceTuner*>& get_reload_resource_tuners() const
+    { return reload_tuners; }
+
+    void clear_reload_resource_tuner_list()
+    { reload_tuners.clear(); }
 };
+}
 
 #endif
-

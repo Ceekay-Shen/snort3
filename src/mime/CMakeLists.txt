@@ -3,15 +3,17 @@ set( MIME_INCLUDES
     decode_b64.h
     decode_base.h
     file_mime_config.h
+    file_mime_context_data.h
     file_mime_decode.h 
     file_mime_log.h 
     file_mime_paf.h 
     file_mime_process.h 
 )
 
-add_library ( mime STATIC
+add_library ( mime OBJECT
     ${MIME_INCLUDES}
     file_mime_config.cc 
+    file_mime_context_data.cc 
     file_mime_decode.cc 
     file_mime_log.cc 
     file_mime_paf.cc 
@@ -27,8 +29,6 @@ add_library ( mime STATIC
     decode_uu.cc
     decode_uu.h
 )
-
-target_link_libraries(mime file_api)
 
 install (FILES ${MIME_INCLUDES}
     DESTINATION "${INCLUDE_INSTALL_PATH}/mime"

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 1998-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -34,9 +34,15 @@
 #include "profiler/profiler.h"
 #include "utils/util_unfold.h"
 
-static THREAD_LOCAL uint8_t base64_decode_buf[DECODE_BLEN];
-static THREAD_LOCAL uint32_t base64_decode_size;
+using namespace snort;
 
+struct Base64DecodeBuffer
+{
+    uint8_t data[DECODE_BLEN];
+    uint32_t size;
+};
+
+static THREAD_LOCAL Base64DecodeBuffer* base64_decode_buffer;
 static THREAD_LOCAL ProfileStats base64PerfStats;
 
 #define s_name "base64_decode"
@@ -50,12 +56,12 @@ static THREAD_LOCAL ProfileStats base64PerfStats;
 
 #define BASE64DECODE_RELATIVE_FLAG 0x01
 
-typedef struct _Base64DecodeData
+struct Base64DecodeData
 {
     uint32_t bytes_to_decode;
     uint32_t offset;
     uint8_t flags;
-}Base64DecodeData;
+};
 
 class Base64DecodeOption : public IpsOption
 {
@@ -114,8 +120,8 @@ bool Base64DecodeOption::operator==(const IpsOption& ips) const
 
 IpsOption::EvalStatus Base64DecodeOption::eval(Cursor& c, Packet*)
 {
-    Profile profile(base64PerfStats);
-    base64_decode_size = 0;
+    RuleProfile profile(base64PerfStats);
+    base64_decode_buffer->size = 0;
 
     Base64DecodeData* idx = (Base64DecodeData*)&config;
     const uint8_t* start_ptr = nullptr;
@@ -149,8 +155,8 @@ IpsOption::EvalStatus Base64DecodeOption::eval(Cursor& c, Packet*)
         base64_size = idx->bytes_to_decode;
     }
 
-    if (sf_base64decode(base64_buf, base64_size, (uint8_t*)base64_decode_buf,
-        sizeof(base64_decode_buf), &base64_decode_size) != 0)
+    if (sf_base64decode(base64_buf, base64_size, base64_decode_buffer->data,
+        sizeof(base64_decode_buffer->data), &base64_decode_buffer->size) != 0)
         return NO_MATCH;
 
     return MATCH;
@@ -162,10 +168,10 @@ IpsOption::EvalStatus Base64DecodeOption::eval(Cursor& c, Packet*)
 
 static const Parameter s_params[] =
 {
-    { "bytes", Parameter::PT_INT, "1:", nullptr,
+    { "bytes", Parameter::PT_INT, "1:max32", nullptr,
       "number of base64 encoded bytes to decode" },
 
-    { "offset", Parameter::PT_INT, "0:", "0",
+    { "offset", Parameter::PT_INT, "0:max32", "0",
       "bytes past start of buffer to start decoding" },
 
     { "relative", Parameter::PT_IMPLIED, nullptr, nullptr,
@@ -201,10 +207,10 @@ bool B64DecodeModule::begin(const char*, int, SnortConfig*)
 bool B64DecodeModule::set(const char*, Value& v, SnortConfig*)
 {
     if ( v.is("bytes") )
-        data.bytes_to_decode = v.get_long();
+        data.bytes_to_decode = v.get_uint32();
 
     else if ( v.is("offset") )
-        data.offset = v.get_long();
+        data.offset = v.get_uint32();
 
     else if ( v.is("relative") )
         data.flags |= BASE64DECODE_RELATIVE_FLAG;
@@ -285,12 +291,12 @@ public:
 
 IpsOption::EvalStatus Base64DataOption::eval(Cursor& c, Packet*)
 {
-    Profile profile(base64PerfStats);
+    RuleProfile profile(base64PerfStats);
 
-    if ( !base64_decode_size )
+    if ( !base64_decode_buffer->size )
         return NO_MATCH;
 
-    c.set(s_data_name, base64_decode_buf, base64_decode_size);
+    c.set(s_data_name, base64_decode_buffer->data, base64_decode_buffer->size);
 
     return MATCH;
 }
@@ -316,6 +322,17 @@ static void base64_data_dtor(IpsOption* p)
     delete p;
 }
 
+static void base64_data_tinit(SnortConfig*)
+{
+    base64_decode_buffer = new Base64DecodeBuffer();
+}
+
+static void base64_data_tterm(SnortConfig*)
+{
+    delete base64_decode_buffer;
+    base64_decode_buffer = nullptr;
+}
+
 static const IpsApi base64_data_api =
 {
     {
@@ -334,8 +351,8 @@ static const IpsApi base64_data_api =
     0, 0,
     nullptr,
     nullptr,
-    nullptr,
-    nullptr,
+    base64_data_tinit,
+    base64_data_tterm,
     base64_data_ctor,
     base64_data_dtor,
     nullptr

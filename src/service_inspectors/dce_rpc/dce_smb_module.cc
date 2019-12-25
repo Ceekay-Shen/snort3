@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -30,7 +30,10 @@
 
 #include "dce_smb.h"
 
+using namespace snort;
 using namespace std;
+
+Trace TRACE_NAME(dce_smb);
 
 static const PegInfo dce2_smb_pegs[] =
 {
@@ -97,35 +100,47 @@ static const char* dce2SmbFingerprintPolicyStrings[] =
 
 static const Parameter s_params[] =
 {
+    { "limit_alerts", Parameter::PT_BOOL, nullptr, "true",
+      "limit DCE alert to at most one per signature per flow" },
+
     { "disable_defrag", Parameter::PT_BOOL, nullptr, "false",
-      " Disable DCE/RPC defragmentation" },
+      "disable DCE/RPC defragmentation" },
+
     { "max_frag_len", Parameter::PT_INT, "1514:65535", "65535",
-      " Maximum fragment size for defragmentation" },
+      "maximum fragment size for defragmentation" },
+
     { "reassemble_threshold", Parameter::PT_INT, "0:65535", "0",
-      " Minimum bytes received before performing reassembly" },
-    { "smb_fingerprint_policy", Parameter::PT_ENUM,
-      "none | client |  server | both ", "none",
-      " Target based SMB policy to use" },
+      "minimum bytes received before performing reassembly" },
+
+    { "smb_fingerprint_policy", Parameter::PT_ENUM, "none | client |  server | both ", "none",
+      "target based SMB policy to use" },
+
     { "policy", Parameter::PT_ENUM,
-      "Win2000 |  WinXP | WinVista | Win2003 | Win2008 | Win7 | Samba | Samba-3.0.37 | Samba-3.0.22 | Samba-3.0.20",
-      "WinXP",
-      " Target based policy to use" },
+      "Win2000 |  WinXP | WinVista | Win2003 | Win2008 | Win7 | Samba | Samba-3.0.37 | "
+      "Samba-3.0.22 | Samba-3.0.20", "WinXP",
+      "target based policy to use" },
+
     { "smb_max_chain", Parameter::PT_INT, "0:255", "3",
-      " SMB max chain size" },
+      "SMB max chain size" },
+
     { "smb_max_compound", Parameter::PT_INT, "0:255", "3",
-      " SMB max compound size" },
-    { "valid_smb_versions", Parameter::PT_MULTI,
-      "v1 | v2 | all", "all",
-      " Valid SMB versions" },
-    { "smb_file_inspection", Parameter::PT_ENUM,
-      "off | on | only", "off",
-      " SMB file inspection" },
-    { "smb_file_depth", Parameter::PT_INT, "-1:", "16384",
-      " SMB file depth for file data" },
+      "SMB max compound size" },
+
+    { "valid_smb_versions", Parameter::PT_MULTI, "v1 | v2 | all", "all",
+      "valid SMB versions" },
+
+    { "smb_file_inspection", Parameter::PT_ENUM, "off | on | only", nullptr,
+      "deprecated (not used): file inspection controlled by smb_file_depth" },
+
+    { "smb_file_depth", Parameter::PT_INT, "-1:32767", "16384",
+      "SMB file depth for file data (-1 = disabled, 0 = unlimited)" },
+
     { "smb_invalid_shares", Parameter::PT_STRING, nullptr, nullptr,
       "SMB shares to alert on " },
+
     { "smb_legacy_mode", Parameter::PT_BOOL, nullptr, "false",
       "inspect only SMBv1" },
+
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
 };
 
@@ -140,6 +155,7 @@ static const RuleMap dce2_smb_rules[] =
     { DCE2_SMB_BAD_OFF, DCE2_SMB_BAD_OFF_STR },
     { DCE2_SMB_TDCNT_ZE, DCE2_SMB_TDCNT_ZE_STR },
     { DCE2_SMB_NB_LT_SMBHDR, DCE2_SMB_NB_LT_SMBHDR_STR },
+    { DCE2_SMB_NB_LT_COM, DCE2_SMB_NB_LT_COM_STR },
     { DCE2_SMB_NB_LT_BCC, DCE2_SMB_NB_LT_BCC_STR },
     { DCE2_SMB_NB_LT_DSIZE, DCE2_SMB_NB_LT_DSIZE_STR },
     { DCE2_SMB_TDCNT_LT_DSIZE, DCE2_SMB_TDCNT_LT_DSIZE_STR },
@@ -174,7 +190,7 @@ static const RuleMap dce2_smb_rules[] =
     { 0, nullptr }
 };
 
-Dce2SmbModule::Dce2SmbModule() : Module(DCE2_SMB_NAME, DCE2_SMB_HELP, s_params)
+Dce2SmbModule::Dce2SmbModule() : Module(DCE2_SMB_NAME, DCE2_SMB_HELP, s_params, false, &TRACE_NAME(dce_smb))
 {
     memset(&config, 0, sizeof(config));
 }
@@ -202,108 +218,9 @@ PegCount* Dce2SmbModule::get_counts() const
     return (PegCount*)&dce2_smb_stats;
 }
 
-ProfileStats* Dce2SmbModule::get_profile(
-    unsigned index, const char*& name, const char*& parent) const
+ProfileStats* Dce2SmbModule::get_profile() const
 {
-    switch ( index )
-    {
-    case 0:
-        name = "dce_smb_main";
-        parent = nullptr;
-        return &dce2_smb_pstat_main;
-
-    case 1:
-        name = "dce_smb_session";
-        parent = "dce_smb_main";
-        return &dce2_smb_pstat_session;
-
-    case 2:
-        name = "dce_smb_new_session";
-        parent = "dce_smb_session";
-
-        return &dce2_smb_pstat_new_session;
-
-    case 3:
-        name = "dce_smb_detect";
-        parent = "dce_smb_main";
-        return &dce2_smb_pstat_detect;
-
-    case 4:
-        name = "dce_smb_log";
-        parent = "dce_smb_main";
-        return &dce2_smb_pstat_log;
-
-    case 5:
-        name = "dce_smb_co_segment";
-        parent = "dce_smb_main";
-        return &dce2_smb_pstat_co_seg;
-
-    case 6:
-        name = "dce_smb_co_fragment";
-        parent = "dce_smb_main";
-        return &dce2_smb_pstat_co_frag;
-
-    case 7:
-        name = "dce_smb_co_reassembly";
-        parent = "dce_smb_main";
-        return &dce2_smb_pstat_co_reass;
-
-    case 8:
-        name = "dce_smb_co_context";
-        parent = "dce_smb_main";
-        return &dce2_smb_pstat_co_ctx;
-
-    case 9:
-        name = "dce_smb_segment";
-        parent = "dce_smb_main";
-        return &dce2_smb_pstat_smb_seg;
-
-    case 10:
-        name = "dce_smb_request";
-        parent = "dce_smb_main";
-        return &dce2_smb_pstat_smb_req;
-
-    case 11:
-        name = "dce_smb_uid";
-        parent = "dce_smb_main";
-        return &dce2_smb_pstat_smb_uid;
-
-    case 12:
-        name = "dce_smb_tid";
-        parent = "dce_smb_main";
-        return &dce2_smb_pstat_smb_tid;
-
-    case 13:
-        name = "dce_smb_fid";
-        parent = "dce_smb_main";
-        return &dce2_smb_pstat_smb_fid;
-
-    case 14:
-        name = "dce_smb_file";
-        parent = "dce_smb_main";
-        return &dce2_smb_pstat_smb_file;
-
-    case 15:
-        name = "dce_smb_file_detect";
-        parent = "dce_smb_file";
-        return &dce2_smb_pstat_smb_file_detect;
-
-    case 16:
-        name = "dce_smb_file_api";
-        parent = "dce_smb_file";
-        return &dce2_smb_pstat_smb_file_api;
-
-    case 17:
-        name = "dce_smb_fingerprint";
-        parent = "dce_smb_main";
-        return &dce2_smb_pstat_smb_fingerprint;
-
-    case 18:
-        name = "dce_smb_negotiate";
-        parent = "dce_smb_main";
-        return &dce2_smb_pstat_smb_negotiate;
-    }
-    return nullptr;
+    return &dce2_smb_pstat_main;
 }
 
 static int smb_invalid_share_compare(const void* a, const void* b)
@@ -423,28 +340,38 @@ static bool set_smb_invalid_shares(dce2SmbProtoConf& config, Value& v)
     return(true);
 }
 
-bool Dce2SmbModule::set(const char*, Value& v, SnortConfig*)
+bool Dce2SmbModule::set(const char* fqn, Value& v, SnortConfig* c)
 {
     if (dce2_set_co_config(v,config.common))
         return true;
+
     else if ( v.is("smb_fingerprint_policy") )
-        config.smb_fingerprint_policy = (dce2SmbFingerprintPolicy)v.get_long();
+        config.smb_fingerprint_policy = (dce2SmbFingerprintPolicy)v.get_uint8();
+
     else if ( v.is("smb_max_chain") )
-        config.smb_max_chain = v.get_long();
+        config.smb_max_chain = v.get_uint8();
+
     else if ( v.is("smb_max_compound") )
-        config.smb_max_compound = v.get_long();
+        config.smb_max_compound = v.get_uint8();
+
     else if ( v.is("valid_smb_versions") )
         set_smb_versions_mask(config,v.get_string());
+
     else if ( v.is("smb_file_inspection") )
-        config.smb_file_inspection = (dce2SmbFileInspection)v.get_long();
+        ParseWarning(WARN_CONF, "smb_file_inspection is deprecated (not used): use smb_file_depth");
+
     else if ( v.is("smb_file_depth") )
-        config.smb_file_depth = v.get_long();
+        config.smb_file_depth = v.get_int16();
+
     else if ( v.is("smb_invalid_shares") )
         return(set_smb_invalid_shares(config,v));
+
     else if ( v.is("smb_legacy_mode"))
         config.legacy_mode = v.get_bool();
+
     else
-        return false;
+        return Module::set(fqn, v, c);
+
     return true;
 }
 
@@ -476,24 +403,12 @@ void print_dce2_smb_conf(dce2SmbProtoConf& config)
     else
         LogMessage("    Maximum SMB compounded requests: %u\n", config.smb_max_compound);
 
-    if (config.smb_file_inspection == DCE2_SMB_FILE_INSPECTION_OFF)
-    {
-        LogMessage("    SMB file inspection: Disabled\n");
-    }
+    if (config.smb_file_depth == -1)
+        LogMessage("    SMB file depth: Disabled\n");
+    else if (config.smb_file_depth == 0)
+        LogMessage("    SMB file depth: Unlimited\n");
     else
-    {
-        if (config.smb_file_inspection == DCE2_SMB_FILE_INSPECTION_ONLY)
-            LogMessage("    SMB file inspection: Only\n");
-        else
-            LogMessage("    SMB file inspection: Enabled\n");
-
-        if (config.smb_file_depth == -1)
-            LogMessage("    SMB file depth: Disabled\n");
-        else if (config.smb_file_depth == 0)
-            LogMessage("    SMB file depth: Unlimited\n");
-        else
-            LogMessage("    SMB file depth: %d\n",config.smb_file_depth);
-    }
+        LogMessage("    SMB file depth: %d\n",config.smb_file_depth);
 
     if (config.smb_valid_versions_mask  == DCE2_VALID_SMB_VERSION_FLAG_V1)
     {

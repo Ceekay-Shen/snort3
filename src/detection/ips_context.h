@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -25,29 +25,42 @@
 // single packet.  the state is stored in IpsContextData instances, which
 // are accessed by id.
 
-#include "main/snort_types.h"
-#include "framework/codec.h"
-
-// required to get a decent decl of pkth
-#include "protocols/packet.h"
+#include <list>
 
 #include "detection/detection_util.h"
+#include "framework/codec.h"
+#include "framework/mpse.h"
+#include "framework/mpse_batch.h"
+#include "main/snort_types.h"
+#include "protocols/packet.h" // required to get a decent decl of pkth
 
-class SO_PUBLIC IpsContextData
+class MpseStash;
+struct OtnxMatchData;
+struct SF_EVENTQ;
+struct RegexRequest;
+
+namespace snort
 {
-public:
-    virtual ~IpsContextData() = default;
+class IpsContextData;
+struct SnortConfig;
+struct Replacement
+{
+    std::string data;
+    unsigned offset;
+};
 
-    static unsigned get_ips_id();
-    static unsigned get_max_id();
-
-protected:
-    IpsContextData() = default;
+struct FlowSnapshot
+{
+    uint32_t session_flags;
+    SnortProtocolId proto_id;
 };
 
 class SO_PUBLIC IpsContext
 {
 public:
+    using Callback = void(*)(IpsContext*);
+    enum State { IDLE, BUSY, SUSPENDED };
+
     IpsContext(unsigned size = 0);  // defaults to max id
     ~IpsContext();
 
@@ -56,40 +69,108 @@ public:
 
     void set_context_data(unsigned id, IpsContextData*);
     IpsContextData* get_context_data(unsigned id) const;
+    void clear_context_data();
 
-    void set_slot(unsigned s)
-    { slot = s; }
+    void snapshot_flow(Flow*);
 
-    unsigned get_slot()
-    { return slot; }
+    uint32_t get_session_flags()
+    { return flow.session_flags; }
+
+    SnortProtocolId get_snort_protocol_id()
+    { return flow.proto_id; }
 
     enum ActiveRules
     { NONE, NON_CONTENT, CONTENT };
 
+    void register_post_callback(Callback callback)
+    { post_callbacks.emplace_back(callback); }
+
+    void clear_callbacks()
+    { post_callbacks.clear(); }
+
+    bool has_callbacks() const
+    { return !post_callbacks.empty(); }
+
+    void post_detection();
+
+    void link(IpsContext* next)
+    {
+        assert(!next->depends_on);
+        assert(!next->next_to_process);
+        assert(!next_to_process);
+
+        next->depends_on = this;
+        next_to_process = next;
+    }
+
+    void unlink()
+    {
+        assert(!depends_on);
+        if ( next_to_process )
+        {
+            assert(next_to_process->depends_on == this);
+            next_to_process->depends_on = nullptr;
+        }
+        next_to_process = nullptr;
+    }
+
+    IpsContext* dependencies() const
+    { return depends_on; }
+
+    IpsContext* next() const
+    { return next_to_process; }
+
+    void abort()
+    {
+        if ( next_to_process )
+            next_to_process->depends_on = depends_on;
+
+        if ( depends_on )
+            depends_on->next_to_process = next_to_process; 
+
+        depends_on = next_to_process = nullptr;
+    }
+
 public:
+    std::vector<Replacement> rpl;
+
     Packet* packet;
+    Packet* wire_packet;
     Packet* encode_packet;
     DAQ_PktHdr_t* pkth;
     uint8_t* buf;
 
-    struct SnortConfig* conf;
-    class MpseStash* stash;
-    struct OtnxMatchData* otnx;
-    struct SF_EVENTQ* equeue;
+    SnortConfig* conf;
+    MpseBatch searches;
+    MpseStash* stash;
+    OtnxMatchData* otnx;
+    std::list<RegexRequest*>::iterator regex_req_it;
+    SF_EVENTQ* equeue;
 
     DataPointer file_data;
     DataBuffer alt_data;
 
     uint64_t context_num;
+    uint64_t packet_number;
     ActiveRules active_rules;
+    State state; 
     bool check_tags;
+    bool clear_inspectors;
 
     static const unsigned buf_size = Codec::PKT_MAX;
 
-private:
-    std::vector<IpsContextData*> data;
-    unsigned slot;
-};
+    // FIXIT-L eliminate max_ips_id and just resize data vector.
+    // Only 5 inspectors currently use the ips context data.
+    static constexpr unsigned max_ips_id = 8;
 
+private:
+    FlowSnapshot flow;
+    std::vector<IpsContextData*> data;
+    std::vector<unsigned> ids_in_use;  // for indirection; FIXIT-P evaluate alternatives
+    std::vector<Callback> post_callbacks;
+    IpsContext* depends_on;
+    IpsContext* next_to_process;
+};
+}
 #endif
 

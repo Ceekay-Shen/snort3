@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -22,14 +22,19 @@
 #include "config.h"
 #endif
 
+#include <daq.h>
+#include <daq_dlt.h>
+
 #include "codecs/codec_module.h"
 #include "framework/codec.h"
 #include "log/text_log.h"
 #include "main/snort_config.h"
-#include "packet_io/active.h"
+
+using namespace snort;
 
 #define CD_IPV6_NAME "ipv6"
-#define CD_IPV6_HELP "support for Internet protocol v6"
+#define CD_IPV6_HELP_STR "support for Internet protocol v6"
+#define CD_IPV6_HELP ADD_DLT(CD_IPV6_HELP_STR, DLT_IPV6)
 
 namespace
 {
@@ -84,6 +89,7 @@ class Ipv6Codec : public Codec
 public:
     Ipv6Codec() : Codec(CD_IPV6_NAME) { }
 
+    void get_data_link_type(std::vector<int>&) override;
     void get_protocol_ids(std::vector<ProtocolId>& v) override;
     bool decode(const RawData&, CodecData&, DecodeData&) override;
     bool encode(const uint8_t* const raw_in, const uint16_t raw_len,
@@ -107,10 +113,15 @@ private:
  *************************   CLASS FUNCTIONS ************************
  ********************************************************************/
 
+void Ipv6Codec::get_data_link_type(std::vector<int>& v)
+{
+    v.emplace_back(DLT_IPV6);
+}
+
 void Ipv6Codec::get_protocol_ids(std::vector<ProtocolId>& v)
 {
-    v.push_back(ProtocolId::ETHERTYPE_IPV6);
-    v.push_back(ProtocolId::IPV6);
+    v.emplace_back(ProtocolId::ETHERTYPE_IPV6);
+    v.emplace_back(ProtocolId::IPV6);
 }
 
 bool Ipv6Codec::decode(const RawData& raw, CodecData& codec, DecodeData& snort)
@@ -177,7 +188,7 @@ bool Ipv6Codec::decode(const RawData& raw, CodecData& codec, DecodeData& snort)
         if ( codec.codec_flags & CODEC_NON_IP_TUNNEL )
             codec.codec_flags &= ~CODEC_NON_IP_TUNNEL;
         else if ( SnortConfig::tunnel_bypass_enabled(TUNNEL_6IN4) )
-            Active::set_tunnel_bypass();
+            codec.tunnel_bypass = true;
     }
     else if (snort.ip_api.is_ip6())
     {
@@ -185,21 +196,20 @@ bool Ipv6Codec::decode(const RawData& raw, CodecData& codec, DecodeData& snort)
         if ( codec.codec_flags & CODEC_NON_IP_TUNNEL )
             codec.codec_flags &= ~CODEC_NON_IP_TUNNEL;
         else if (SnortConfig::tunnel_bypass_enabled(TUNNEL_6IN6))
-            Active::set_tunnel_bypass();
+            codec.tunnel_bypass = true;
     }
 
     IPV6CheckIsatap(ip6h, snort, codec); // check for isatap before overwriting the ip_api.
 
     snort.ip_api.set(ip6h);
     // update to real IP when needed
-    if ((raw.pkth->flags & DAQ_PKT_FLAG_REAL_ADDRESSES) and codec.ip_layer_cnt == 1)
+    const DAQ_NAPTInfo_t* napti = (const DAQ_NAPTInfo_t*) daq_msg_get_meta(raw.daq_msg, DAQ_PKT_META_NAPT_INFO);
+    if (napti && codec.ip_layer_cnt == 1)
     {
         SfIp real_src;
         SfIp real_dst;
-        real_src.set(&raw.pkth->real_sIP,
-            ((raw.pkth->flags & DAQ_PKT_FLAG_REAL_SIP_V6) ? AF_INET6 : AF_INET));
-        real_dst.set(&raw.pkth->real_dIP,
-            ((raw.pkth->flags & DAQ_PKT_FLAG_REAL_DIP_V6) ? AF_INET6 : AF_INET));
+        real_src.set(&napti->src_addr, daq_napt_info_src_addr_family(napti));
+        real_dst.set(&napti->dst_addr, daq_napt_info_dst_addr_family(napti));
         snort.ip_api.update(real_src, real_dst);
     }
 
@@ -461,8 +471,7 @@ void Ipv6Codec::CheckIPV6Multicast(const ip::IP6Hdr* const ip6h, const CodecData
         {
             return; // IETF consensus
         }
-        else if ((ntohl(ip6h->ip6_dst.u6_addr32[3]) >= 0x80000000) &&
-            (ntohl(ip6h->ip6_dst.u6_addr32[3]) <= 0xFFFFFFFF))
+        else if (ntohl(ip6h->ip6_dst.u6_addr32[3]) >= 0x80000000)
         {
             return; // Dynamically allocated by hosts when needed
         }
@@ -532,7 +541,7 @@ void Ipv6Codec::log(TextLog* const text_log, const uint8_t* raw_pkt,
 {
     const ip::IP6Hdr* const ip6h = reinterpret_cast<const ip::IP6Hdr*>(raw_pkt);
 
-    // FIXIT-H this does NOT obfuscate correctly
+    // FIXIT-RC this does NOT obfuscate correctly
     if (SnortConfig::obfuscate())
     {
         TextLog_Print(text_log, "x:x:x:x::x:x:x:x -> x:x:x:x::x:x:x:x");

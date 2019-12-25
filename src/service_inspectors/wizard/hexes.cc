@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -47,9 +47,9 @@ bool HexBook::translate(const char* in, HexVector& out)
         else if ( !hex )
         {
             if ( in[i] == '?' )
-                out.push_back(WILD);
+                out.emplace_back(WILD);
             else
-                out.push_back(in[i]);
+                out.emplace_back(in[i]);
         }
         else if ( in[i] != ' ' )
         {
@@ -64,7 +64,7 @@ bool HexBook::translate(const char* in, HexVector& out)
         if ( push && !byte.empty() )
         {
             int b = strtol(byte.c_str(), nullptr, 16);
-            out.push_back((uint8_t)b);
+            out.emplace_back((uint8_t)b);
             byte.clear();
         }
         ++i;

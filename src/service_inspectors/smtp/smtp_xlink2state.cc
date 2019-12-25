@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2011-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -31,6 +31,8 @@
 #include "packet_io/active.h"
 
 #include "smtp_module.h"
+
+using namespace snort;
 
 #define XLINK_OTHER  1
 #define XLINK_FIRST  2
@@ -243,7 +245,7 @@ int ParseXLink2State(SMTP_PROTO_CONF* config, Packet* p, SMTPData* smtp_ssn, con
         /* Need to drop the packet if we're told to
          * (outside of whether its thresholded). */
         if (config->xlink2state == DROP_XLINK2STATE)
-            Active::reset_session(p);
+            p->active->reset_session(p);
 
         DetectionEngine::queue_event(GID_SMTP, SMTP_XLINK2STATE_OVERFLOW);
         smtp_ssn->session_flags |= SMTP_FLAG_XLINK2STATE_ALERTED;

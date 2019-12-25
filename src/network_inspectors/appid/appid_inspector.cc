@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -27,27 +27,34 @@
 
 #include <openssl/crypto.h>
 
-#include "appid_stats.h"
-#include "appid_session.h"
-#include "appid_discovery.h"
-#include "app_forecast.h"
-#include "host_port_app_cache.h"
-#include "lua_detector_module.h"
-#include "appid_http_event_handler.h"
-#include "thirdparty_appid_utils.h"
-#include "client_plugins/client_discovery.h"
-#include "service_plugins/service_discovery.h"
-#include "service_plugins/service_ssl.h"
-#include "detector_plugins/detector_dns.h"
-#include "detector_plugins/http_url_patterns.h"
-#include "detector_plugins/detector_sip.h"
-#include "detector_plugins/detector_pattern.h"
+#include "flow/flow.h"
 #include "log/messages.h"
-#include "log/packet_tracer.h"
 #include "managers/inspector_manager.h"
 #include "managers/module_manager.h"
-#include "protocols/packet.h"
+#include "packet_tracer/packet_tracer.h"
 #include "profiler/profiler.h"
+
+#include "app_forecast.h"
+#include "appid_debug.h"
+#include "appid_discovery.h"
+#include "appid_http_event_handler.h"
+#include "appid_session.h"
+#include "appid_stats.h"
+#include "client_plugins/client_discovery.h"
+#include "detector_plugins/detector_dns.h"
+#include "detector_plugins/detector_pattern.h"
+#include "detector_plugins/detector_sip.h"
+#include "detector_plugins/http_url_patterns.h"
+#include "host_port_app_cache.h"
+#include "lua_detector_module.h"
+#include "service_plugins/service_discovery.h"
+#include "service_plugins/service_ssl.h"
+#ifdef ENABLE_APPID_THIRD_PARTY
+#include "tp_lib_handler.h"
+#endif
+
+using namespace snort;
+static THREAD_LOCAL PacketTracer::TracerMute appid_mute;
 
 // FIXIT-L - appid cleans up openssl now as it is the primary (only) user... eventually this
 //           should probably be done outside of appid
@@ -56,24 +63,28 @@ static void openssl_cleanup()
     CRYPTO_cleanup_all_ex_data();
 }
 
-static void add_appid_to_packet_trace(Flow* flow)
+static void add_appid_to_packet_trace(Flow& flow)
 {
     AppIdSession* session = appid_api.get_appid_session(flow);
     if (session)
     {
         AppId service_id, client_id, payload_id, misc_id;
-        const char *service_app_name, *client_app_name, *payload_app_name, *misc_name;
+        const char* service_app_name, * client_app_name, * payload_app_name, * misc_name;
         session->get_application_ids(service_id, client_id, payload_id, misc_id);
         service_app_name = appid_api.get_application_name(service_id);
         client_app_name = appid_api.get_application_name(client_id);
         payload_app_name = appid_api.get_application_name(payload_id);
         misc_name = appid_api.get_application_name(misc_id);
 
-        PacketTracer::log("AppID: service: %s(%d), client: %s(%d), payload: %s(%d), misc: %s(%d)\n",
-            (service_app_name ? service_app_name : ""), service_id,
-            (client_app_name ? client_app_name : ""), client_id,
-            (payload_app_name ? payload_app_name : ""), payload_id,
-            (misc_name ? misc_name : ""), misc_id);
+        if (PacketTracer::is_active())
+        {
+            PacketTracer::log(appid_mute,
+                    "AppID: service: %s(%d), client: %s(%d), payload: %s(%d), misc: %s(%d)\n",
+                    (service_app_name ? service_app_name : ""), service_id,
+                    (client_app_name ? client_app_name : ""), client_id,
+                    (payload_app_name ? payload_app_name : ""), payload_id,
+                    (misc_name ? misc_name : ""), misc_id);
+        }
     }
 }
 
@@ -93,29 +104,29 @@ AppIdConfig* AppIdInspector::get_appid_config()
     return active_config;
 }
 
-bool AppIdInspector::configure(SnortConfig*)
+bool AppIdInspector::configure(SnortConfig* sc)
 {
     assert(!active_config);
 
-    active_config = new AppIdConfig( ( AppIdModuleConfig* )config);
-
-    DataBus::subscribe(HTTP_REQUEST_HEADER_EVENT_KEY, new HttpEventHandler(
-        HttpEventHandler::REQUEST_EVENT));
-
-    DataBus::subscribe(HTTP_RESPONSE_HEADER_EVENT_KEY, new HttpEventHandler(
-        HttpEventHandler::RESPONSE_EVENT));
+    active_config = new AppIdConfig(const_cast<AppIdModuleConfig*>(config));
 
     my_seh = SipEventHandler::create();
-    my_seh->subscribe();
+    my_seh->subscribe(sc);
 
-    active_config->init_appid();
-    return true;
+    active_config->init_appid(sc);
 
-    // FIXIT-M some of this stuff may be needed in some fashion...
-#ifdef REMOVED_WHILE_NOT_IN_USE
-    _dpd.registerGeAppId(getOpenAppId);
-    _dpd.registerSslAppIdLookup(sslAppGroupIdLookup);
+#ifdef ENABLE_APPID_THIRD_PARTY
+    if (!TPLibHandler::have_tp())
 #endif
+    {
+        DataBus::subscribe_global(HTTP_REQUEST_HEADER_EVENT_KEY, new HttpEventHandler(
+            HttpEventHandler::REQUEST_EVENT), sc);
+
+        DataBus::subscribe_global(HTTP_RESPONSE_HEADER_EVENT_KEY, new HttpEventHandler(
+            HttpEventHandler::RESPONSE_EVENT), sc);
+    }
+
+    return true;
 }
 
 void AppIdInspector::show(SnortConfig*)
@@ -135,51 +146,48 @@ void AppIdInspector::show(SnortConfig*)
 
 void AppIdInspector::tinit()
 {
+    appid_mute = PacketTracer::get_mute();
+
     AppIdStatistics::initialize_manager(*config);
-    HostPortCache::initialize();
-    AppIdServiceState::initialize();
-    init_appid_forecast();
-    HttpPatternMatchers* http_matchers = HttpPatternMatchers::get_instance();
-    AppIdDiscovery::initialize_plugins(this);
-    init_length_app_cache();
+    appid_forecast_tinit();
     LuaDetectorManager::initialize(*active_config);
-    PatternServiceDetector::finalize_service_port_patterns();
-    PatternClientDetector::finalize_client_port_patterns();
-    AppIdDiscovery::finalize_plugins();
-    http_matchers->finalize();
-    SipUdpClientDetector::finalize_sip_ua();
-    ssl_detector_process_patterns();
-    dns_host_detector_process_patterns();
+    AppIdServiceState::initialize(config->memcap);
+    appidDebug = new AppIdDebug();
+    if (active_config->mod_config and active_config->mod_config->log_all_sessions)
+        appidDebug->set_enabled(true);
+#ifdef ENABLE_APPID_THIRD_PARTY
+    TPLibHandler::tinit();
+#endif
 }
 
 void AppIdInspector::tterm()
 {
+    appid_forecast_tterm();
     AppIdStatistics::cleanup();
-    HostPortCache::terminate();
-    clean_appid_forecast();
-    service_dns_host_clean();
-    service_ssl_clean();
-    free_length_app_cache();
-
-    AppIdServiceState::clean();
     LuaDetectorManager::terminate();
-    AppIdDiscovery::release_plugins();
-    delete HttpPatternMatchers::get_instance();
+    AppIdDiscovery::tterm();
+    AppIdServiceState::clean();
+    delete appidDebug;
+    appidDebug = nullptr;
+#ifdef ENABLE_APPID_THIRD_PARTY
+    TPLibHandler::tterm();
+#endif
 }
 
 void AppIdInspector::eval(Packet* p)
 {
-    Profile profile(appidPerfStats);
-
-    AppIdPegCounts::inc_disco_peg(AppIdPegCounts::DiscoveryPegs::PACKETS);
+    Profile profile(appid_perf_stats);
+    appid_stats.packets++;
+    
     if (p->flow)
     {
         AppIdDiscovery::do_application_discovery(p, *this);
-        if (PacketTracer::get_enable())
-            add_appid_to_packet_trace(p->flow);
+        // FIXIT-L tag verdict reason as appid for daq
+        if (PacketTracer::is_active())
+            add_appid_to_packet_trace(*p->flow);
     }
     else
-        AppIdPegCounts::inc_disco_peg(AppIdPegCounts::DiscoveryPegs::IGNORED_PACKETS);
+        appid_stats.ignored_packets++;
 }
 
 //-------------------------------------------------------------------------
@@ -199,11 +207,28 @@ static void mod_dtor(Module* m)
 static void appid_inspector_pinit()
 {
     AppIdSession::init();
+#ifdef ENABLE_APPID_THIRD_PARTY
+    TPLibHandler::get();
+#endif
 }
 
 static void appid_inspector_pterm()
 {
+//FIXIT-M: RELOAD - if app_info_table is associated with an object
+    HostPortCache::terminate();
+    appid_forecast_pterm();
+    free_length_app_cache();
+    LuaDetectorManager::terminate();
+    AppIdDiscovery::release_plugins();
+    delete HttpPatternMatchers::get_instance();
+    service_dns_host_clean();
+    service_ssl_clean();
+    AppIdConfig::pterm();
+//end of 'FIXIT-M: RELOAD' comment above
     openssl_cleanup();
+#ifdef ENABLE_APPID_THIRD_PARTY
+    TPLibHandler::pfini();
+#endif
 }
 
 static void appid_inspector_tinit()
@@ -218,7 +243,7 @@ static void appid_inspector_tterm()
 
 static Inspector* appid_inspector_ctor(Module* m)
 {
-	assert(m);
+    assert(m);
     return new AppIdInspector((AppIdModule&)*m);
 }
 
@@ -242,7 +267,7 @@ const InspectApi appid_inspector_api =
         mod_dtor
     },
     IT_CONTROL,
-    (uint16_t)PktType::ANY_IP,
+    PROTO_BIT__ANY_IP,
     nullptr, // buffers
     nullptr, // service
     appid_inspector_pinit,
@@ -268,56 +293,3 @@ const BaseApi* nin_appid[] =
     nullptr
 };
 
-// @returns 1 if some appid is found, 0 otherwise.
-//int sslAppGroupIdLookup(void* ssnptr, const char* serverName, const char* commonName,
-//    AppId* service_id, AppId* client_id, AppId* payload_id)
-int sslAppGroupIdLookup(void*, const char*, const char*, AppId*, AppId*, AppId*)
-{
-    // FIXIT-M determine need and proper location for this code when support for ssl is implemented
-    //         also once this is done the call to get the appid config should change to use the
-    //         config assigned to the flow being processed
-#ifdef REMOVED_WHILE_NOT_IN_USE
-    AppIdSession* asd;
-    *service_id = *client_id = *payload_id = APP_ID_NONE;
-
-    if (commonName)
-    {
-        ssl_scan_cname((const uint8_t*)commonName, strlen(commonName), client_id, payload_app_id,
-            &get_appid_config()->serviceSslConfig);
-    }
-    if (serverName)
-    {
-        ssl_scan_hostname((const uint8_t*)serverName, strlen(serverName), client_id,
-            payload_app_id,
-            &get_appid_config()->serviceSslConfig);
-    }
-
-    if (ssnptr && (asd = appid_api.get_appid_session(ssnptr)))
-    {
-        *service_id = pick_service_app_id(asd);
-        if (*client_id == APP_ID_NONE)
-        {
-            *client_id = pick_client_app_id(asd);
-        }
-        if (*payload_id == APP_ID_NONE)
-        {
-            *payload_id = pick_payload_app_id(asd);
-        }
-    }
-    if (*service_id != APP_ID_NONE ||
-        *client_id != APP_ID_NONE ||
-        *payload_id != APP_ID_NONE)
-    {
-        return 1;
-    }
-#endif
-
-    return 0;
-}
-
-AppId getOpenAppId(Flow* flow)
-{
-    assert(flow);
-    AppIdSession* asd = appid_api.get_appid_session(flow);
-    return asd->payload.get_id();
-}

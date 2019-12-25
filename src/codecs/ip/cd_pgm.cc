@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -26,6 +26,8 @@
 #include "framework/codec.h"
 
 #include "checksum.h"
+
+using namespace snort;
 
 namespace
 {
@@ -149,7 +151,7 @@ bool PgmCodec::decode(const RawData& raw, CodecData& codec, DecodeData&)
 
 void PgmCodec::get_protocol_ids(std::vector<ProtocolId>& v)
 {
-    v.push_back(ProtocolId::PGM);
+    v.emplace_back(ProtocolId::PGM);
 }
 
 //-------------------------------------------------------------------------

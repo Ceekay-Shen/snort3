@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -22,8 +22,6 @@
 #include "config.h"
 #endif
 
-#include "hyperscan.h"
-
 #include <hs_compile.h>
 #include <hs_runtime.h>
 
@@ -33,7 +31,10 @@
 #include "framework/mpse.h"
 #include "log/messages.h"
 #include "main/snort_config.h"
+#include "main/thread.h"
 #include "utils/stats.h"
+
+using namespace snort;
 
 struct Pattern
 {
@@ -93,11 +94,13 @@ void Pattern::escape(const uint8_t* s, unsigned n, bool literal)
 
 typedef std::vector<Pattern> PatternVector;
 
-// we need to update scratch in the main thread as each pattern is processed
-// and then clone to thread specific after all rules are loaded.  s_scratch is
-// a prototype that is large enough for all uses.
+// we need to update scratch in each compiler thread as each pattern is processed
+// and then select the largest to clone to packet thread specific after all rules
+// are loaded.  s_scratch is a prototype that is large enough for all uses.
 
-static hs_scratch_t* s_scratch = nullptr;
+static std::vector<hs_scratch_t*> s_scratch;
+static unsigned int scratch_index;
+static bool scratch_registered = false;
 
 //-------------------------------------------------------------------------
 // mpse
@@ -127,7 +130,7 @@ public:
         const PatternDescriptor& desc, void* user) override
     {
         Pattern p(pat, len, desc, user);
-        pvector.push_back(p);
+        pvector.emplace_back(p);
         ++patterns;
         return 0;
     }
@@ -136,7 +139,7 @@ public:
 
     int _search(const uint8_t*, int, MpseMatch, void*, int*) override;
 
-    int get_pattern_count() override
+    int get_pattern_count() const override
     { return pvector.size(); }
 
     int match(unsigned id, unsigned long long to);
@@ -226,9 +229,9 @@ int HyperscanMpse::prep_patterns(SnortConfig* sc)
 
     for ( auto& p : pvector )
     {
-        pats.push_back(p.pat.c_str());
-        flags.push_back(p.flags);
-        ids.push_back(id++);
+        pats.emplace_back(p.pat.c_str());
+        flags.emplace_back(p.flags);
+        ids.emplace_back(id++);
     }
 
     if ( hs_compile_multi(&pats[0], &flags[0], &ids[0], pvector.size(), HS_MODE_BLOCK,
@@ -241,7 +244,7 @@ int HyperscanMpse::prep_patterns(SnortConfig* sc)
         return -2;
     }
 
-    if ( hs_error_t err = hs_alloc_scratch(hs_db, &s_scratch) )
+    if ( hs_error_t err = hs_alloc_scratch(hs_db, &s_scratch[get_instance_id()]) )
     {
         ParseError("can't allocate search scratch space (%d)", err);
         return -3;
@@ -278,49 +281,72 @@ int HyperscanMpse::_search(
     match_cb = mf;
     match_ctx = pv;
 
-    SnortState* ss = SnortConfig::get_conf()->state + get_instance_id();
+    hs_scratch_t* ss =
+        (hs_scratch_t*)SnortConfig::get_conf()->state[get_instance_id()][scratch_index];
 
     // scratch is null for the degenerate case w/o patterns
-    assert(!hs_db or ss->hyperscan_scratch);
+    assert(!hs_db or ss);
 
-    hs_scan(hs_db, (const char*)buf, n, 0, (hs_scratch_t*)ss->hyperscan_scratch,
+    hs_scan(hs_db, (const char*)buf, n, 0, ss,
         HyperscanMpse::match, this);
 
     return nfound;
 }
 
-//-------------------------------------------------------------------------
-// public methods
-//-------------------------------------------------------------------------
-
-void hyperscan_setup(SnortConfig* sc)
+static void scratch_setup(SnortConfig* sc)
 {
+    // find the largest scratch and clone for all slots
+    hs_scratch_t* max = nullptr;
+
     for ( unsigned i = 0; i < sc->num_slots; ++i )
     {
-        SnortState* ss = sc->state + i;
+        if ( !s_scratch[i] )
+            continue;
 
-        if ( s_scratch )
-            hs_clone_scratch(s_scratch, (hs_scratch_t**)&ss->hyperscan_scratch);
+        if ( !max )
+        {
+            max = s_scratch[i];
+            s_scratch[i] = nullptr;
+            continue;
+        }
+        size_t max_sz, idx_sz;
+        hs_scratch_size(max, &max_sz);
+        hs_scratch_size(s_scratch[i], &idx_sz);
+
+        if ( idx_sz > max_sz )
+        {
+            hs_free_scratch(max);
+            max = s_scratch[i];
+        }
         else
-            ss->hyperscan_scratch = nullptr;
+        {
+            hs_free_scratch(s_scratch[i]);
+        }
+        s_scratch[i] = nullptr;
     }
-    if ( s_scratch )
+    for ( unsigned i = 0; i < sc->num_slots; ++i )
     {
-        hs_free_scratch(s_scratch);
-        s_scratch = nullptr;
+        hs_scratch_t** ss = (hs_scratch_t**) &sc->state[i][scratch_index];
+
+        if ( max )
+            hs_clone_scratch(max, ss);
+        else
+            *ss = nullptr;
     }
+    if ( max )
+        hs_free_scratch(max);
 }
 
-void hyperscan_cleanup(SnortConfig* sc)
+static void scratch_cleanup(SnortConfig* sc)
 {
     for ( unsigned i = 0; i < sc->num_slots; ++i )
     {
-        SnortState* ss = sc->state + i;
+        hs_scratch_t* ss = (hs_scratch_t*) sc->state[i][scratch_index];
 
-        if ( ss->hyperscan_scratch )
+        if ( ss )
         {
-            hs_free_scratch((hs_scratch_t*)ss->hyperscan_scratch);
-            ss->hyperscan_scratch = nullptr;
+            hs_free_scratch(ss);
+            sc->state[i][scratch_index] = nullptr;
         }
     }
 }
@@ -332,6 +358,12 @@ void hyperscan_cleanup(SnortConfig* sc)
 static Mpse* hs_ctor(
     SnortConfig* sc, class Module*, const MpseAgent* a)
 {
+    if ( !scratch_registered )
+    {
+        s_scratch.resize(sc->num_slots);
+        scratch_index = SnortConfig::request_scratch(scratch_setup, scratch_cleanup);
+        scratch_registered = true;
+    }
     return new HyperscanMpse(sc, a);
 }
 
@@ -366,7 +398,7 @@ static const MpseApi hs_api =
         nullptr,
         nullptr
     },
-    MPSE_REGEX,
+    MPSE_REGEX | MPSE_MTBLD,
     nullptr,  // activate
     nullptr,  // setup
     nullptr,  // start
@@ -375,13 +407,14 @@ static const MpseApi hs_api =
     hs_dtor,
     hs_init,
     hs_print,
+    nullptr,
 };
 
-//#ifdef BUILDING_SO
-//SO_PUBLIC const BaseApi* snort_plugins[] =
-//#else
+#ifdef BUILDING_SO
+SO_PUBLIC const BaseApi* snort_plugins[] =
+#else
 const BaseApi* se_hyperscan[] =
-//#endif
+#endif
 {
     &hs_api.base,
     nullptr

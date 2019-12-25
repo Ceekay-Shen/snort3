@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -23,6 +23,8 @@
 
 #include "framework/codec.h"
 #include "codecs/codec_module.h"
+
+using namespace snort;
 
 #define CD_IGMP_NAME "igmp"
 #define CD_IGMP_HELP "support for Internet group management protocol"
@@ -83,7 +85,7 @@ bool IgmpCodec::decode(const RawData& raw, CodecData& codec, DecodeData& snort)
 
 void IgmpCodec::get_protocol_ids(std::vector<ProtocolId>& v)
 {
-    v.push_back(ProtocolId::IGMP);
+    v.emplace_back(ProtocolId::IGMP);
 }
 
 //-------------------------------------------------------------------------

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2007-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -32,6 +32,7 @@
 
 #include "detection_options.h"
 
+#include <mutex>
 #include <string>
 
 #include "filters/detection_filter.h"
@@ -62,6 +63,8 @@
 #include "pattern_match_data.h"
 #include "rules.h"
 #include "treenodes.h"
+
+using namespace snort;
 
 #define HASH_RULE_OPTIONS 16384
 #define HASH_RULE_TREE     8192
@@ -298,7 +301,7 @@ static XHash* DetectionTreeHashTableNew()
 
 void print_option_tree(detection_option_tree_node_t* node, int level)
 {
-#ifdef DEBUG_OPTION_TREE
+#ifdef DEBUG_MSGS
     char buf[32];
     const char* opt;
 
@@ -312,8 +315,8 @@ void print_option_tree(detection_option_tree_node_t* node, int level)
         opt = buf;
     }
 
-    DebugFormatNoFileLine(DEBUG_DETECT, "%3d %3d  %p %*s\n",
-        level, node->num_children, node->option_data, level + strlen(opt), opt);
+    trace_logf(detection, TRACE_OPTION_TREE, "%3d %3d  %p %*s\n",
+        level, node->num_children, node->option_data, (int)(level + strlen(opt)), opt);
 
     for ( int i=0; i<node->num_children; i++ )
         print_option_tree(node->children[i], level+1);
@@ -325,6 +328,9 @@ void print_option_tree(detection_option_tree_node_t* node, int level)
 
 void* add_detection_option_tree(SnortConfig* sc, detection_option_tree_node_t* option_tree)
 {
+    static std::mutex build_mutex;
+    std::lock_guard<std::mutex> lock(build_mutex);
+
     if ( !sc->detection_option_tree_hash_table )
         sc->detection_option_tree_hash_table = DetectionTreeHashTableNew();
 
@@ -340,12 +346,10 @@ void* add_detection_option_tree(SnortConfig* sc, detection_option_tree_node_t* o
 }
 
 int detection_option_node_evaluate(
-    detection_option_tree_node_t* node, detection_option_eval_data_t* eval_data,
-    Cursor& orig_cursor)
+    detection_option_tree_node_t* node, detection_option_eval_data_t& eval_data,
+    const Cursor& orig_cursor)
 {
-    // need node->state to do perf profiling
-    if ( !node )
-        return 0;
+    assert(node and eval_data.p);
 
     auto& state = node->state[get_instance_id()];
     RuleContext profile(state);
@@ -358,15 +362,11 @@ int detection_option_node_evaluate(
     char flowbits_setoperation = 0;
     int loop_count = 0;
     uint32_t tmp_byte_extract_vars[NUM_IPS_OPTIONS_VARS];
-    uint64_t cur_eval_context_num = DetectionEngine::get_context()->context_num;
+    uint64_t cur_eval_context_num = eval_data.p->context->context_num;
 
-    if ( !eval_data || !eval_data->p || !eval_data->pomd )
-        return 0;
+    node_eval_trace(node, cursor, eval_data.p);
 
-    node_eval_trace(node, cursor);
-
-    auto p = eval_data->p;
-    auto pomd = eval_data->pomd;
+    auto p = eval_data.p;
 
     // see if evaluated it before ...
     if ( !node->is_relative )
@@ -390,7 +390,7 @@ int detection_option_node_evaluate(
         }
     }
 
-    state.last_check.ts = eval_data->p->pkth->ts;
+    state.last_check.ts = eval_data.p->pkth->ts;
     state.last_check.run_num = get_run_num();
     state.last_check.context_num = cur_eval_context_num;
     state.last_check.flowbit_failed = 0;
@@ -417,31 +417,28 @@ int detection_option_node_evaluate(
             // Add the match for this otn to the queue.
         {
             OptTreeNode* otn = (OptTreeNode*)node->option_data;
-            int16_t app_proto = p->get_application_protocol();
+            SnortProtocolId snort_protocol_id = p->get_snort_protocol_id();
             int check_ports = 1;
 
-            if ( app_proto and ((OtnxMatchData*)(pomd))->check_ports != 2 )
+            if ( snort_protocol_id != UNKNOWN_PROTOCOL_ID )
             {
                 auto sig_info = otn->sigInfo;
 
                 for ( unsigned svc_idx = 0; svc_idx < sig_info.num_services; ++svc_idx )
                 {
-                    if ( app_proto == sig_info.services[svc_idx].service_ordinal )
+                    if ( snort_protocol_id == sig_info.services[svc_idx].snort_protocol_id )
                     {
                         check_ports = 0;
                         break;  // out of for
                     }
                 }
 
-                if (sig_info.num_services && check_ports)
+                if ( sig_info.num_services and check_ports )
                 {
                     // none of the services match
-                    DebugFormat(DEBUG_DETECT,
-                        "[**] SID %u not matched because of service mismatch (%d!=%d [**]\n",
-                        sig_info.sid, app_proto, sig_info.services[0].service_ordinal);
                     trace_logf(detection, TRACE_RULE_EVAL,
                         "SID %u not matched because of service mismatch %d!=%d \n",
-                        sig_info.sid, app_proto, sig_info.services[0].service_ordinal);
+                        sig_info.sid, snort_protocol_id, sig_info.services[0].snort_protocol_id);
                     break;  // out of case
                 }
             }
@@ -471,17 +468,14 @@ int detection_option_node_evaluate(
                 {
                     otn->state[get_instance_id()].matches++;
 
-                    if ( !eval_data->flowbit_noalert )
+                    if ( !eval_data.flowbit_noalert )
                     {
-                        PatternMatchData* pmd = (PatternMatchData*)eval_data->pmd;
-                        int pattern_size = pmd ? pmd->pattern_size : 0;
 #ifdef DEBUG_MSGS
                         const SigInfo& si = otn->sigInfo;
                         trace_logf(detection, TRACE_RULE_EVAL,
                             "Matched rule gid:sid:rev %u:%u:%u\n", si.gid, si.sid, si.rev);
 #endif
-
-                        fpAddMatch((OtnxMatchData*)pomd, pattern_size, otn);
+                        fpAddMatch(p->context->otnx, otn);
                     }
                     result = rval = (int)IpsOption::MATCH;
                 }
@@ -528,7 +522,7 @@ int detection_option_node_evaluate(
                     rval = (int)IpsOption::MATCH;
 
                 else
-                    rval = node->evaluate(node->option_data, cursor, eval_data->p);
+                    rval = node->evaluate(node->option_data, cursor, eval_data.p);
             }
             break;
 
@@ -547,7 +541,7 @@ int detection_option_node_evaluate(
         else if ( rval == (int)IpsOption::FAILED_BIT )
         {
             trace_log(detection, TRACE_RULE_EVAL, "failed bit\n");
-            eval_data->flowbit_failed = 1;
+            eval_data.flowbit_failed = 1;
             // clear the timestamp so failed flowbit gets eval'd again
             state.last_check.flowbit_failed = 1;
             state.last_check.result = result;
@@ -557,8 +551,8 @@ int detection_option_node_evaluate(
         {
             // Cache the current flowbit_noalert flag, and set it
             // so nodes below this don't alert.
-            tmp_noalert_flag = eval_data->flowbit_noalert;
-            eval_data->flowbit_noalert = 1;
+            tmp_noalert_flag = eval_data.flowbit_noalert;
+            eval_data.flowbit_noalert = 1;
             trace_log(detection, TRACE_RULE_EVAL, "flowbit no alert\n");
         }
 
@@ -643,10 +637,11 @@ int detection_option_node_evaluate(
                         node->children[i], eval_data, cursor);
 
                     if ( child_node->option_type == RULE_OPTION_TYPE_LEAF_NODE )
+                    {
                         // Leaf node won't have any children but will return success
-                        // or failure
-                        result += child_state->result;
-
+                        // or failure; regardless we must count them here
+                        result += 1;
+                    }
                     else if (child_state->result == child_node->num_children)
                         // Indicate that the child's tree branches are done
                         ++result;
@@ -678,7 +673,7 @@ int detection_option_node_evaluate(
         if ( rval == (int)IpsOption::NO_ALERT )
         {
             // Reset the flowbit_noalert flag in eval data
-            eval_data->flowbit_noalert = tmp_noalert_flag;
+            eval_data.flowbit_noalert = tmp_noalert_flag;
         }
 
         if ( continue_loop && rval == (int)IpsOption::MATCH && node->relative_children )
@@ -707,7 +702,7 @@ int detection_option_node_evaluate(
             result = rval;
     }
 
-    if ( eval_data->flowbit_failed )
+    if ( eval_data.flowbit_failed )
     {
         // something deeper in the tree failed a flowbit test, we may need to
         // reeval this node

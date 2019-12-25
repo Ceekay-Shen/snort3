@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 // Copyright (C) 2002 Martin Roesch <roesch@sourcefire.com>
 //
@@ -45,12 +45,16 @@ enum WarningGroup
     WARN_MAX
 };
 
+void reset_parse_errors();
 unsigned get_parse_errors();
 unsigned get_parse_warnings();
+unsigned get_reload_errors();
 
-SO_PUBLIC void ParseMessage(const char*, ...) __attribute__((format (printf, 1, 2)));
+namespace snort
+{
 SO_PUBLIC void ParseWarning(WarningGroup, const char*, ...) __attribute__((format (printf, 2, 3)));
 SO_PUBLIC void ParseError(const char*, ...) __attribute__((format (printf, 1, 2)));
+SO_PUBLIC void ReloadError(const char*, ...) __attribute__((format (printf, 1, 2)));
 [[noreturn]] SO_PUBLIC void ParseAbort(const char*, ...) __attribute__((format (printf, 1, 2)));
 
 SO_PUBLIC void LogMessage(const char*, ...) __attribute__((format (printf, 1, 2)));
@@ -58,7 +62,7 @@ SO_PUBLIC void LogMessage(FILE* fh, const char*, ...) __attribute__((format (pri
 SO_PUBLIC void WarningMessage(const char*, ...) __attribute__((format (printf, 1, 2)));
 SO_PUBLIC void ErrorMessage(const char*, ...) __attribute__((format (printf, 1, 2)));
 
-// FIXIT-M do not call FatalError() during runtime
+// FIXIT-RC do not call FatalError() during runtime
 [[noreturn]] SO_PUBLIC void FatalError(const char*, ...) __attribute__((format (printf, 1, 2)));
 
 NORETURN_ASSERT void log_safec_error(const char*, void*, int);
@@ -94,6 +98,7 @@ private:
     unsigned max;
     unsigned idx;
 };
+}
 
 #endif
 

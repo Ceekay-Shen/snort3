@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2013-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -34,7 +34,7 @@
 
 #include "circular_buffer.h"
 
-#define FILE_MEM_SUCCESS    0  // FIXIT-L use bool
+#define FILE_MEM_SUCCESS    0  // FIXIT-RC use bool
 #define FILE_MEM_FAIL      (-1)
 
 class FileMemPool

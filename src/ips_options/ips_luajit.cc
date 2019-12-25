@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -35,6 +35,8 @@
 #include "managers/script_manager.h"
 #include "profiler/profiler.h"
 #include "utils/util.h"
+
+using namespace snort;
 
 static THREAD_LOCAL ProfileStats luaIpsPerfStats;
 
@@ -140,6 +142,7 @@ LuaJitOption::LuaJitOption(
     config += "}";
 
     unsigned max = ThreadConfig::get_instance_max();
+    states.reserve(max);
 
     for ( unsigned i = 0; i < max; ++i )
     {
@@ -177,7 +180,7 @@ bool LuaJitOption::operator==(const IpsOption& ips) const
 
 IpsOption::EvalStatus LuaJitOption::eval(Cursor& c, Packet*)
 {
-    Profile profile(luaIpsPerfStats);
+    RuleProfile profile(luaIpsPerfStats);
 
     cursor = &c;
 

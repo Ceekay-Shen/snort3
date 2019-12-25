@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -30,11 +30,15 @@
 
 #include "gtp.h"
 
+using namespace snort;
+
+Trace TRACE_NAME(gtp_inspect);
 THREAD_LOCAL ProfileStats gtp_inspect_prof;
 
 #define GTP_EVENT_BAD_MSG_LEN_STR        "message length is invalid"
 #define GTP_EVENT_BAD_IE_LEN_STR         "information element length is invalid"
 #define GTP_EVENT_OUT_OF_ORDER_IE_STR    "information elements are out of order"
+#define GTP_EVENT_MISSING_TEID_STR       "TEID is missing"
 
 //-------------------------------------------------------------------------
 // stats
@@ -67,6 +71,7 @@ static const RuleMap gtp_rules[] =
     { GTP_EVENT_BAD_MSG_LEN, GTP_EVENT_BAD_MSG_LEN_STR },
     { GTP_EVENT_BAD_IE_LEN, GTP_EVENT_BAD_IE_LEN_STR },
     { GTP_EVENT_OUT_OF_ORDER_IE, GTP_EVENT_OUT_OF_ORDER_IE_STR },
+    { GTP_EVENT_MISSING_TEID, GTP_EVENT_MISSING_TEID_STR },
 
     { 0, nullptr }
 };
@@ -107,7 +112,7 @@ static const Parameter gtp_info_params[] =
 static const Parameter gtp_params[] =
 {
     { "version", Parameter::PT_INT, "0:2", "2",
-      "gtp version" },
+      "GTP version" },
 
     { "messages", Parameter::PT_LIST, gtp_msg_params, nullptr,
       "message dictionary" },
@@ -119,25 +124,25 @@ static const Parameter gtp_params[] =
 };
 
 GtpInspectModule::GtpInspectModule() :
-    Module(GTP_NAME, GTP_HELP, gtp_params, true)
+    Module(GTP_NAME, GTP_HELP, gtp_params, true, &TRACE_NAME(gtp_inspect))
 { }
 
-bool GtpInspectModule::set(const char*, Value& v, SnortConfig*)
+bool GtpInspectModule::set(const char* fqn, Value& v, SnortConfig* c)
 {
     if ( v.is("version") )
-        stuff.version = v.get_long();
+        stuff.version = v.get_uint8();
 
     else if ( v.is("type") )
-        stuff.type = v.get_long();
+        stuff.type = v.get_uint8();
 
     else if ( v.is("length") )
-        stuff.length = v.get_long();
+        stuff.length = v.get_uint8();
 
     else if ( v.is("name") )
         stuff.name = v.get_string();
 
     else
-        return false;
+        return Module::set(fqn, v, c);
 
     return true;
 }
@@ -168,19 +173,19 @@ bool GtpInspectModule::end(const char* fqn, int idx, SnortConfig*)
         for ( unsigned i = 0; i < temp.size(); ++i )
         {
             temp[i].version = stuff.version;
-            config.push_back(temp[i]);
+            config.emplace_back(temp[i]);
         }
         temp.clear();
     }
     else if ( !strcmp(fqn, "gtp_inspect.messages") and idx )
     {
         assert(stuff.length < 0);
-        temp.push_back(stuff);
+        temp.emplace_back(stuff);
     }
     else if ( !strcmp(fqn, "gtp_inspect.infos") and idx )
     {
         assert(stuff.length >= 0);
-        temp.push_back(stuff);
+        temp.emplace_back(stuff);
     }
     return true;
 }

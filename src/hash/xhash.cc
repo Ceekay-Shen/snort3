@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2003-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -97,6 +97,8 @@
 #include "utils/util.h"
 #include "hashfcn.h"
 
+using namespace snort;
+
 /*
  * Implements XHash as specialized hash container
  */
@@ -124,6 +126,8 @@ static int xhash_nearest_powerof2(int nrows)
     return nrows;
 }
 
+namespace snort
+{
 /*
  * Create a new hash table
  *
@@ -257,9 +261,58 @@ static void xhash_delete_free_list(XHash* t)
 }
 
 /*!
+ *  Try to change the memcap
+ *  Behavior is undefined when t->usrfree is set
+ *
+ * t             SFXHASH table pointer
+ * new_memcap    the new desired memcap
+ * max_work      the maximum amount of work for the function to do (0 = do all available work)
+ *
+ * returns
+ * XHASH_OK           when memcap is successfully decreased
+ * XHASH_PENDING      when more work needs to be done
+ * XHASH_NOMEM        when there isn't enough memory in the hash table
+ * XHASH_ERR          when an error has occurred
+ */
+int xhash_change_memcap(XHash *t, unsigned long new_memcap, unsigned *max_work)
+{
+    if (t == nullptr or new_memcap < t->overhead_bytes)
+        return XHASH_ERR;
+
+    if (new_memcap == t->mc.memcap)
+        return XHASH_OK;
+
+    if (new_memcap > t->mc.memcap)
+    {
+        t->mc.memcap = new_memcap;
+        return XHASH_OK;
+    }
+
+    unsigned work = 0;
+    while (new_memcap < t->mc.memused
+            and (work < *max_work or *max_work == 0)
+            and (xhash_free_anr_lru(t) == XHASH_OK))
+        work++;
+
+    if (*max_work != 0 and (work == *max_work and new_memcap < t->mc.memused))
+    {
+        *max_work -= work;
+        return XHASH_PENDING;
+    }
+
+    //we ran out of nodes to free and there still isn't enough memory
+    //or (we have undefined behavior: t->usrfree is set and xhash_free_anr_lru is returning XHASH_ERR)
+    if (new_memcap < t->mc.memused)
+        return XHASH_NOMEM;
+
+    t->mc.memcap = new_memcap;
+    return XHASH_OK;
+}
+
+/*!
  *  Delete the hash Table
  *
- *  free key's, free node's, and free the users data.
+ *  free keys, free nodes, and free the users data.
  *
  * h XHash table pointer
  *
@@ -494,7 +547,7 @@ static void movetofront(XHash* t, XHashNode* n)
 }
 
 /*
- * Allocat a new hash node, uses Auto Node Recovery if needed and enabled.
+ * Allocate a new hash node, uses Auto Node Recovery if needed and enabled.
  *
  * The oldest node is the one with the longest time since it was last touched,
  * and does not have any direct indication of how long the node has been around.
@@ -693,10 +746,8 @@ int xhash_add(XHash* t, void* key, void* data)
  * t XHash table pointer
  * key  users key pointer
  *
- * return integer
- * retval XHASH_OK      success
- * retval XHASH_INTABLE already in the table, t->cnode points to the node
- * retval XHASH_NOMEM   not enough memory
+ * return XHashNode*
+ * retval nullptr      failed to add node
  */
 XHashNode* xhash_get_node(XHash* t, const void* key)
 {
@@ -748,6 +799,38 @@ XHashNode* xhash_get_node(XHash* t, const void* key)
 
     /* Track # active nodes */
     t->count++;
+
+    return hnode;
+}
+
+/*!
+ * Add a key to the hash table, return the hash node
+ * If space is not available, it will remove a single
+ * node (the LRU) and replace it with a new node.
+ *
+ * This function handles the scenario that we don't
+ * have enough room to allocate a new node - if this is the
+ * case, additional pruning should be done
+ *
+ * t XHash table pointer
+ * key  users key pointer
+ * prune_performed  bool pointer, 1 = successful prune, 0 = no/failed prune
+ *
+ * return XHashNode*
+ * retval XhashNode*    successfully allocated
+ * retval nullptr       failed to allocate
+ */
+XHashNode* xhash_get_node_with_prune(XHash* t, const void* key, bool* prune_performed)
+{
+    size_t mem_after_alloc = t->mc.memused + xhash_required_mem(t);
+    bool over_capacity = (t->mc.memcap < mem_after_alloc);
+    XHashNode* hnode = nullptr;
+
+    if (over_capacity)
+        *prune_performed = (xhash_free_anr_lru(t) == XHASH_OK);
+
+    if (*prune_performed or !over_capacity)
+        hnode = xhash_get_node(t, key);
 
     return hnode;
 }
@@ -961,6 +1044,83 @@ static void xhash_next(XHash* t)
     }
 }
 
+static inline int xhash_delete_free_node(XHash *t)
+{
+    XHashNode* fn = xhash_get_free_node(t);
+    if (fn)
+    {
+        s_free(t, fn);
+        return XHASH_OK;
+    }
+    return XHASH_ERR;
+}
+
+/*!
+ * Unlink and free an ANR node or the oldest node, if ANR is empty
+ * behavior is undefined if t->usrfree is set
+ *
+ * t XHash table pointer
+ *
+ * returns
+ * XHASH_ERR if error occurs
+ * XHASH_OK  if node is freed
+ */
+int xhash_free_anr_lru(XHash *t)
+{
+    if (t == nullptr)
+        return XHASH_ERR;
+
+    if (t->fhead)
+    {
+        if (xhash_delete_free_node(t) == XHASH_OK)
+            return XHASH_OK;
+    }
+
+    if (t->gtail)
+    {
+        if (xhash_free_node(t, t->gtail) == XHASH_OK)
+        {
+            if (t->fhead)
+            {
+                if (xhash_delete_free_node(t) == XHASH_OK)
+                    return XHASH_OK;
+            }
+            else if (!t->recycle_nodes)
+            {
+                return XHASH_OK;
+            }
+        }
+    }
+    return XHASH_ERR;
+}
+
+/*!
+ * Unlink and free nodes if the xhash is exceeding the
+ * specified memcap
+ *
+ * t            XHash table pointer
+ * num_freed    set to the number of nodes freed
+ * work_limit   the max amount of work to do
+ *
+ * returns
+ * XHASH_ERR if error occurs
+ * XHASH_OK  if node(s) freed and memused is within memcap
+ * XHASH_PENDING if additional pending is required
+ */
+int xhash_free_overallocations(XHash* t, unsigned work_limit, unsigned* num_freed)
+{
+
+    while (t->mc.memcap < t->mc.memused and work_limit--)
+    {
+        if (xhash_free_anr_lru(t) != XHASH_OK)
+            return XHASH_ERR;
+
+        ++*num_freed;
+    }
+
+    return (t->mc.memcap > t->mc.memused) ? XHASH_OK : XHASH_PENDING;
+}
+
 /*!
  * Find and return the first hash table node
  *
@@ -1023,144 +1183,4 @@ void xhash_set_keyops(XHash* h, hash_func hash_fcn, keycmp_func keycmp_fcn)
     assert(h and hash_fcn and keycmp_fcn);
     hashfcn_set_keyops(h->hashfcn, hash_fcn, keycmp_fcn);
 }
-
-/*
- * -----------------------------------------------------------------------------------------
- *   Test Driver for Hashing
- * -----------------------------------------------------------------------------------------
- */
-#ifdef XHash_MAIN
-
-/*
-   This is called when the user releases a node or kills the table
-*/
-int usrfree(void* key, void* data)
-{
-    /* Release any data you need to */
-    return 0;
-}
-
-/*
-   Auto Node Recovery Callback - optional
-
-   This is called to ask the user to kill a node, if it returns !0 than the hash
-   library does not kill this node.  If the user os willing to let the node die,
-   the user must do any freeing or clean up on the node during this call.
-*/
-int anrfree(void* key, void* data)
-{
-    static int bx = 0;  // test only
-
-    /* Decide if we can free this node. */
-
-    //bx++; if(bx == 4 )bx=0;       /* for testing */
-
-    /* if we are allowing the node to die, kill it */
-    if ( !bx )
-        usrfree(key, data);
-
-    return bx;  /* Allow the caller to  kill this nodes data + key */
-}
-
-/*
- *       Hash test program : use 'sfxhash 1000 50000' to stress the Auto_NodeRecover feature
- */
-int main(int argc, char** argv)
-{
-    int i;
-    XHash* t;
-    XHashNode* n;
-    char strkey[256], strdata[256];
-    int num = 100;
-    int mem = 0;
-
-    memset(strkey,0,20);
-    memset(strdata,0,20);
-
-    if ( argc > 1 )
-    {
-        num = atoi(argv[1]);
-    }
-
-    if ( argc > 2 )
-    {
-        mem = atoi(argv[2]);
-    }
-
-    /* Create a Hash Table */
-    t = xhash_new(100,         /* one row per element in table, when possible */
-        20,                     /* key size :  padded with zeros */
-        20,                     /* data size:  padded with zeros */
-        mem,                    /* max bytes,  0=no max */
-        1,                      /* enable AutoNodeRecovery */
-        anrfree,                /* provide a function to let user know we want to kill a node */
-        usrfree,              /* provide a function to release user memory */
-        1);                   /* Recycle nodes */
-    if (!t)
-    {
-        printf("Low Memory\n");
-        exit(0);
-    }
-    /* Add Nodes to the Hash Table */
-    for (i=0; i<num; i++)
-    {
-        snprintf(strkey, sizeof(strkey), "KeyWord%5.5d",i+1);
-        strkey[sizeof(strkey) - 1] = '\0';
-        snprintf(strdata, sizeof(strdata), "KeyWord%5.5d",i+1);
-        strdata[sizeof(strdata) - 1] = '\0';
-        //strupr(strdata);
-        xhash_add(t, strkey /* user key */,  strdata /* user data */);
-    }
-
-    /* Find and Display Nodes in the Hash Table */
-    printf("\n** FIND KEY TEST\n");
-    for (i=0; i<num; i++)
-    {
-        snprintf(strkey, sizeof(strkey) - 1, "KeyWord%5.5d",i+1);
-        strkey[sizeof(strkey) - 1] = '\0';
-
-        if ( char* p = (char*)xhash_find(t, strkey) )
-            printf("Hash-key=%*s, data=%*s\n", strlen(strkey),strkey, strlen(strkey), p);
-    }
-
-    /* Show memcap memory */
-    printf("\n...******\n");
-    sfmemcap_showmem(&t->mc);
-    printf("...******\n");
-
-    /* Display All Nodes in the Hash Table findfirst/findnext */
-    printf("\n...FINDFIRST / FINDNEXT TEST\n");
-    for ( n  = xhash_findfirst(t);
-        n != 0;
-        n  = xhash_findnext(t) )
-    {
-        printf("hash-findfirst/next: n=%p, key=%s, data=%s\n", n, n->key, n->data);
-
-        /*
-          remove node we are looking at, this is first/next safe.
-        */
-        if ( xhash_remove(t,n->key) )
-        {
-            printf("...ERROR: Could not remove the key node\n");
-        }
-        else
-        {
-            printf("...key node removed\n");
-        }
-    }
-
-    printf("...Auto-Node-Recovery: %u recycle attempts, %u completions.\n",t->anr_tries,
-        t->anr_count);
-
-    /* Free the table and it's user data */
-    printf("...xhash_delete\n");
-
-    xhash_delete(t);
-
-    printf("\nnormal pgm finish\n\n");
-
-    return 0;
-}
-
-#endif
-
+} // namespace snort

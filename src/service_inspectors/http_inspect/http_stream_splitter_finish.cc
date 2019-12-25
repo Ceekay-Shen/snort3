@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -23,14 +23,22 @@
 
 #include "file_api/file_flows.h"
 
+#include "http_common.h"
+#include "http_cutter.h"
+#include "http_enum.h"
+#include "http_module.h"
 #include "http_msg_request.h"
 #include "http_stream_splitter.h"
 #include "http_test_input.h"
 
+using namespace HttpCommon;
 using namespace HttpEnums;
+using namespace snort;
 
 bool HttpStreamSplitter::finish(Flow* flow)
 {
+    Profile profile(HttpModule::get_profile_stats());
+
     HttpFlowData* session_data = (HttpFlowData*)flow->get_flow_data(HttpFlowData::inspector_id);
     // FIXIT-M - this assert has been changed to check for null session data and return false if so
     //           due to lack of reliable feedback to stream that scan has been called...if that is
@@ -40,9 +48,9 @@ bool HttpStreamSplitter::finish(Flow* flow)
         return false;
 
 #ifdef REG_TEST
-    if (HttpTestManager::use_test_output())
+    if (HttpTestManager::use_test_output(HttpTestManager::IN_HTTP))
     {
-        if (HttpTestManager::use_test_input())
+        if (HttpTestManager::use_test_input(HttpTestManager::IN_HTTP))
         {
             if (!HttpTestManager::get_test_input_source()->finish())
                 return false;
@@ -85,8 +93,10 @@ bool HttpStreamSplitter::finish(Flow* flow)
             session_data->cutter[source_id]->get_num_head_lines(),
             session_data->cutter[source_id]->get_is_broken_chunk(),
             session_data->cutter[source_id]->get_num_good_chunks(),
-            session_data->cutter[source_id]->get_octets_seen(),
-            true);
+            session_data->cutter[source_id]->get_octets_seen());
+        delete session_data->cutter[source_id];
+        session_data->cutter[source_id] = nullptr;
+
         return true;
     }
 
@@ -104,7 +114,7 @@ bool HttpStreamSplitter::finish(Flow* flow)
         // Set up to process empty message section
         uint32_t not_used;
         prepare_flush(session_data, &not_used, session_data->type_expected[source_id], 0, 0, 0,
-            false, 0, 0, true);
+            false, 0, 0);
         return true;
     }
 
@@ -114,6 +124,7 @@ bool HttpStreamSplitter::finish(Flow* flow)
         (session_data->cutter[source_id] != nullptr)               &&
         (session_data->cutter[source_id]->get_octets_seen() == 0))
     {
+        Packet* packet = DetectionEngine::get_current_packet();
         if (!session_data->mime_state[source_id])
         {
             FileFlows* file_flows = FileFlows::get_file_flows(flow);
@@ -130,11 +141,11 @@ bool HttpStreamSplitter::finish(Flow* flow)
                 }
             }
 
-            file_flows->file_process(nullptr, 0, SNORT_FILE_END, !download, file_index);
+            file_flows->file_process(packet, nullptr, 0, SNORT_FILE_END, !download, file_index);
         }
         else
         {
-            session_data->mime_state[source_id]->process_mime_data(flow, nullptr, 0, true,
+            session_data->mime_state[source_id]->process_mime_data(packet, nullptr, 0, true,
                 SNORT_FILE_POSITION_UNKNOWN);
             delete session_data->mime_state[source_id];
             session_data->mime_state[source_id] = nullptr;
@@ -143,5 +154,45 @@ bool HttpStreamSplitter::finish(Flow* flow)
     }
 
     return session_data->section_type[source_id] != SEC__NOT_COMPUTE;
+}
+
+bool HttpStreamSplitter::init_partial_flush(Flow* flow)
+{
+    Profile profile(HttpModule::get_profile_stats());
+
+    if (source_id != SRC_SERVER)
+    {
+        assert(false);
+        return false;
+    }
+
+    HttpFlowData* session_data = (HttpFlowData*)flow->get_flow_data(HttpFlowData::inspector_id);
+    assert(session_data != nullptr);
+    if ((session_data->type_expected[source_id] != SEC_BODY_CL)      &&
+        (session_data->type_expected[source_id] != SEC_BODY_OLD)     &&
+        (session_data->type_expected[source_id] != SEC_BODY_CHUNK))
+    {
+        assert(false);
+        return false;
+    }
+
+#ifdef REG_TEST
+    if (HttpTestManager::use_test_output(HttpTestManager::IN_HTTP) &&
+        !HttpTestManager::use_test_input(HttpTestManager::IN_HTTP))
+    {
+        printf("Partial flush from flow data %" PRIu64 "\n", session_data->seq_num);
+        fflush(stdout);
+    }
+#endif
+
+    // Set up to process partial message section
+    uint32_t not_used;
+    prepare_flush(session_data, &not_used, session_data->type_expected[source_id], 0, 0, 0,
+        session_data->cutter[source_id]->get_is_broken_chunk(),
+        session_data->cutter[source_id]->get_num_good_chunks(),
+        session_data->cutter[source_id]->get_octets_seen());
+    (static_cast<HttpBodyCutter*>(session_data->cutter[source_id]))->detain_ended();
+    session_data->partial_flush[source_id] = true;
+    return true;
 }
 

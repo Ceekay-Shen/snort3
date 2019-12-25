@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -21,7 +21,6 @@
 #include "config.h"
 #endif
 
-#include "host_tracker/host_cache.h"
 #include "flow/flow.h"
 #include "log/messages.h"
 #include "profiler/profiler.h"
@@ -32,6 +31,7 @@
 #include "magic.h"
 #include "wiz_module.h"
 
+using namespace snort;
 using namespace std;
 
 THREAD_LOCAL ProfileStats wizPerfStats;
@@ -84,10 +84,27 @@ public:
     MagicSplitter(bool, class Wizard*);
     ~MagicSplitter() override;
 
-    Status scan(Flow*, const uint8_t* data, uint32_t len,
+    Status scan(Packet*, const uint8_t* data, uint32_t len,
         uint32_t flags, uint32_t* fp) override;
 
     bool is_paf() override { return true; }
+
+private:
+    void count_scan(const Flow* f)
+    {
+        if ( f->pkt_type == PktType::TCP )
+            ++tstats.tcp_scans;
+        else
+            ++tstats.user_scans;
+    }
+
+    void count_hit(const Flow* f)
+    {
+        if ( f->pkt_type == PktType::TCP )
+            ++tstats.tcp_hits;
+        else
+            ++tstats.user_hits;
+    }
 
 private:
     Wizard* wizard;
@@ -111,7 +128,7 @@ public:
     bool finished(Wand&);
     bool cast_spell(Wand&, Flow*, const uint8_t*, unsigned);
     bool spellbind(const MagicPage*&, Flow*, const uint8_t*, unsigned);
-    bool cursebind(vector<CurseServiceTracker>&, Flow*, const uint8_t*, unsigned);
+    bool cursebind(const vector<CurseServiceTracker>&, Flow*, const uint8_t*, unsigned);
 
 public:
     MagicBook* c2s_hexes;
@@ -148,14 +165,14 @@ MagicSplitter::~MagicSplitter()
 
 // FIXIT-M stop search on hit and failure (no possible match)
 StreamSplitter::Status MagicSplitter::scan(
-    Flow* f, const uint8_t* data, uint32_t len,
+    Packet* pkt, const uint8_t* data, uint32_t len,
     uint32_t, uint32_t*)
 {
     Profile profile(wizPerfStats);
-    ++tstats.tcp_scans;
+    count_scan(pkt->flow);
 
-    if ( wizard->cast_spell(wand, f, data, len) )
-        ++tstats.tcp_hits;
+    if ( wizard->cast_spell(wand, pkt->flow, data, len) )
+        count_hit(pkt->flow);
 
     else if ( wizard->finished(wand) )
         return ABORT;
@@ -209,9 +226,9 @@ void Wizard::reset(Wand& w, bool tcp, bool c2s)
         for ( const CurseDetails* curse : pages )
         {
             if (tcp)
-                w.curse_tracker.push_back({ curse, new CurseTracker });
+                w.curse_tracker.emplace_back( CurseServiceTracker{ curse, new CurseTracker } );
             else
-                w.curse_tracker.push_back({ curse, nullptr });
+                w.curse_tracker.emplace_back( CurseServiceTracker{ curse, nullptr } );
         }
     }
 }
@@ -244,19 +261,10 @@ bool Wizard::spellbind(
     const MagicPage*& m, Flow* f, const uint8_t* data, unsigned len)
 {
     f->service = m->book.find_spell(data, len, m);
-
-    if (f->service != nullptr)
-    {
-        // FIXIT-H need to make sure Flow's ipproto and service
-        // correspond to HostApplicationEntry's ipproto and service
-        host_cache_add_service(f->server_ip, f->ip_proto, f->server_port, f->service);
-        return true;
-    }
-
-    return false;
+    return ( f->service != nullptr );
 }
 
-bool Wizard::cursebind(vector<CurseServiceTracker>& curse_tracker, Flow* f,
+bool Wizard::cursebind(const vector<CurseServiceTracker>& curse_tracker, Flow* f,
         const uint8_t* data, unsigned len)
 {
     for (const CurseServiceTracker& cst : curse_tracker)
@@ -264,10 +272,8 @@ bool Wizard::cursebind(vector<CurseServiceTracker>& curse_tracker, Flow* f,
         if (cst.curse->alg(data, len, cst.tracker))
         {
             f->service = cst.curse->service.c_str();
-            // FIXIT-H need to make sure Flow's ipproto and service
-            // correspond to HostApplicationEntry's ipproto and service
-            host_cache_add_service(f->server_ip, f->ip_proto, f->server_port, f->service);
-            return true;
+            if ( f->service != nullptr )
+                return true;
         }
     }
 
@@ -294,7 +300,7 @@ bool Wizard::finished(Wand& w)
     if ( w.hex or w.spell )
         return false;
 
-    // FIXTHIS-L how to know curses are done?
+    // FIXIT-L how to know curses are done?
     if ( !w.curse_tracker.empty() )
         return false;
 
@@ -338,7 +344,7 @@ static const InspectApi wiz_api =
         mod_dtor
     },
     IT_WIZARD,
-    (uint16_t)PktType::TCP | (uint16_t)PktType::UDP | (uint16_t)PktType::PDU,
+    PROTO_BIT__ANY_PDU,
     nullptr, // buffers
     nullptr, // service
     nullptr, // init

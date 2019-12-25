@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 // Copyright (C) 1998-2002 Martin Roesch <roesch@sourcefire.com>
 // Copyright (C) 2000,2001 Andrew R. Baker <andrewb@uab.edu>
@@ -44,10 +44,10 @@
 #include "log/log_text.h"
 #include "log/text_log.h"
 #include "main/snort_config.h"
-#include "packet_io/intf.h"
 #include "packet_io/sfdaq.h"
 #include "protocols/packet.h"
 
+using namespace snort;
 using namespace std;
 
 static THREAD_LOCAL TextLog* full_log = nullptr;
@@ -66,7 +66,7 @@ static const Parameter s_params[] =
     { "file", Parameter::PT_BOOL, nullptr, "false",
       "output to " F_NAME " instead of stdout" },
 
-    { "limit", Parameter::PT_INT, "0:", "0",
+    { "limit", Parameter::PT_INT, "0:maxSZ", "0",
       "set maximum size in MB before rollover (0 is unlimited)" },
 
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
@@ -88,7 +88,7 @@ public:
 
 public:
     bool file;
-    unsigned long limit;
+    size_t limit;
 };
 
 bool FullModule::set(const char*, Value& v, SnortConfig*)
@@ -97,7 +97,7 @@ bool FullModule::set(const char*, Value& v, SnortConfig*)
         file = v.get_bool();
 
     else if ( v.is("limit") )
-        limit = v.get_long() * 1024 * 1024;
+        limit = v.get_size() * 1024 * 1024;
 
     else
         return false;
@@ -157,7 +157,7 @@ void FullLogger::alert(Packet* p, const char* msg, const Event& event)
 
     if (SnortConfig::alert_interface())
     {
-        const char* iface = PRINT_INTERFACE(SFDAQ::get_interface_spec());
+        const char* iface = SFDAQ::get_input_spec();
         TextLog_Print(full_log, " <%s> ", iface);
     }
 
@@ -178,8 +178,6 @@ void FullLogger::alert(Packet* p, const char* msg, const Event& event)
         if ( LogAppID(full_log, p) )
             TextLog_NewLine(full_log);
     }
-
-    DebugMessage(DEBUG_LOG, "Logging Alert data!\n");
 
     LogTimeStamp(full_log, p);
     TextLog_Putc(full_log, ' ');

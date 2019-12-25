@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -33,7 +33,6 @@
 #include "lua/lua.h"
 #include "main/analyzer.h"
 #include "main/analyzer_command.h"
-#include "main/inclusion.h"
 #include "main/request.h"
 #include "main/shell.h"
 #include "main/snort.h"
@@ -46,6 +45,8 @@
 #include "managers/module_manager.h"
 #include "managers/plugin_manager.h"
 #include "packet_io/sfdaq.h"
+#include "packet_io/sfdaq_config.h"
+#include "packet_io/sfdaq_instance.h"
 #include "packet_io/trough.h"
 #include "target_based/sftarget_reader.h"
 #include "time/periodic.h"
@@ -53,7 +54,7 @@
 #include "utils/safec.h"
 
 #ifdef UNIT_TEST
-#include "catch/unit_test_main.h"
+#include "catch/unit_test.h"
 #endif
 
 #ifdef PIGLET
@@ -62,13 +63,17 @@
 
 #ifdef SHELL
 #include "main/control_mgmt.h"
+#include "main/ac_shell_cmd.h"
 #endif
 
 //-------------------------------------------------------------------------
 
+using namespace snort;
+
 static bool exit_requested = false;
 static int main_exit_code = 0;
 static bool paused = false;
+static bool all_pthreads_started = false;
 static std::queue<AnalyzerCommand*> orphan_commands;
 
 static std::mutex poke_mutex;
@@ -117,30 +122,44 @@ static int current_fd = -1;
 class Pig
 {
 public:
-    Analyzer* analyzer;
-    bool awaiting_privilege_change = false;
-
-    Pig() { analyzer = nullptr; athread = nullptr; idx = (unsigned)-1; }
+    Pig() = default;
 
     void set_index(unsigned index) { idx = index; }
 
-    void prep(const char* source);
+    bool prep(const char* source);
     void start();
     void stop();
 
     bool queue_command(AnalyzerCommand*, bool orphan = false);
     void reap_commands();
 
+    Analyzer* analyzer = nullptr;
+    bool awaiting_privilege_change = false;
+    bool requires_privileged_start = true;
+
 private:
     void reap_command(AnalyzerCommand* ac);
 
-    std::thread* athread;
-    unsigned idx;
+    std::thread* athread = nullptr;
+    unsigned idx = (unsigned)-1;
 };
 
-void Pig::prep(const char* source)
+bool Pig::prep(const char* source)
 {
-    analyzer = new Analyzer(idx, source);
+    SnortConfig* sc = SnortConfig::get_conf();
+    SFDAQInstance *instance = new SFDAQInstance(source, sc->daq_config);
+    if (!SFDAQ::init_instance(instance, sc->bpf_filter))
+    {
+        delete instance;
+        return false;
+    }
+    requires_privileged_start = instance->can_start_unprivileged();
+    analyzer = new Analyzer(instance, idx, source, sc->pkt_cnt);
+    analyzer->set_skip_cnt(sc->pkt_skip);
+#ifdef REG_TEST
+    analyzer->set_pause_after_cnt(sc->pkt_pause_cnt);
+#endif
+    return true;
 }
 
 void Pig::start()
@@ -192,8 +211,8 @@ bool Pig::queue_command(AnalyzerCommand* ac, bool orphan)
 
 #ifdef DEBUG_MSGS
     unsigned ac_ref_count = ac->get();
-    DebugFormat(DEBUG_ANALYZER, "[%u] Queuing command %s for execution (refcount %u)\n",
-            idx, ac->stringify(), ac_ref_count);
+    trace_logf(snort, "[%u] Queuing command %s for execution (refcount %u)\n",
+        idx, ac->stringify(), ac_ref_count);
 #else
     ac->get();
 #endif
@@ -206,14 +225,14 @@ void Pig::reap_command(AnalyzerCommand* ac)
     unsigned ac_ref_count = ac->put();
     if (ac_ref_count == 0)
     {
-        DebugFormat(DEBUG_ANALYZER, "[%u] Destroying completed command %s\n",
-                idx, ac->stringify());
+        trace_logf(snort, "[%u] Destroying completed command %s\n",
+            idx, ac->stringify());
         delete ac;
     }
 #ifdef DEBUG_MSGS
     else
-        DebugFormat(DEBUG_ANALYZER, "[%u] Reaped ongoing command %s (refcount %u)\n",
-                idx, ac->stringify(), ac_ref_count);
+        trace_logf(snort, "[%u] Reaped ongoing command %s (refcount %u)\n",
+            idx, ac->stringify(), ac_ref_count);
 #endif
 }
 
@@ -238,6 +257,8 @@ void Pig::reap_commands()
     } while (commands_to_reap > 1);
 }
 
+
+static bool* pigs_started = nullptr;
 static Pig* pigs = nullptr;
 static unsigned max_pigs = 0;
 
@@ -255,22 +276,6 @@ static Pig* get_lazy_pig(unsigned max)
 // main commands
 //-------------------------------------------------------------------------
 
-static void broadcast(AnalyzerCommand* ac)
-{
-    unsigned dispatched = 0;
-
-    DebugFormat(DEBUG_ANALYZER, "Broadcasting %s command\n", ac->stringify());
-
-    for (unsigned idx = 0; idx < max_pigs; ++idx)
-    {
-        if (pigs[idx].queue_command(ac))
-            dispatched++;
-    }
-
-    if (!dispatched)
-        orphan_commands.push(ac);
-}
-
 static AnalyzerCommand* get_command(AnalyzerCommand* ac, bool from_shell)
 {
 #ifndef SHELL
@@ -283,11 +288,28 @@ static AnalyzerCommand* get_command(AnalyzerCommand* ac, bool from_shell)
         return ac;
 }
 
+void snort::main_broadcast_command(AnalyzerCommand* ac, bool from_shell)
+{
+    unsigned dispatched = 0;
+
+    ac = get_command(ac, from_shell);
+    trace_logf(snort, "Broadcasting %s command\n", ac->stringify());
+
+    for (unsigned idx = 0; idx < max_pigs; ++idx)
+    {
+        if (pigs[idx].queue_command(ac))
+            dispatched++;
+    }
+
+    if (!dispatched)
+        orphan_commands.push(ac);
+}
+
 int main_dump_stats(lua_State* L)
 {
     bool from_shell = ( L != nullptr );
     current_request->respond("== dumping stats\n", from_shell);
-    broadcast(get_command(new ACGetStats(), from_shell));
+    main_broadcast_command(new ACGetStats(), from_shell);
     return 0;
 }
 
@@ -295,7 +317,7 @@ int main_rotate_stats(lua_State* L)
 {
     bool from_shell = ( L != nullptr );
     current_request->respond("== rotating stats\n", from_shell);
-    broadcast(get_command(new ACRotate(), from_shell));
+    main_broadcast_command(new ACRotate(), from_shell);
     return 0;
 }
 
@@ -320,7 +342,22 @@ int main_reload_config(lua_State* L)
 
     if ( !sc )
     {
-        current_request->respond("== reload failed\n");
+        if (get_reload_errors())
+    	  current_request->respond("== reload failed - restart required\n");
+        else
+          current_request->respond("== reload failed - bad config\n");
+
+        SnortConfig::set_parser_conf(nullptr);
+        return 0;
+    }
+
+    tTargetBasedConfig* old_tc = SFAT_GetConfig();
+    tTargetBasedConfig* tc = SFAT_Swap();
+
+    if ( !tc )
+    {
+        current_request->respond("== reload failed - bad config\n");
+        SnortConfig::set_parser_conf(nullptr);
         return 0;
     }
     SnortConfig::set_conf(sc);
@@ -328,8 +365,9 @@ int main_reload_config(lua_State* L)
 
     bool from_shell = ( L != nullptr );
     current_request->respond(".. swapping configuration\n", from_shell);
-    broadcast(get_command(new ACSwap(new Swapper(old, sc)), from_shell));
+    main_broadcast_command(new ACSwap(new Swapper(old, sc, old_tc, tc), current_request, from_shell), from_shell);
 
+    SnortConfig::set_parser_conf(nullptr);
     return 0;
 }
 
@@ -369,7 +407,48 @@ int main_reload_policy(lua_State* L)
 
     bool from_shell = ( L != nullptr );
     current_request->respond(".. swapping policy\n", from_shell);
-    broadcast(get_command(new ACSwap(new Swapper(old, sc)), from_shell));
+    main_broadcast_command(new ACSwap(new Swapper(old, sc), current_request, from_shell), from_shell);
+
+    return 0;
+}
+
+int main_reload_module(lua_State* L)
+{
+    if ( Swapper::get_reload_in_progress() )
+    {
+        current_request->respond("== reload pending; retry\n");
+        return 0;
+    }
+    const char* fname =  nullptr;
+
+    if ( L )
+    {
+        Lua::ManageStack(L, 1);
+        fname = luaL_checkstring(L, 1);
+    }
+
+    if ( fname and *fname )
+        current_request->respond(".. reloading module\n");
+    else
+    {
+        current_request->respond("== module name required\n");
+        return 0;
+    }
+
+    SnortConfig* old = SnortConfig::get_conf();
+    SnortConfig* sc = Snort::get_updated_module(old, fname);
+
+    if ( !sc )
+    {
+        current_request->respond("== reload failed\n");
+        return 0;
+    }
+    SnortConfig::set_conf(sc);
+    proc_stats.policy_reloads++;
+
+    bool from_shell = ( L != nullptr );
+    current_request->respond(".. swapping module\n", from_shell);
+    main_broadcast_command(new ACSwap(new Swapper(old, sc), current_request, from_shell), from_shell);
 
     return 0;
 }
@@ -378,7 +457,7 @@ int main_reload_daq(lua_State* L)
 {
     bool from_shell = ( L != nullptr );
     current_request->respond(".. reloading daq module\n", from_shell);
-    broadcast(get_command(new ACDAQSwap(), from_shell));
+    main_broadcast_command(new ACDAQSwap(), from_shell);
     proc_stats.daq_reloads++;
 
     return 0;
@@ -403,7 +482,7 @@ int main_reload_hosts(lua_State* L)
     }
 
     Shell sh = Shell(fname);
-    sh.configure(SnortConfig::get_conf());
+    sh.configure(SnortConfig::get_conf(), false, true);
 
     tTargetBasedConfig* old = SFAT_GetConfig();
     tTargetBasedConfig* tc = SFAT_Swap();
@@ -416,7 +495,7 @@ int main_reload_hosts(lua_State* L)
 
     bool from_shell = ( L != nullptr );
     current_request->respond(".. swapping hosts table\n", from_shell);
-    broadcast(get_command(new ACSwap(new Swapper(old, tc)), from_shell));
+    main_broadcast_command(new ACSwap(new Swapper(old, tc), current_request, from_shell), from_shell);
 
     return 0;
 }
@@ -457,7 +536,7 @@ int main_delete_inspector(lua_State* L)
 
     bool from_shell = ( L != nullptr );
     current_request->respond(".. deleted inspector\n", from_shell);
-    broadcast(get_command(new ACSwap(new Swapper(old, sc)), from_shell));
+    main_broadcast_command(new ACSwap(new Swapper(old, sc), current_request, from_shell), from_shell);
 
     return 0;
 }
@@ -479,7 +558,7 @@ int main_pause(lua_State* L)
 {
     bool from_shell = ( L != nullptr );
     current_request->respond("== pausing\n", from_shell);
-    broadcast(get_command(new ACPause(), from_shell));
+    main_broadcast_command(new ACPause(), from_shell);
     paused = true;
     return 0;
 }
@@ -487,8 +566,22 @@ int main_pause(lua_State* L)
 int main_resume(lua_State* L)
 {
     bool from_shell = ( L != nullptr );
+    uint64_t pkt_num = 0;
+    if (from_shell)
+    {
+        const int num_of_args = lua_gettop(L);
+        if (num_of_args)
+        {
+            pkt_num = lua_tointeger(L, 1);
+            if (pkt_num < 1)
+            {
+                current_request->respond("Invalid usage of resume(n), n should be a number > 0\n");
+                return 0;
+            }
+        }
+    }
     current_request->respond("== resuming\n", from_shell);
-    broadcast(get_command(new ACResume(), from_shell));
+    main_broadcast_command(new ACResume(pkt_num), from_shell);
     paused = false;
     return 0;
 }
@@ -506,13 +599,14 @@ int main_dump_plugins(lua_State*)
     PluginManager::dump_plugins();
     return 0;
 }
+
 #endif
 
 int main_quit(lua_State* L)
 {
     bool from_shell = ( L != nullptr );
     current_request->respond("== stopping\n", from_shell);
-    broadcast(get_command(new ACStop(), from_shell));
+    main_broadcast_command(new ACStop(), from_shell);
     exit_requested = true;
     return 0;
 }
@@ -592,7 +686,7 @@ static void reap_commands()
     {
         AnalyzerCommand* ac = orphan_commands.front();
         orphan_commands.pop();
-        DebugFormat(DEBUG_ANALYZER, "Destroying orphan command %s\n", ac->stringify());
+        trace_logf(snort, "Destroying orphan command %s\n", ac->stringify());
         delete ac;
     }
 }
@@ -600,7 +694,8 @@ static void reap_commands()
 // FIXIT-L return true if something was done to avoid sleeping
 static bool house_keeping()
 {
-    signal_check();
+    if (all_pthreads_started)
+        signal_check();
 
     reap_commands();
 
@@ -616,7 +711,7 @@ static bool house_keeping()
 static void service_check()
 {
 #ifdef SHELL
-    if ( ControlMgmt::service_users(current_fd, current_request) )
+    if (all_pthreads_started && ControlMgmt::service_users(current_fd, current_request) )
         return;
 #endif
 
@@ -638,14 +733,12 @@ static bool just_validate()
     if ( use_shell(SnortConfig::get_conf()) )
         return false;
 
-    /* FIXIT-L X This should really check if the DAQ module was unset as it could be explicitly
-        set to the default value */
-    if ( !strcmp(SFDAQ::get_type(), SFDAQ::default_type()) )
+    if ( SnortConfig::get_conf()->daq_config->module_configs.empty() )
     {
         if ( SnortConfig::read_mode() && !Trough::get_queue_size() )
             return true;
 
-        if ( !SnortConfig::read_mode() && !SFDAQ::get_input_spec(SnortConfig::get_conf(), 0) )
+        if ( !SnortConfig::read_mode() && !SFDAQ::get_input_spec(SnortConfig::get_conf()->daq_config, 0) )
             return true;
     }
 
@@ -657,8 +750,6 @@ static bool set_mode()
 #ifdef PIGLET
     if ( Piglet::piglet_mode() )
     {
-        // FIXIT-L the early return means that piglet and catch tests cannot
-        // be run in the same process
         main_exit_code = Piglet::main();
         return false;
     }
@@ -721,7 +812,7 @@ static void handle(Pig& pig, unsigned& swine, unsigned& pending_privileges)
         break;
 
     case Analyzer::State::INITIALIZED:
-        if (pig.analyzer->requires_privileged_start() && pending_privileges &&
+        if (pig.requires_privileged_start && pending_privileges &&
             !Snort::has_dropped_privileges())
         {
             if (!pig.awaiting_privilege_change)
@@ -736,7 +827,7 @@ static void handle(Pig& pig, unsigned& swine, unsigned& pending_privileges)
                 FatalError("Failed to drop privileges!\n");
 
             Snort::do_pidfile();
-            broadcast(new ACStart());
+            main_broadcast_command(new ACStart());
         }
         else
         {
@@ -746,7 +837,7 @@ static void handle(Pig& pig, unsigned& swine, unsigned& pending_privileges)
         break;
 
     case Analyzer::State::STARTED:
-        if (!pig.analyzer->requires_privileged_start() && pending_privileges &&
+        if (!pig.requires_privileged_start && pending_privileges &&
             !Snort::has_dropped_privileges())
         {
             if (!pig.awaiting_privilege_change)
@@ -761,7 +852,7 @@ static void handle(Pig& pig, unsigned& swine, unsigned& pending_privileges)
                 FatalError("Failed to drop privileges!\n");
 
             Snort::do_pidfile();
-            broadcast(new ACRun(paused));
+            main_broadcast_command(new ACRun(paused));
         }
         else
         {
@@ -790,8 +881,11 @@ static void main_loop()
     // Preemptively prep all pigs in live traffic mode
     if (!SnortConfig::read_mode())
     {
-        for (swine = 0; swine < max_pigs; swine++)
-            pigs[swine].prep(SFDAQ::get_input_spec(SnortConfig::get_conf(), swine));
+        for (unsigned i = 0; i < max_pigs; i++)
+        {
+            if (pigs[i].prep(SFDAQ::get_input_spec(SnortConfig::get_conf()->daq_config, i)))
+                swine++;
+        }
     }
 
     // Iterate over the drove, spawn them as allowed, and handle their deaths.
@@ -807,8 +901,12 @@ static void main_loop()
             Pig& pig = pigs[idx];
 
             if ( pig.analyzer )
+            {
                 handle(pig, swine, pending_privileges);
-
+                if (!pigs_started[idx] && pig.analyzer && (pig.analyzer->get_state() ==
+                    Analyzer::State::STARTED))
+                    pigs_started[idx] = true;
+            }
             else if ( pending_privileges )
                 pending_privileges--;
 
@@ -817,11 +915,24 @@ static void main_loop()
 
             continue;
         }
+
+        if (!all_pthreads_started)
+        {
+            all_pthreads_started = true;
+            const unsigned num_threads = (!Trough::has_next()) ? swine : max_pigs;
+            for (unsigned i = 0; i < num_threads; i++)
+                all_pthreads_started &= pigs_started[i];
+#ifdef REG_TEST
+            if (all_pthreads_started)
+                LogMessage("All pthreads started\n");
+#endif
+        }
+
         if ( !exit_requested and (swine < max_pigs) and (src = Trough::get_next()) )
         {
             Pig* pig = get_lazy_pig(max_pigs);
-            pig->prep(src);
-            ++swine;
+            if (pig->prep(src))
+                ++swine;
             continue;
         }
         service_check();
@@ -837,13 +948,18 @@ static void snort_main()
     max_pigs = ThreadConfig::get_instance_max();
     assert(max_pigs > 0);
 
-    pig_poke = new Ring<unsigned>(max_pigs+2);
+    // maximum number of state change notifications per pig
+    constexpr unsigned max_grunts = static_cast<unsigned>(Analyzer::State::NUM_STATES);
+
+    pig_poke = new Ring<unsigned>((max_pigs*max_grunts)+1);
     pigs = new Pig[max_pigs];
+    pigs_started = new bool[max_pigs];
 
     for (unsigned idx = 0; idx < max_pigs; idx++)
     {
         Pig& pig = pigs[idx];
         pig.set_index(idx);
+        pigs_started[idx] = false;
     }
 
     main_loop();
@@ -851,6 +967,8 @@ static void snort_main()
     delete pig_poke;
     delete[] pigs;
     pigs = nullptr;
+    delete[] pigs_started;
+    pigs_started = nullptr;
 
 #ifdef SHELL
     ControlMgmt::socket_term();

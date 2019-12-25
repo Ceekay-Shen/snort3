@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -24,6 +24,8 @@
 #include "codecs/codec_module.h"
 #include "framework/codec.h"
 
+using namespace snort;
+
 // yes, macros are necessary. The API and class constructor require different strings.
 //
 // this macros is defined in the module to ensure identical names. However,
@@ -47,7 +49,7 @@ public:
 } // namespace
 
 void Icmp6IpCodec::get_protocol_ids(std::vector<ProtocolId>& v)
-{ v.push_back(ProtocolId::IP_EMBEDDED_IN_ICMP6); }
+{ v.emplace_back(ProtocolId::IP_EMBEDDED_IN_ICMP6); }
 
 bool Icmp6IpCodec::decode(const RawData& raw, CodecData& codec, DecodeData&)
 {
@@ -78,10 +80,10 @@ bool Icmp6IpCodec::decode(const RawData& raw, CodecData& codec, DecodeData&)
         return false;
     }
 
-//    orig_frag_offset = ntohs(GET_ORIG_IPH_OFF(p));
-//    orig_frag_offset &= 0x1FFF;
+    // orig_frag_offset = ntohs(GET_ORIG_IPH_OFF(p));
+    // orig_frag_offset &= 0x1FFF;
 
-    // XXX NOT YET IMPLEMENTED - fragments inside ICMP payload
+    // FIXIT-L NOT YET IMPLEMENTED - fragments inside ICMP payload
 
     // since we know the protocol ID in this layer (and NOT the
     // next layer), set the correct protocol here.  Normally,

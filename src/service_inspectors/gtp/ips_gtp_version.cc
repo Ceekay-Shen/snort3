@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -31,6 +31,8 @@
 #include "profiler/profiler.h"
 
 #include "gtp_inspect.h"
+
+using namespace snort;
 
 static const char* s_name = "gtp_version";
 
@@ -76,7 +78,7 @@ bool GtpVersionOption::operator==(const IpsOption& ips) const
 
 IpsOption::EvalStatus GtpVersionOption::eval(Cursor&, Packet* p)
 {
-    Profile profile(gtp_ver_prof);
+    RuleProfile profile(gtp_ver_prof);
 
     if ( !p->flow )
         return NO_MATCH;
@@ -102,7 +104,7 @@ static const Parameter s_params[] =
 };
 
 #define s_help \
-    "rule option to check gtp version"
+    "rule option to check GTP version"
 
 class GtpVersionModule : public Module
 {
@@ -126,7 +128,7 @@ bool GtpVersionModule::set(const char*, Value& v, SnortConfig*)
     if ( !v.is("~") )
         return false;
 
-    version = v.get_long();
+    version = v.get_uint8();
     return true;
 }
 

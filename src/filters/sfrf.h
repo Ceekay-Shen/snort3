@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2009-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -27,9 +27,14 @@
 #include <ctime>
 
 #include "actions/actions.h"
+#include "framework/counts.h"
 #include "main/policy.h"
 
+namespace snort
+{
 struct SfIp;
+struct SnortConfig;
+}
 
 // define to use over rate threshold
 #define SFRF_OVER_RATE
@@ -89,7 +94,7 @@ struct tSFRFConfigNode
     unsigned seconds;
 
     // Action that replaces original rule action on reaching threshold
-    RuleType newAction;
+    snort::Actions::Type newAction;
 
     // Threshold action duration in seconds before reverting to original rule action
     unsigned timeout;
@@ -133,17 +138,17 @@ struct RateFilterConfig
     /* Array of hash, indexed by gid. Each array element is a hash, which
      * is keyed on sid/policyId and data is a tSFRFSidNode node.
      */
-    struct GHash* genHash [SFRF_MAX_GENID];
+    struct snort::GHash* genHash [SFRF_MAX_GENID];
 
-    // Number of DOS thresholds added.
-    int count;
-
-    // count of no revert DOS thresholds
+    unsigned memcap;
     unsigned noRevertCount;
-
-    int memcap;
-
+    int count;
     int internal_event_mask;
+};
+
+struct RateFilterStats
+{
+    PegCount xhash_nomem_peg = 0;
 };
 
 /*
@@ -151,14 +156,14 @@ struct RateFilterConfig
  */
 void SFRF_Delete();
 void SFRF_Flush();
-int SFRF_ConfigAdd(struct SnortConfig*, RateFilterConfig*, tSFRFConfigNode*);
+int SFRF_ConfigAdd(snort::SnortConfig*, RateFilterConfig*, tSFRFConfigNode*);
 
 int SFRF_TestThreshold(
     RateFilterConfig *config,
     unsigned gid,
     unsigned sid,
-    const SfIp *sip,
-    const SfIp *dip,
+    const snort::SfIp *sip,
+    const snort::SfIp *dip,
     time_t curTime,
     SFRF_COUNT_OPERATION);
 
@@ -179,5 +184,7 @@ inline bool is_internal_event_enabled(RateFilterConfig* config, uint32_t sid)
 
     return (config->internal_event_mask & (1 << sid));
 }
-#endif
 
+int SFRF_Alloc(unsigned int memcap);
+
+#endif

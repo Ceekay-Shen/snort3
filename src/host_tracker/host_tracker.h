@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -25,181 +25,118 @@
 // configuration or dynamic discovery).  It provides a thread-safe API to
 // set/get the host data.
 
-#include <algorithm>
 #include <cstring>
-#include <list>
 #include <mutex>
+#include <list>
+#include <vector>
 
 #include "framework/counts.h"
+#include "host_cache_allocator.h"
+#include "main/snort_types.h"
 #include "main/thread.h"
-#include "sfip/sf_ip.h"
-
-//  FIXIT-M For now this emulates the Snort++ attribute table.
-//  Need to add in host_tracker.h data eventually.
-
-typedef uint16_t Port;
-typedef uint16_t Protocol;
-typedef uint8_t Policy;
+#include "network_inspectors/appid/application_ids.h"
+#include "protocols/protocol_ids.h"
+#include "time/packet_time.h"
 
 struct HostTrackerStats
 {
     PegCount service_adds;
     PegCount service_finds;
-    PegCount service_removes;
 };
 
 extern THREAD_LOCAL struct HostTrackerStats host_tracker_stats;
 
-struct HostApplicationEntry
+namespace snort
 {
-    Port port = 0;
-    Protocol ipproto = 0;
-    Protocol protocol = 0;
+#define MAC_SIZE 6
+extern const uint8_t zero_mac[MAC_SIZE];
 
-    static const Protocol UNKNOWN_PROTOCOL = 0;
+struct HostMac
+{
+    HostMac(u_int8_t p_ttl, const u_int8_t* p_mac, u_int8_t p_primary, uint32_t p_last_seen)
+        : ttl(p_ttl), primary(p_primary), last_seen (p_last_seen) { memcpy(mac, p_mac, MAC_SIZE); }
 
-    HostApplicationEntry() = default;
-
-    HostApplicationEntry(Protocol ipproto_param, Port port_param, Protocol protocol_param) :
-        port(port_param),
-        ipproto(ipproto_param),
-        protocol(protocol_param)
-    {
-    }
-
-    inline bool operator==(const HostApplicationEntry& rhs) const
-    {
-        return ipproto == rhs.ipproto and port == rhs.port;
-    }
+    // the type and order below should match logger's serialization
+    u_int8_t ttl;
+    u_int8_t mac[MAC_SIZE];
+    u_int8_t primary;
+    uint32_t last_seen;
 };
 
-class HostTracker
+struct HostApplication
 {
-private:
-    std::mutex host_tracker_lock;     //  Ensure that updates to a
-                                      //  shared object are safe.
+    Port port;
+    IpProtocol proto;
+    AppId appid;
+    bool inferred_appid;
+};
 
-    //  FIXIT-M do we need to use a host_id instead of SfIp as in sfrna?
-    SfIp ip_addr;
+typedef HostCacheAllocIp<HostMac> HostMacAllocator;
+typedef HostCacheAllocIp<HostApplication> HostAppAllocator;
 
-    //  Policies to apply to this host.
-    Policy stream_policy = 0;
-    Policy frag_policy = 0;
-
-    std::list<HostApplicationEntry> services;
-    std::list<HostApplicationEntry> clients;
-
+class SO_PUBLIC HostTracker
+{
 public:
-    HostTracker()
+    HostTracker() : hops(-1)
     {
-        memset(&ip_addr, 0, sizeof(ip_addr));
+        last_seen = (uint32_t) packet_time();
+        last_event = -1;
     }
 
-    SfIp get_ip_addr()
-    {
-        std::lock_guard<std::mutex> lck(host_tracker_lock);
-        return ip_addr;
-    }
-
-    void set_ip_addr(const SfIp& new_ip_addr)
+    void update_last_seen();
+    uint32_t get_last_seen() const
     {
         std::lock_guard<std::mutex> lck(host_tracker_lock);
-        std::memcpy(&ip_addr, &new_ip_addr, sizeof(ip_addr));
+        return last_seen;
     }
 
-    Policy get_stream_policy()
+    void update_last_event(uint32_t time = 0);
+    uint32_t get_last_event() const
     {
         std::lock_guard<std::mutex> lck(host_tracker_lock);
-        return stream_policy;
+        return last_event;
     }
 
-    void set_stream_policy(const Policy& policy)
-    {
-        std::lock_guard<std::mutex> lck(host_tracker_lock);
-        stream_policy = policy;
-    }
+    // Returns true if a new mac entry is added, false otherwise
+    bool add_mac(const u_int8_t* mac, u_int8_t ttl, u_int8_t primary);
 
-    Policy get_frag_policy()
-    {
-        std::lock_guard<std::mutex> lck(host_tracker_lock);
-        return frag_policy;
-    }
+    // The caller owns and deletes the copied list of mac addresses
+    void copy_data(uint8_t& p_hops, uint32_t& p_last_seen, std::list<HostMac>*& p_macs);
 
-    void set_frag_policy(const Policy& policy)
-    {
-        std::lock_guard<std::mutex> lck(host_tracker_lock);
-        frag_policy = policy;
-    }
+    // Appid may not be identified always. Inferred means dynamic/runtime
+    // appid detected from one flow to another flow such as BitTorrent.
+    bool add_service(Port port, IpProtocol proto,
+        AppId appid = APP_ID_NONE, bool inferred_appid = false, bool* added = nullptr);
 
-    //  Add host service data only if it doesn't already exist.  Returns
-    //  false if entry exists already, and true if entry was added.
-    bool add_service(const HostApplicationEntry& app_entry)
-    {
-        host_tracker_stats.service_adds++;
+    AppId get_appid(Port port, IpProtocol proto, bool inferred_only = false, bool allow_port_wildcard = false);
 
-        std::lock_guard<std::mutex> lck(host_tracker_lock);
+    //  This should be updated whenever HostTracker data members are changed
+    void stringify(std::string& str);
 
-        auto iter = std::find(services.begin(), services.end(), app_entry);
-        if (iter != services.end())
-            return false;   //  Already exists.
+private:
+    mutable std::mutex host_tracker_lock; // ensure that updates to a shared object are safe
+    uint8_t hops;                 // hops from the snort inspector, e.g., zero for ARP
+    uint32_t last_seen;           // the last time this host was seen
+    uint32_t last_event;          // the last time an event was generated
+    std::list<HostMac, HostMacAllocator> macs;
+    std::vector<HostApplication, HostAppAllocator> services;
 
-        services.push_front(app_entry);
-        return true;
-    }
+    // Hide / delete the constructor from the outside world. We don't want to
+    // have zombie host trackers, i.e. host tracker objects that live outside
+    // the host cache.
+    HostTracker( const HostTracker& ) = delete;
+    HostTracker( const HostTracker&& ) = delete;
 
-    //  Add host service data if it doesn't already exist.  If it does exist
-    //  replace the previous entry with the new entry.
-    void add_or_replace_service(const HostApplicationEntry& app_entry)
-    {
-        host_tracker_stats.service_adds++;
+    HostTracker& operator=( const HostTracker& ) = delete;
+    HostTracker& operator=( const HostTracker&& ) = delete;
 
-        std::lock_guard<std::mutex> lck(host_tracker_lock);
+    // Only the host cache can create them ...
+    template<class Key, class Value, class Hash>
+    friend class LruCacheShared;
 
-        auto iter = std::find(services.begin(), services.end(), app_entry);
-        if (iter != services.end())
-            services.erase(iter);
-
-        services.push_front(app_entry);
-    }
-
-    //  Returns true and fills in copy of HostApplicationEntry when found.
-    //  Returns false when not found.
-    bool find_service(Protocol ipproto, Port port, HostApplicationEntry& app_entry)
-    {
-        HostApplicationEntry tmp_entry(ipproto, port, HostApplicationEntry::UNKNOWN_PROTOCOL);
-        host_tracker_stats.service_finds++;
-
-        std::lock_guard<std::mutex> lck(host_tracker_lock);
-
-        auto iter = std::find(services.begin(), services.end(), tmp_entry);
-        if (iter != services.end())
-        {
-            app_entry = *iter;
-            return true;
-        }
-
-        return false;
-    }
-
-    //  Removes HostApplicationEntry object associated with ipproto and port.
-    //  Returns true if entry existed.  False otherwise.
-    bool remove_service(Protocol ipproto, Port port)
-    {
-        HostApplicationEntry tmp_entry(ipproto, port, HostApplicationEntry::UNKNOWN_PROTOCOL);
-        host_tracker_stats.service_removes++;
-
-        std::lock_guard<std::mutex> lck(host_tracker_lock);
-
-        auto iter = std::find(services.begin(), services.end(), tmp_entry);
-        if (iter != services.end())
-        {
-            services.erase(iter);
-            return true;   //  Assumes only one matching entry.
-        }
-
-        return false;
-    }
+    // ... and some unit tests. See Utest.h and UtestMacros.h in cpputest.
+    friend class TEST_host_tracker_add_find_service_test_Test;
+    friend class TEST_host_tracker_stringify_Test;
 };
-
+} // namespace snort
 #endif
-

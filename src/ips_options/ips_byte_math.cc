@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -36,6 +36,7 @@
 
 #include "extract.h"
 
+using namespace snort;
 using namespace std;
 
 #define s_name "byte_math"
@@ -109,9 +110,9 @@ uint32_t ByteMathOption::hash() const
     mix(a,b,c);
 
     a += data->offset;
-    b += (data->rvalue_var << 24 |
-        data->offset_var << 16 |
-        data->result_var << 8 |
+    b += ((uint32_t) data->rvalue_var << 24 |
+        (uint32_t) data->offset_var << 16 |
+        (uint32_t) data->result_var << 8 |
         data->endianess);
     c += data->base;
 
@@ -160,7 +161,7 @@ bool ByteMathOption::operator==(const IpsOption& ips) const
 
 IpsOption::EvalStatus ByteMathOption::eval(Cursor& c, Packet* p)
 {
-    Profile profile(byteMathPerfStats);
+    RuleProfile profile(byteMathPerfStats);
 
     if (p == nullptr)
         return NO_MATCH;
@@ -176,7 +177,7 @@ IpsOption::EvalStatus ByteMathOption::eval(Cursor& c, Packet* p)
     if (config.rvalue_var >= 0 && config.rvalue_var < NUM_IPS_OPTIONS_VARS)
     {
         GetVarValueByIndex(&rvalue, config.rvalue_var);
-        if (rvalue == 0)
+        if (rvalue == 0 and config.oper == BM_DIVIDE)
             return NO_MATCH;
     }
     else
@@ -362,10 +363,10 @@ bool ByteMathModule::begin(const char*, int, SnortConfig*)
 bool ByteMathModule::set(const char*, Value& v, SnortConfig*)
 {
     if ( v.is("bytes") )
-        data.bytes_to_extract = v.get_long();
+        data.bytes_to_extract = v.get_uint8();
 
     else if ( v.is("oper") )
-        data.oper = (BM_Oper)v.get_long();
+        data.oper = (BM_Oper)v.get_uint8();
 
     else if ( v.is("rvalue") )
     {
@@ -396,13 +397,13 @@ bool ByteMathModule::set(const char*, Value& v, SnortConfig*)
     else if ( v.is("string") )
     {
         data.string_convert_flag = true;
-        parse_base(v.get_long(), data);
+        parse_base(v.get_uint8(), data);
     }
     else if ( v.is("endian") )
-        parse_endian(v.get_long(), data);
+        parse_endian(v.get_uint8(), data);
 
     else if ( v.is("bitmask") )
-        data.bitmask_val = v.get_long();
+        data.bitmask_val = v.get_uint32();
 
     else if ( v.is("result") )
         data.result_name = snort_strdup(v.get_string());
@@ -517,8 +518,7 @@ static IpsOption* byte_math_ctor(Module* p, OptTreeNode*)
     data.result_var = AddVarNameToList(data.result_name);
     if (data.result_var == IPS_OPTIONS_NO_VAR)
     {
-        ParseError("Rule has more than %d variables.",
-            NUM_IPS_OPTIONS_VARS);
+        ParseError("Rule has more than %d variables.", NUM_IPS_OPTIONS_VARS);
         return nullptr;
     }
     return new ByteMathOption(m->data);

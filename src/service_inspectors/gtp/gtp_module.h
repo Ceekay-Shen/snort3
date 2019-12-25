@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -22,17 +22,20 @@
 #define GTP_MODULE_H
 
 #include "framework/module.h"
+#include "main/snort_debug.h"
 
 #define GID_GTP 143
 
 #define GTP_EVENT_BAD_MSG_LEN        (1)
 #define GTP_EVENT_BAD_IE_LEN         (2)
 #define GTP_EVENT_OUT_OF_ORDER_IE    (3)
+#define GTP_EVENT_MISSING_TEID       (4)
 
 #define GTP_NAME "gtp_inspect"
 #define GTP_HELP "gtp control channel inspection"
 
-extern THREAD_LOCAL ProfileStats gtp_inspect_prof;
+extern THREAD_LOCAL snort::ProfileStats gtp_inspect_prof;
+extern Trace TRACE_NAME(gtp_inspect);
 
 struct GtpStuff
 {
@@ -42,24 +45,24 @@ struct GtpStuff
     int length;
 };
 
-class GtpInspectModule : public Module
+class GtpInspectModule : public snort::Module
 {
 public:
     GtpInspectModule();
 
-    bool set(const char*, Value&, SnortConfig*) override;
-    bool begin(const char*, int, SnortConfig*) override;
-    bool end(const char*, int, SnortConfig*) override;
+    bool set(const char*, snort::Value&, snort::SnortConfig*) override;
+    bool begin(const char*, int, snort::SnortConfig*) override;
+    bool end(const char*, int, snort::SnortConfig*) override;
 
     unsigned get_gid() const override
     { return GID_GTP; }
 
-    const RuleMap* get_rules() const override;
+    const snort::RuleMap* get_rules() const override;
 
     const PegInfo* get_pegs() const override;
     PegCount* get_counts() const override;
 
-    ProfileStats* get_profile() const override
+    snort::ProfileStats* get_profile() const override
     { return &gtp_inspect_prof; }
 
     Usage get_usage() const override

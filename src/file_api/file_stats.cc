@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2013-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -35,6 +35,8 @@
 #include "utils/util.h"
 
 #include "file_capture.h"
+
+using namespace snort;
 
 THREAD_LOCAL FileCounts file_counts;
 THREAD_LOCAL FileStats* file_stats = nullptr;
@@ -166,7 +168,7 @@ void file_stats_print()
         processed_total[0], processed_total[1]);
 
 #if 0
-    LogLabel("file type verdicts");  // FIXIT-L what's up with this code
+    LogLabel("file type verdicts");  // FIXIT-RC should be fixed
 
     uint64_t verdicts_total = 0;#include "file_capture.h"
     for (unsigned i = 0; i < FILE_VERDICT_MAX; i++)

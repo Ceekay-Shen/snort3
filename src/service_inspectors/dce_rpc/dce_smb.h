@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -192,25 +192,7 @@ struct dce2SmbStats
 };
 
 extern THREAD_LOCAL dce2SmbStats dce2_smb_stats;
-extern THREAD_LOCAL ProfileStats dce2_smb_pstat_main;
-extern THREAD_LOCAL ProfileStats dce2_smb_pstat_session;
-extern THREAD_LOCAL ProfileStats dce2_smb_pstat_new_session;
-extern THREAD_LOCAL ProfileStats dce2_smb_pstat_detect;
-extern THREAD_LOCAL ProfileStats dce2_smb_pstat_log;
-extern THREAD_LOCAL ProfileStats dce2_smb_pstat_co_seg;
-extern THREAD_LOCAL ProfileStats dce2_smb_pstat_co_frag;
-extern THREAD_LOCAL ProfileStats dce2_smb_pstat_co_reass;
-extern THREAD_LOCAL ProfileStats dce2_smb_pstat_co_ctx;
-extern THREAD_LOCAL ProfileStats dce2_smb_pstat_smb_seg;
-extern THREAD_LOCAL ProfileStats dce2_smb_pstat_smb_req;
-extern THREAD_LOCAL ProfileStats dce2_smb_pstat_smb_uid;
-extern THREAD_LOCAL ProfileStats dce2_smb_pstat_smb_tid;
-extern THREAD_LOCAL ProfileStats dce2_smb_pstat_smb_fid;
-extern THREAD_LOCAL ProfileStats dce2_smb_pstat_smb_file;
-extern THREAD_LOCAL ProfileStats dce2_smb_pstat_smb_file_detect;
-extern THREAD_LOCAL ProfileStats dce2_smb_pstat_smb_file_api;
-extern THREAD_LOCAL ProfileStats dce2_smb_pstat_smb_fingerprint;
-extern THREAD_LOCAL ProfileStats dce2_smb_pstat_smb_negotiate;
+extern THREAD_LOCAL snort::ProfileStats dce2_smb_pstat_main;
 
 enum DCE2_SmbSsnState
 {
@@ -463,16 +445,17 @@ struct DCE2_SmbFsm
     int fail_state;
 };
 
-class Dce2SmbFlowData : public FlowData
+class Dce2SmbFlowData : public snort::FlowData
 {
 public:
     Dce2SmbFlowData();
     ~Dce2SmbFlowData() override;
 
     static void init()
-    {
-        inspector_id = FlowData::create_flow_data_id();
-    }
+    { inspector_id = snort::FlowData::create_flow_data_id(); }
+
+    size_t size_of() override
+    { return sizeof(*this); }
 
 public:
     static unsigned inspector_id;
@@ -481,11 +464,11 @@ public:
 
 // Used for reassembled packets
 #define DCE2_MOCK_HDR_LEN__SMB_CLI \
-    (sizeof(NbssHdr) + sizeof(SmbNtHdr) + sizeof(SmbWriteAndXReq))
+    ((unsigned)(sizeof(NbssHdr) + sizeof(SmbNtHdr) + sizeof(SmbWriteAndXReq)))
 #define DCE2_MOCK_HDR_LEN__SMB_SRV \
-    (sizeof(NbssHdr) + sizeof(SmbNtHdr) + sizeof(SmbReadAndXResp))
+    ((unsigned)(sizeof(NbssHdr) + sizeof(SmbNtHdr) + sizeof(SmbReadAndXResp)))
 
-DCE2_SmbSsnData* get_dce2_smb_session_data(Flow*);
+DCE2_SmbSsnData* get_dce2_smb_session_data(snort::Flow*);
 
 const char* get_smb_com_string(uint8_t);
 #endif

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -31,6 +31,8 @@
 #include "protocols/tcp.h"
 #include "protocols/tcp_options.h"
 #include "stream/tcp/tcp_normalizer.h"
+
+using namespace snort;
 
 enum PegCounts
 {
@@ -174,7 +176,7 @@ static inline NormMode get_norm_mode(const Packet * const p)
 static int Norm_IP4(
     NormalizerConfig* c, Packet* p, uint8_t layer, int changes)
 {
-    IP4Hdr* h = (IP4Hdr*)const_cast<uint8_t*>(p->layers[layer].start);
+    ip::IP4Hdr* h = (ip::IP4Hdr*)const_cast<uint8_t*>(p->layers[layer].start);
     uint16_t fragbits = ntohs(h->ip_off);
     uint16_t origbits = fragbits;
     const NormMode mode = get_norm_mode(p);

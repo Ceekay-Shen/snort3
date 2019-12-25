@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -20,6 +20,7 @@
 #ifndef TRANSACTION_H
 #define TRANSACTION_H
 
+#include "http_common.h"
 #include "http_enum.h"
 #include "http_flow_data.h"
 
@@ -30,15 +31,17 @@ class HttpMsgTrailer;
 class HttpMsgSection;
 class HttpMsgBody;
 class HttpMsgHeadShared;
-class HttpInfractions;
 class HttpEventGen;
+template <int MAX, int NONE> class Infractions;
+using HttpInfractions = Infractions<HttpEnums::INF__MAX_VALUE, HttpEnums::INF__NONE>;
 
 class HttpTransaction
 {
 public:
+    ~HttpTransaction();
     static HttpTransaction* attach_my_transaction(HttpFlowData* session_data,
-        HttpEnums::SourceId source_id);
-    static void delete_transaction(HttpTransaction* transaction);
+        HttpCommon::SourceId source_id);
+    static void delete_transaction(HttpTransaction* transaction, HttpFlowData* session_data);
 
     HttpMsgRequest* get_request() const { return request; }
     void set_request(HttpMsgRequest* request_) { request = request_; }
@@ -46,33 +49,40 @@ public:
     HttpMsgStatus* get_status() const { return status; }
     void set_status(HttpMsgStatus* status_) { status = status_; }
 
-    HttpMsgHeader* get_header(HttpEnums::SourceId source_id) const { return header[source_id]; }
-    void set_header(HttpMsgHeader* header_, HttpEnums::SourceId source_id)
+    HttpMsgHeader* get_header(HttpCommon::SourceId source_id) const { return header[source_id]; }
+    void set_header(HttpMsgHeader* header_, HttpCommon::SourceId source_id)
         { header[source_id] = header_; }
 
-    HttpMsgTrailer* get_trailer(HttpEnums::SourceId source_id) const
+    HttpMsgTrailer* get_trailer(HttpCommon::SourceId source_id) const
         { return trailer[source_id]; }
-    void set_trailer(HttpMsgTrailer* trailer_, HttpEnums::SourceId source_id)
+    void set_trailer(HttpMsgTrailer* trailer_, HttpCommon::SourceId source_id)
         { trailer[source_id] = trailer_; }
+    void set_body(HttpMsgBody* latest_body);
 
-    HttpMsgBody* get_body() const { return latest_body; }
-    void set_body(HttpMsgBody* latest_body_);
-
-    HttpInfractions* get_infractions(HttpEnums::SourceId source_id);
-    HttpEventGen* get_events(HttpEnums::SourceId source_id);
+    HttpInfractions* get_infractions(HttpCommon::SourceId source_id);
+    HttpEventGen* get_events(HttpCommon::SourceId source_id);
 
     void set_one_hundred_response();
     bool final_response() const { return !second_response_expected; }
 
+    void clear_section();
+    bool is_clear() const { return active_sections == 0; }
+    void garbage_collect();
+
+    HttpTransaction* next = nullptr;
+
 private:
     HttpTransaction() = default;
-    ~HttpTransaction();
+    void discard_section(HttpMsgSection* section);
+
+    uint64_t active_sections = 0;
 
     HttpMsgRequest* request = nullptr;
     HttpMsgStatus* status = nullptr;
     HttpMsgHeader* header[2] = { nullptr, nullptr };
     HttpMsgTrailer* trailer[2] = { nullptr, nullptr };
-    HttpMsgBody* latest_body = nullptr;
+    HttpMsgBody* body_list = nullptr;
+    HttpMsgSection* discard_list = nullptr;
     HttpInfractions* infractions[2] = { nullptr, nullptr };
     HttpEventGen* events[2] = { nullptr, nullptr };
 

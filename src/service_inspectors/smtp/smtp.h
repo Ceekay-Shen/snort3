@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -138,18 +138,24 @@ struct SMTPAuthName
     char name[MAX_AUTH_NAME_LEN];
 };
 
-class SmtpMime : public MimeSession
+class SmtpMime : public snort::MimeSession
 {
 public:
-    using MimeSession::MimeSession;
+    using snort::MimeSession::MimeSession;
     SMTP_PROTO_CONF* config;
+#ifndef UNIT_TEST  
 private:
+#endif  
     int handle_header_line(const uint8_t* ptr, const uint8_t* eol,
-        int max_header_len) override;
-    int normalize_data(const uint8_t* ptr, const uint8_t* data_end) override;
+        int max_header_len, snort::Packet* p) override;
+    int normalize_data(const uint8_t* ptr, const uint8_t* data_end, snort::Packet* p) override;
+#ifdef UNIT_TEST
+private:
+#endif  
     void decode_alert() override;
-    void reset_state(Flow* ssn) override;
-    bool is_end_of_data(Flow* ssn) override;
+    void decompress_alert() override;
+    void reset_state(snort::Flow* ssn) override;
+    bool is_end_of_data(snort::Flow* ssn) override;
 };
 
 struct SMTPData
@@ -162,14 +168,17 @@ struct SMTPData
     SMTPAuthName* auth_name;
 };
 
-class SmtpFlowData : public FlowData
+class SmtpFlowData : public snort::FlowData
 {
 public:
     SmtpFlowData();
     ~SmtpFlowData() override;
 
     static void init()
-    { inspector_id = FlowData::create_flow_data_id(); }
+    { inspector_id = snort::FlowData::create_flow_data_id(); }
+
+    size_t size_of() override
+    { return sizeof(*this); }
 
 public:
     static unsigned inspector_id;

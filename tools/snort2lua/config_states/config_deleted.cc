@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -533,19 +533,6 @@ static const ConvertMap disable_inline_init_failopen_api =
 const ConvertMap* disable_inline_init_failopen_map = &disable_inline_init_failopen_api;
 
 /*************************************************
- *****************  daq_mode  *******************
- *************************************************/
-
-static const std::string daq_mode = "daq_mode";
-static const ConvertMap daq_mode_api =
-{
-    daq_mode,
-    deleted_ctor<& daq_mode>,
-};
-
-const ConvertMap* daq_mode_map = &daq_mode_api;
-
-/*************************************************
  *************  decode_data_link  ****************
  *************************************************/
 
@@ -570,4 +557,33 @@ static const ConvertMap protected_content_api =
 };
 
 const ConvertMap* protected_content_map = &protected_content_api;
+
+/*************************************************
+ *************  sidechannel ****************
+ *************************************************/
+
+// FIXIT-H: This is temporary and needs to be translated to an appropriate `side_channel = {}`
+
+static const std::string sidechannel = "sidechannel";
+static const ConvertMap sidechannel_api =
+{
+    sidechannel,
+    deleted_ctor<& sidechannel>,
+};
+
+const ConvertMap* sidechannel_map = &sidechannel_api;
+
+/*************************************************
+ *****************  no_promisc *******************
+ *************************************************/
+
+static const std::string no_promisc = "no_promisc";
+static const ConvertMap no_promisc_api =
+{
+    no_promisc,
+    deleted_ctor<& no_promisc>,
+};
+
+const ConvertMap* no_promisc_map = &no_promisc_api;
+
 } // namespace config

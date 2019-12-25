@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 // Copyright (C) 1998-2002 Martin Roesch <roesch@sourcefire.com>
 //
@@ -33,7 +33,6 @@
 #include "events/event.h"
 #include "latency/packet_latency.h"
 #include "main/snort_config.h"
-#include "main/snort_debug.h"
 #include "managers/event_manager.h"
 #include "managers/inspector_manager.h"
 #include "packet_io/active.h"
@@ -49,16 +48,18 @@
 #include "tag.h"
 #include "treenodes.h"
 
-THREAD_LOCAL ProfileStats detectPerfStats;
+using namespace snort;
+
 THREAD_LOCAL ProfileStats eventqPerfStats;
-THREAD_LOCAL ProfileStats rebuiltPacketPerfStats;
 
-void snort_ignore(Packet*) { }
+bool snort_ignore(Packet*) { return true; }
 
-void snort_log(Packet* p)
+bool snort_log(Packet* p)
 {
     pc.log_pkts++;
     EventManager::call_loggers(nullptr, p, nullptr, nullptr);
+
+    return true;
 }
 
 void CallLogFuncs(Packet* p, ListHead* head, Event* event, const char* msg)
@@ -103,8 +104,8 @@ void CallAlertFuncs(Packet* p, const OptTreeNode* otn, ListHead* head)
     pc.total_alert_pkts++;
 
 #if 0
-    // FIXIT-M this should be a generic feature of otn
-    if ( otn->sigInfo.gid != GENERATOR_SPP_REPUTATION )
+    // FIXIT-RC DELETE THIS this should be a generic feature of otn
+    if ( otn->sigInfo.gid != GID_REPUTATION )
     {
         /* Don't include IP Reputation events in count */
         pc.alert_pkts++;
@@ -132,13 +133,9 @@ void check_tags(Packet* p)
     if ( DetectionEngine::get_check_tags() and !(p->packet_flags & PKT_REBUILT_STREAM) )
     {
         void* listhead = nullptr;
-        DebugMessage(DEBUG_FLOW, "calling CheckTagList\n");
 
         if (CheckTagList(p, event, &listhead))
         {
-            DebugMessage(DEBUG_FLOW, "Matching tag node found, "
-                "calling log functions\n");
-
             /* if we find a match, we want to send the packet to the
              * logging mechanism
              */

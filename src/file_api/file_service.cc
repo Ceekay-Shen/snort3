@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2012-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -29,22 +29,28 @@
 
 #include "file_service.h"
 
+#include "log/messages.h"
 #include "main/snort_config.h"
 #include "mime/file_mime_process.h"
 
 #include "file_cache.h"
 #include "file_capture.h"
-#include "file_enforcer.h"
 #include "file_flows.h"
 #include "file_stats.h"
+
+using namespace snort;
 
 bool FileService::file_type_id_enabled = false;
 bool FileService::file_signature_enabled = false;
 bool FileService::file_capture_enabled = false;
 bool FileService::file_processing_initiated = false;
 
-FileEnforcer* FileService::file_enforcer = nullptr;
 FileCache* FileService::file_cache = nullptr;
+
+// FIXIT-L make these params reloadable
+static int64_t max_files_cached = 0;
+static int64_t capture_memcap = 0;
+static int64_t capture_block_size = 0;
 
 void FileService::init()
 {
@@ -54,19 +60,46 @@ void FileService::init()
 void FileService::post_init()
 {
     MimeSession::init();
-    FileConfig* conf = get_file_config();
+    const FileConfig* const conf = get_file_config();
 
     if (!conf)
         return;
 
+    if (!file_cache)
+    {
+        file_cache = new FileCache(conf->max_files_cached);
+        max_files_cached = conf->max_files_cached;
+    }
+
     if (file_capture_enabled)
+    {
         FileCapture::init(conf->capture_memcap, conf->capture_block_size);
+        capture_memcap = conf->capture_memcap;
+        capture_block_size = conf->capture_block_size;
+    }
+}
+
+void FileService::verify_reload(SnortConfig* sc)
+{
+    const FileConfig* const conf = get_file_config(sc);
+
+    if (!conf)
+        return;
+
+    if (max_files_cached != conf->max_files_cached)
+        ReloadError("Changing file_id:max_files_cached requires a restart\n");
+
+    if (file_capture_enabled)
+    {
+        if (capture_memcap != conf->capture_memcap)
+            ReloadError("Changing file_id:capture_memcap requires a restart\n");
+        if (capture_block_size != conf->capture_block_size)
+            ReloadError("Changing file_id:capture_block_size requires a restart\n");
+    }
 }
 
 void FileService::close()
 {
-    if (file_enforcer)
-        delete file_enforcer;
     if (file_cache)
         delete file_cache;
 
@@ -80,42 +113,21 @@ void FileService::thread_init()
 void FileService::thread_term()
 { file_stats_term(); }
 
-void FileService::start_file_processing()
-{
-    if (!file_processing_initiated)
-    {
-        file_enforcer = new FileEnforcer;
-        file_cache = new FileCache;
-        file_processing_initiated = true;
-    }
-}
-
 void FileService::enable_file_type()
 {
-    if (!file_type_id_enabled)
-    {
-        file_type_id_enabled = true;
-        start_file_processing();
-    }
+    file_type_id_enabled = true;
 }
 
 void FileService::enable_file_signature()
 {
-    if (!file_signature_enabled)
-    {
-        file_signature_enabled = true;
-        start_file_processing();
-    }
+    file_signature_enabled = true;
 }
 
 /* Enable file capture, also enable file signature */
 void FileService::enable_file_capture()
 {
-    if (!file_capture_enabled)
-    {
-        file_capture_enabled = true;
-        enable_file_signature();
-    }
+    file_capture_enabled = true;
+    enable_file_signature();
 }
 
 bool FileService::is_file_service_enabled()
@@ -161,6 +173,8 @@ int64_t FileService::get_max_file_depth()
     }
 }
 
+namespace snort
+{
 uint64_t get_file_processed_size(Flow* flow)
 {
     FileFlows* file_flows = FileFlows::get_file_flows(flow);
@@ -175,4 +189,4 @@ uint64_t get_file_processed_size(Flow* flow)
 
     return context->get_processed_bytes();
 }
-
+}

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2003-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -52,7 +52,7 @@ static inline ZHashNode* s_node_alloc(int keysize)
     auto node = static_cast<ZHashNode*>(
         ::operator new(sizeof(ZHashNode) + keysize));
 
-    memset(node, 0, sizeof(ZHashNode));
+    *node = {};
     return node;
 }
 
@@ -151,14 +151,14 @@ void ZHash::link_node(ZHashNode* node)
     if ( table[node->rindex] )  // UNINITUSE
     {
         node->prev = nullptr;
-        node->next=table[node->rindex];
+        node->next = table[node->rindex];
         table[node->rindex]->prev = node;
         table[node->rindex] = node;
     }
     else
     {
-        node->prev=nullptr;
-        node->next=nullptr;
+        node->prev = nullptr;
+        node->next = nullptr;
         table[node->rindex] = node;  // UNINITUSE
     }
 }
@@ -197,15 +197,14 @@ void ZHash::move_to_front(ZHashNode* node)
     }
 }
 
-ZHashNode* ZHash::find_node_row(const void* key, int* rindex)
+ZHashNode* ZHash::find_node_row(const void* key, int& row)
 {
     unsigned hashkey = hashfcn->hash_fcn(
         hashfcn, (const unsigned char*)key, keysize);
 
     // Modulus is slow; use a table size that is a power of 2.
     int index = hashkey & (nrows - 1);
-
-    *rindex = index;
+    row = index;
 
     for ( ZHashNode* node=table[index]; node; node=node->next )  // UNINITUSE
     {
@@ -273,9 +272,9 @@ ZHash::~ZHash()
 
     if ( table )
     {
-        for ( unsigned i=0; i < nrows; ++i )
+        for ( unsigned i = 0; i < nrows; ++i )
         {
-            for ( ZHashNode* node=table[i]; node; )
+            for ( ZHashNode* node = table[i]; node; )
             {
                 ZHashNode* onode = node;
                 node = node->next;
@@ -313,8 +312,8 @@ void* ZHash::pop()
 
 void* ZHash::get(const void* key, bool *new_node)
 {
-    int index = 0;
-    ZHashNode* node = find_node_row(key, &index);
+    int row;
+    ZHashNode* node = find_node_row(key, row);
 
     if ( node )
         return node->data;
@@ -324,9 +323,9 @@ void* ZHash::get(const void* key, bool *new_node)
     if ( !node )
         return nullptr;
 
-    memcpy(node->key,key,keysize);
+    memcpy(node->key, key, keysize);
 
-    node->rindex = index;
+    node->rindex = row;
     link_node (node);
     glink_node(node);
 
@@ -340,8 +339,8 @@ void* ZHash::get(const void* key, bool *new_node)
 
 void* ZHash::find(const void* key)
 {
-    int rindex = 0;
-    ZHashNode* node = find_node_row(key, &rindex);
+    int row;
+    ZHashNode* node = find_node_row(key, row);
 
     if ( node )
         return node->data;
@@ -387,32 +386,48 @@ bool ZHash::touch()
     return false;
 }
 
-bool ZHash::remove(ZHashNode* node)
+bool ZHash::move_to_free_list(ZHashNode* node)
 {
     if ( !node )
         return false;
 
     unlink_node(node);
     gunlink_node(node);
-
     count--;
     save_free_node(node);
 
     return true;
 }
 
-bool ZHash::remove()
+bool ZHash::release()
 {
     ZHashNode* node = cursor;
     cursor = nullptr;
-    return remove(node);
+    return move_to_free_list(node);
 }
 
-bool ZHash::remove(const void* key)
+bool ZHash::release(const void* key)
 {
-    int row = 0;
-    ZHashNode* node = find_node_row(key, &row);
-    return remove(node);
+    int row;
+    ZHashNode* node = find_node_row(key, row);
+    return move_to_free_list(node);
+}
+
+void* ZHash::remove(const void* key)
+{
+    void* pv = nullptr;
+    int row;
+    ZHashNode* node = find_node_row(key, row);
+    if ( node )
+    {
+        unlink_node(node);
+        gunlink_node(node);
+        count--;
+        pv = node->data;
+        s_node_free(node);
+    }
+
+    return pv;
 }
 
 int ZHash::set_keyops(
@@ -424,4 +439,3 @@ int ZHash::set_keyops(
 
     return -1;
 }
-

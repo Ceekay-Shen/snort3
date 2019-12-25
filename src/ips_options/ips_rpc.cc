@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -29,6 +29,8 @@
 #include "hash/hashfcn.h"
 #include "profiler/profiler.h"
 #include "protocols/packet.h"
+
+using namespace snort;
 
 #define s_name "rpc"
 
@@ -116,7 +118,7 @@ bool RpcOption::operator==(const IpsOption& ips) const
 
 IpsOption::EvalStatus RpcOption::eval(Cursor&, Packet* p)
 {
-    Profile profile(rpcCheckPerfStats);
+    RuleProfile profile(rpcCheckPerfStats);
 
     if ( !is_valid(p) )
         return NO_MATCH;
@@ -223,7 +225,7 @@ bool RpcOption::check_procedure(uint32_t procedure)
 
 static const Parameter s_params[] =
 {
-    { "~app", Parameter::PT_INT, nullptr, nullptr,
+    { "~app", Parameter::PT_INT, "0:max32", nullptr,
       "application number" },
 
     { "~ver", Parameter::PT_STRING, nullptr, nullptr,
@@ -249,7 +251,7 @@ public:
     ProfileStats* get_profile() const override
     { return &rpcCheckPerfStats; }
 
-    bool set(Value&, uint32_t& field, int flag);
+    bool set(const Value&, uint32_t& field, int flag);
 
     Usage get_usage() const override
     { return DETECT; }
@@ -267,7 +269,7 @@ bool RpcModule::begin(const char*, int, SnortConfig*)
 bool RpcModule::set(const char*, Value& v, SnortConfig*)
 {
     if ( v.is("~app") )
-        data.program = (uint32_t)v.get_long();
+        data.program = v.get_uint32();
 
     else if ( v.is("~ver") )
         return set(v, data.version, RPC_CHECK_VERSION);
@@ -281,7 +283,7 @@ bool RpcModule::set(const char*, Value& v, SnortConfig*)
     return true;
 }
 
-bool RpcModule::set(Value& v, uint32_t& field, int flag)
+bool RpcModule::set(const Value& v, uint32_t& field, int flag)
 {
     if ( flag and !strcmp(v.get_string(), "*") )
         return true;

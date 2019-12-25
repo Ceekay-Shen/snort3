@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2012-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -29,7 +29,8 @@
 #include "file_api/file_flows.h"
 #include "utils/safec.h"
 #include "utils/util.h"
-#include "utils/util_cstring.h"
+
+using namespace snort;
 
 #define MAX_FILE                             1024
 #define MAX_EMAIL                            1024
@@ -40,97 +41,19 @@
 #define MIME_FLAG_FILENAME_PRESENT                0x00000004
 #define MIME_FLAG_EMAIL_HDRS_PRESENT              0x00000008
 
-/* Extract the filename from the header */
-int MailLogState::extract_file_name(const char** start, int length, bool* disp_cont)
-{
-    const char* tmp = nullptr;
-    const char* end = *start+length;
-
-    if (length <= 0)
-        return -1;
-
-    if (!(*disp_cont))
-    {
-        tmp = SnortStrcasestr(*start, length, "filename");
-
-        if ( tmp == nullptr )
-            return -1;
-
-        tmp = tmp + 8;
-        while ( (tmp < end) && ((isspace(*tmp)) || (*tmp == '=') ))
-        {
-            tmp++;
-        }
-    }
-    else
-        tmp = *start;
-
-    if (tmp < end)
-    {
-        if (*tmp == '"' || (*disp_cont))
-        {
-            if (*tmp == '"')
-            {
-                if (*disp_cont)
-                {
-                    *disp_cont = false;
-                    return (tmp - *start);
-                }
-                tmp++;
-            }
-            *start = tmp;
-            tmp = SnortStrnPbrk(*start,(end - tmp),"\"");
-            if (tmp == nullptr )
-            {
-                if ((end - tmp) > 0 )
-                {
-                    tmp = end;
-                    *disp_cont = true;
-                }
-                else
-                    return -1;
-            }
-            else
-                *disp_cont = false;
-            end = tmp;
-        }
-        else
-        {
-            *start = tmp;
-        }
-        return (end - *start);
-    }
-    else
-    {
-        return -1;
-    }
-}
-
 /* accumulate MIME attachment filenames. The filenames are appended by commas */
-int MailLogState::log_file_name(const uint8_t* start, int length, bool* disp_cont)
+int MailLogState::log_file_name(const uint8_t* start, int length)
 {
     uint8_t* alt_buf;
     int alt_size;
     uint16_t* alt_len;
-    int ret=0;
-    int cont =0;
+
     int log_avail = 0;
 
     if (!start || (length <= 0))
     {
-        *disp_cont = false;
         return -1;
     }
-
-    if (*disp_cont)
-        cont = 1;
-
-    ret = extract_file_name((const char**)(&start), length, disp_cont);
-
-    if (ret == -1)
-        return ret;
-
-    length = ret;
 
     alt_buf = filenames;
     alt_size =  MAX_FILE;
@@ -142,11 +65,8 @@ int MailLogState::log_file_name(const uint8_t* start, int length, bool* disp_con
 
     if ( *alt_len > 0 && ((*alt_len + 1) < alt_size))
     {
-        if (!cont)
-        {
-            alt_buf[*alt_len] = ',';
-            *alt_len = *alt_len + 1;
-        }
+        alt_buf[*alt_len] = ',';
+        *alt_len = *alt_len + 1;
     }
 
     if (length > log_avail)
@@ -165,24 +85,6 @@ int MailLogState::log_file_name(const uint8_t* start, int length, bool* disp_con
     log_flags |= MIME_FLAG_FILENAME_PRESENT;
 
     return 0;
-}
-
-void MailLogState::set_file_name_from_log(Flow* flow)
-{
-    FileFlows* files = FileFlows::get_file_flows(flow);
-
-    if (!files)
-        return;
-
-    if (file_logged > file_current)
-    {
-        files->set_file_name(filenames + file_current,
-            file_logged - file_current);
-    }
-    else
-    {
-        files->set_file_name(nullptr, 0);
-    }
 }
 
 /* Accumulate EOL separated headers, one or more at a time */

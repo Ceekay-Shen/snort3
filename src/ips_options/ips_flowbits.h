@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2004-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -20,7 +20,14 @@
 #ifndef IPS_FLOWBITS_H
 #define IPS_FLOWBITS_H
 
-void FlowbitResetCounts();
+#include "main/snort_config.h"
+namespace snort
+{
+struct SnortConfig;
+}
+
+void flowbits_ginit(snort::SnortConfig*);
+void flowbits_gterm(snort::SnortConfig*);
 int FlowBits_SetOperation(void*);
 
 #endif

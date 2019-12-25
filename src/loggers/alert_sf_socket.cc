@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2003-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -39,6 +39,7 @@
 #include "target_based/snort_protocols.h"
 #include "utils/util.h"
 
+using namespace snort;
 using namespace std;
 
 struct SfSock
@@ -66,10 +67,10 @@ typedef vector<RuleId> RuleVector;
 
 static const Parameter rule_params[] =
 {
-    { "gid", Parameter::PT_INT, "1:", "1",
+    { "gid", Parameter::PT_INT, "1:max32", "1",
       "rule generator ID" },
 
-    { "sid", Parameter::PT_INT, "1:", "1",
+    { "sid", Parameter::PT_INT, "1:max32", "1",
       "rule signature ID" },
 
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
@@ -113,10 +114,10 @@ bool SfSocketModule::set(const char*, Value& v, SnortConfig*)
         file = v.get_string();
 
     else if ( v.is("gid") )
-        rule.gid = v.get_long();
+        rule.gid = v.get_uint32();
 
     else if ( v.is("sid") )
-        rule.sid = v.get_long();
+        rule.sid = v.get_uint32();
 
     return true;
 }
@@ -131,7 +132,7 @@ bool SfSocketModule::begin(const char*, int, SnortConfig*)
 bool SfSocketModule::end(const char* fqn, int, SnortConfig*)
 {
     if ( !strcmp(fqn, "alert_sfsocket.rules") )
-        rulez.push_back(rule);
+        rulez.emplace_back(rule);
 
     return true;
 }
@@ -254,7 +255,7 @@ static OptTreeNode* OptTreeNode_Search(uint32_t, uint32_t sid)
         OptTreeNode* otn = (OptTreeNode*)hashNode->data;
         RuleTreeNode* rtn = getRuntimeRtnFromOtn(otn);
 
-        if ( rtn and is_network_protocol(rtn->proto) )
+        if ( rtn and is_network_protocol(rtn->snort_protocol_id) )
         {
             if (otn->sigInfo.sid == sid)
                 return otn;

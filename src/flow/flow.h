@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -27,10 +27,14 @@
 // state.  Inspector state is stored in FlowData, and Flow manages a list
 // of FlowData items.
 
+#include "detection/ips_context_chain.h"
+#include "flow/flow_stash.h"
+#include "framework/data_bus.h"
 #include "framework/decode_data.h"
 #include "framework/inspector.h"
 #include "protocols/layer.h"
 #include "sfip/sf_ip.h"
+#include "target_based/snort_protocols.h"
 
 #define SSNFLAG_SEEN_CLIENT         0x00000001
 #define SSNFLAG_SEEN_SENDER         0x00000001
@@ -56,16 +60,19 @@
 
 #define SSNFLAG_DROP_CLIENT         0x00010000
 #define SSNFLAG_DROP_SERVER         0x00020000
-#define SSNFLAG_FORCE_BLOCK         0x00040000
 
 #define SSNFLAG_STREAM_ORDER_BAD    0x00100000
 #define SSNFLAG_CLIENT_SWAP         0x00200000
 #define SSNFLAG_CLIENT_SWAPPED      0x00400000
 
 #define SSNFLAG_PROXIED             0x01000000
+#define SSNFLAG_NO_DETECT_TO_CLIENT 0x02000000
+#define SSNFLAG_NO_DETECT_TO_SERVER 0x04000000
 
 #define SSNFLAG_ABORT_CLIENT        0x10000000
 #define SSNFLAG_ABORT_SERVER        0x20000000
+
+#define SSNFLAG_HARD_EXPIRATION     0x40000000
 
 #define SSNFLAG_NONE                0x00000000 /* nothing, an MT bag of chips */
 
@@ -87,10 +94,14 @@
 #define STREAM_STATE_NO_PICKUP         0x2000
 #define STREAM_STATE_BLOCK_PENDING     0x4000
 
-#define FLOW_IS_OFFLOADED              0x01
-#define FLOW_WAS_OFFLOADED             0x02  // FIXIT-L debug only
+class BitOp;
+class Session;
 
+namespace snort
+{
+class FlowHAState;
 struct FlowKey;
+class IpsContext;
 struct Packet;
 
 typedef void (* StreamAppDataFree)(void*);
@@ -107,6 +118,15 @@ public:
     static unsigned create_flow_data_id()
     { return ++flow_data_id; }
 
+    void update_allocations(size_t);
+    void update_deallocations(size_t);
+    Inspector* get_handler() { return handler; }
+
+    // return fixed size (could be an approx avg)
+    // this must be fixed for life of flow data instance
+    // track significant supplemental allocations with the above updaters
+    virtual size_t size_of() = 0;
+
     virtual void handle_expected(Packet*) { }
     virtual void handle_retransmit(Packet*) { }
     virtual void handle_eof(Packet*) { }
@@ -118,6 +138,7 @@ public:  // FIXIT-L privatize
 private:
     static unsigned flow_data_id;
     Inspector* handler;
+    size_t mem_in_use = 0;
     unsigned id;
 };
 
@@ -126,10 +147,18 @@ struct LwState
     uint32_t session_flags;
 
     int16_t ipprotocol;
-    int16_t application_protocol;
+    SnortProtocolId snort_protocol_id;
 
     char direction;
     char ignore_direction;
+};
+
+enum DeferredWhitelist
+{
+    WHITELIST_DEFER_OFF = 0,
+    WHITELIST_DEFER_ON,
+    WHITELIST_DEFER_STARTED,
+    WHITELIST_DEFER_DONE,
 };
 
 // this struct is organized by member size for compactness
@@ -145,6 +174,7 @@ public:
         ALLOW
     };
     Flow();
+    ~Flow();
 
     Flow(const Flow&) = delete;
     Flow& operator=(const Flow&) = delete;
@@ -170,6 +200,32 @@ public:
     void set_ttl(Packet*, bool client);
     void set_mpls_layer_per_dir(Packet*);
     Layer get_mpls_layer_per_dir(bool);
+    void set_service(Packet* pkt, const char* new_service);
+    bool get_attr(const std::string& key, int32_t& val);
+    bool get_attr(const std::string& key, std::string& val);
+    void set_attr(const std::string& key, const int32_t& val);
+    void set_attr(const std::string& key, const std::string& val);
+    // Use this API when the publisher of the attribute allocated memory for it and can give up its
+    // ownership after the call.
+    void set_attr(const std::string& key, std::string* val)
+    {
+        assert(stash);
+        stash->store(key, val);
+    }
+
+    template<typename T>
+    bool get_attr(const std::string& key, T& val)
+    {
+        assert(stash);
+        return stash->get(key, val);
+    }
+
+    template<typename T>
+    void set_attr(const std::string& key, const T& val)
+    {
+        assert(stash);
+        stash->store(key, val);
+    }
 
     uint32_t update_session_flags(uint32_t flags)
     { return ssn_state.session_flags = flags; }
@@ -180,20 +236,18 @@ public:
     uint32_t get_session_flags()
     { return ssn_state.session_flags; }
 
-    uint32_t test_session_flags(uint32_t flags)
-    { return (ssn_state.session_flags & flags) != 0; }
-
     uint32_t clear_session_flags(uint32_t flags)
     { return ssn_state.session_flags &= ~flags; }
+
+    void set_to_client_detection(bool enable);
+    void set_to_server_detection(bool enable);
 
     int get_ignore_direction()
     { return ssn_state.ignore_direction; }
 
     int set_ignore_direction(char ignore_direction)
     {
-        if (ssn_state.ignore_direction != ignore_direction)
-            ssn_state.ignore_direction = ignore_direction;
-
+        ssn_state.ignore_direction = ignore_direction;
         return ssn_state.ignore_direction;
     }
 
@@ -209,7 +263,7 @@ public:
     { return (ssn_state.session_flags & SSNFLAG_PROXIED) != 0; }
 
     bool is_stream()
-    { return (to_utype(pkt_type) & to_utype(PktType::STREAM)) != 0; }
+    { return pkt_type == PktType::TCP or pkt_type == PktType::PDU; }
 
     void block()
     { ssn_state.session_flags |= SSNFLAG_BLOCK; }
@@ -257,6 +311,20 @@ public:
     {
         gadget->rem_ref();
         gadget = nullptr;
+        if (assistant_gadget != nullptr)
+            clear_assistant_gadget();
+    }
+
+    void set_assistant_gadget(Inspector* ins)
+    {
+        assistant_gadget = ins;
+        assistant_gadget->add_ref();
+    }
+
+    void clear_assistant_gadget()
+    {
+        assistant_gadget->rem_ref();
+        assistant_gadget = nullptr;
     }
 
     void set_data(Inspector* pd)
@@ -277,14 +345,30 @@ public:
     bool is_inspection_disabled() const
     { return disable_inspect; }
 
-    bool is_offloaded() const
-    { return flow_flags & FLOW_IS_OFFLOADED; }
+    bool is_suspended() const
+    { return context_chain.front(); }
 
-    void set_offloaded()
-    { flow_flags |= (FLOW_IS_OFFLOADED|FLOW_WAS_OFFLOADED); }
+    void set_default_session_timeout(uint32_t dst, bool force)
+    {
+        if (force || (default_session_timeout == 0))
+            default_session_timeout = dst;
+    }
 
-    void clear_offloaded()
-    { flow_flags &= ~FLOW_IS_OFFLOADED; }
+    void set_hard_expiration()
+    { ssn_state.session_flags |= SSNFLAG_HARD_EXPIRATION; }
+
+    bool is_hard_expiration()
+    { return (ssn_state.session_flags & SSNFLAG_HARD_EXPIRATION) != 0; }
+
+    void set_deferred_whitelist(DeferredWhitelist defer_state)
+    {
+        deferred_whitelist = defer_state;
+    }
+
+    DeferredWhitelist get_deferred_whitelist_state()
+    {
+        return deferred_whitelist;
+    }
 
 public:  // FIXIT-M privatize if possible
     // fields are organized by initialization and size to minimize
@@ -292,16 +376,16 @@ public:  // FIXIT-M privatize if possible
 
     // these fields are const after initialization
     const FlowKey* key;
-    class Session* session;
-    class BitOp* bitop;
-    class FlowHAState* ha_state;
+    BitOp* bitop;
+    FlowHAState* ha_state;
+    FlowStash* stash;
 
-    uint8_t ip_proto; // FIXIT-M do we need both of these?
+    uint8_t ip_proto;
     PktType pkt_type; // ^^
 
     // these fields are always set; not zeroed
-    uint64_t flow_flags;  // FIXIT-H required to ensure atomic?
     Flow* prev, * next;
+    Session* session;
     Inspector* ssn_client;
     Inspector* ssn_server;
 
@@ -309,9 +393,11 @@ public:  // FIXIT-M privatize if possible
     Layer mpls_client, mpls_server;
 
     // everything from here down is zeroed
+    IpsContextChain context_chain;
     FlowData* flow_data;
     Inspector* clouseau;  // service identifier
     Inspector* gadget;    // service handler
+    Inspector* assistant_gadget;
     Inspector* data;
     const char* service;
 
@@ -326,6 +412,9 @@ public:  // FIXIT-M privatize if possible
     unsigned inspection_policy_id;
     unsigned ips_policy_id;
     unsigned network_policy_id;
+    unsigned reputation_id;
+
+    uint32_t default_session_timeout;
 
     uint16_t client_port;
     uint16_t server_port;
@@ -337,11 +426,32 @@ public:  // FIXIT-M privatize if possible
     uint8_t outer_client_ttl, outer_server_ttl;
 
     uint8_t response_count;
+
     bool disable_inspect;
+    bool trigger_finalize_event;
+
+    DeferredWhitelist deferred_whitelist = WHITELIST_DEFER_OFF;
 
 private:
     void clean();
 };
+
+inline void Flow::set_to_client_detection(bool enable)
+{
+    if ( enable )
+        ssn_state.session_flags &= ~SSNFLAG_NO_DETECT_TO_CLIENT;
+    else
+        ssn_state.session_flags |= SSNFLAG_NO_DETECT_TO_CLIENT;
+}
+
+inline void Flow::set_to_server_detection(bool enable)
+{
+    if ( enable )
+        ssn_state.session_flags &= ~SSNFLAG_NO_DETECT_TO_SERVER;
+    else
+        ssn_state.session_flags |= SSNFLAG_NO_DETECT_TO_SERVER;
+}
+}
 
 #endif
 

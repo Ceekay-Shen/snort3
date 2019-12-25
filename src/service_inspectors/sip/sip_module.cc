@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -26,6 +26,7 @@
 
 #include <cassert>
 
+using namespace snort;
 using namespace std;
 
 #define SIP_EVENT_EMPTY_REQUEST_URI_STR  "empty request URI"
@@ -71,7 +72,7 @@ static const Parameter s_params[] =
     { "max_content_len", Parameter::PT_INT, "0:65535", "1024",
       "maximum content length of the message body" },
 
-    { "max_dialogs", Parameter::PT_INT, "1:4194303", "4",
+    { "max_dialogs", Parameter::PT_INT, "1:max32", "4",
       "maximum number of dialogs within one stream session" },
 
     { "max_from_len", Parameter::PT_INT, "0:65535", "256",
@@ -90,7 +91,7 @@ static const Parameter s_params[] =
       "maximum via field size" },
 
     { "methods", Parameter::PT_STRING, nullptr, default_methods,
-      "list of methods to check in sip messages" },
+      "list of methods to check in SIP messages" },
 
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
 };
@@ -133,8 +134,8 @@ static const PegInfo sip_pegs[] =
 {
     { CountType::SUM, "packets", "total packets" },
     { CountType::SUM, "sessions", "total sessions" },
-    { CountType::NOW, "concurrent_sessions", "total concurrent sip sessions" },
-    { CountType::MAX, "max_concurrent_sessions", "maximum concurrent sip sessions" },
+    { CountType::NOW, "concurrent_sessions", "total concurrent SIP sessions" },
+    { CountType::MAX, "max_concurrent_sessions", "maximum concurrent SIP sessions" },
     { CountType::SUM, "events", "events generated" },
     { CountType::SUM, "dialogs", "total dialogs" },
     { CountType::SUM, "ignored_channels", "total channels ignored" },
@@ -200,31 +201,31 @@ bool SipModule::set(const char*, Value& v, SnortConfig*)
         conf->ignoreChannel = v.get_bool();
 
     else if ( v.is("max_call_id_len") )
-        conf->maxCallIdLen = v.get_long();
+        conf->maxCallIdLen = v.get_uint16();
 
     else if ( v.is("max_contact_len") )
-        conf->maxContactLen = v.get_long();
+        conf->maxContactLen = v.get_uint16();
 
     else if ( v.is("max_content_len") )
-        conf->maxContentLen = v.get_long();
+        conf->maxContentLen = v.get_uint16();
 
     else if ( v.is("max_dialogs") )
-        conf->maxNumDialogsInSession = v.get_long();
+        conf->maxNumDialogsInSession = v.get_uint32();
 
     else if ( v.is("max_from_len") )
-        conf->maxFromLen = v.get_long();
+        conf->maxFromLen = v.get_uint16();
 
     else if ( v.is("max_requestName_len") )
-        conf->maxRequestNameLen = v.get_long();
+        conf->maxRequestNameLen = v.get_uint16();
 
     else if ( v.is("max_to_len") )
-        conf->maxToLen = v.get_long();
+        conf->maxToLen = v.get_uint16();
 
     else if ( v.is("max_uri_len") )
-        conf->maxUriLen = v.get_long();
+        conf->maxUriLen = v.get_uint16();
 
     else if ( v.is("max_via_len") )
-        conf->maxViaLen = v.get_long();
+        conf->maxViaLen = v.get_uint16();
 
     else if ( v.is("methods") )
         sip_methods = v.get_string();

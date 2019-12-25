@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2003-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -55,6 +55,7 @@
 #include "utils/sflsq.h"
 #include "utils/util.h"
 
+using namespace snort;
 using namespace std;
 
 #define s_name "flowbits"
@@ -104,41 +105,57 @@ typedef enum
 }Flowbits_eval;
 
 /**
-**  This structure is the context ptr for each detection option
+**  This class is the context ptr for each detection option
 **  on a rule.  The id is associated with a FLOWBITS_OBJECT id.
 **
 **  The type element track only one operation.
 */
-struct FLOWBITS_OP
+class FLOWBITS_OP
 {
-    uint16_t* ids;
-    uint8_t num_ids;
-    uint8_t type;         /* Set, Unset, Invert, IsSet, IsNotSet, Reset  */
-    Flowbits_eval eval;   /* and , or, all, any*/
-    char* name;
-    char* group;
-    uint32_t group_id;
+public:
+    uint16_t* ids = nullptr;
+    uint8_t num_ids = 0;
+    uint8_t type = 0;         /* Set, Unset, Invert, IsSet, IsNotSet, Reset  */
+    Flowbits_eval eval = FLOWBITS_AND;   /* and , or, all, any*/
+    char* name = nullptr;
+    char* group = nullptr;
+    uint32_t group_id = 0;
+    ~FLOWBITS_OP();
 };
 
-typedef struct _FLOWBITS_GRP
+FLOWBITS_OP::~FLOWBITS_OP()
+{
+    if (ids != nullptr)
+        snort_free(ids);
+    if (name != nullptr)
+        snort_free(name);
+    if (group != nullptr)
+        snort_free(group);
+}
+
+struct FLOWBITS_GRP
 {
     uint16_t count;
     uint16_t max_id;
     char* name;
     uint32_t group_id;
     BitOp* GrpBitOp;
-} FLOWBITS_GRP;
+};
 
-static std::forward_list<const FLOWBITS_OP*> op_list;
+struct FlowBitState
+{
+    std::forward_list<const FLOWBITS_OP*> op_list;
+    GHash* flowbits_hash = nullptr;
+    GHash* flowbits_grp_hash = nullptr;
+    SF_QUEUE* flowbits_bit_queue = nullptr;
+    unsigned flowbits_count = 0;
+    unsigned flowbits_grp_count = 0;
+    int flowbits_toggle = 1;
+};
 
-static GHash* flowbits_hash = nullptr;
-static GHash* flowbits_grp_hash = nullptr;
-static SF_QUEUE* flowbits_bit_queue = nullptr;
-
-static unsigned flowbits_count = 0;
-static unsigned flowbits_grp_count = 0;
-static int flowbits_toggle = 1;
-
+// Forward declarations
+static void FlowItemFree(void* d);
+static void FlowBitsGrpFree(void* d);
 static IpsOption::EvalStatus check_flowbits(
     uint8_t type, uint8_t evalType, uint16_t* ids, uint16_t num_ids,
     char* group, Packet* p);
@@ -147,8 +164,8 @@ class FlowBitsOption : public IpsOption
 {
 public:
     FlowBitsOption(FLOWBITS_OP* c) :
-        IpsOption(s_name, RULE_OPTION_TYPE_FLOWBIT)
-    { config = c; }
+        IpsOption(s_name, RULE_OPTION_TYPE_FLOWBIT), config(c)
+    { }
 
     ~FlowBitsOption() override;
 
@@ -170,14 +187,7 @@ private:
 
 FlowBitsOption::~FlowBitsOption()
 {
-    if (config->ids)
-        snort_free(config->ids);
-    if (config->name)
-        snort_free(config->name);
-    if (config->group)
-        snort_free(config->group);
-
-    snort_free(config);
+    delete config;
 }
 
 uint32_t FlowBitsOption::hash() const
@@ -230,10 +240,10 @@ bool FlowBitsOption::operator==(const IpsOption& ips) const
 
     const FlowBitsOption& rhs = (const FlowBitsOption&)ips;
 
-    if ( (config->num_ids != rhs.config->num_ids) or
-        (config->eval != rhs.config->eval) or
-        (config->type != rhs.config->type) or
-        (config->group_id != rhs.config->group_id) )
+    if ( (config->num_ids != rhs.config->num_ids)or
+            (config->eval != rhs.config->eval) or
+            (config->type != rhs.config->type) or
+            (config->group_id != rhs.config->group_id) )
         return false;
 
     for ( int i = 0; i < config->num_ids; i++ )
@@ -247,13 +257,12 @@ bool FlowBitsOption::operator==(const IpsOption& ips) const
 
 IpsOption::EvalStatus FlowBitsOption::eval(Cursor&, Packet* p)
 {
-    Profile profile(flowBitsPerfStats);
+    RuleProfile profile(flowBitsPerfStats);
 
     FLOWBITS_OP* flowbits = config;
 
     if (!flowbits)
         return NO_MATCH;
-
 
     return check_flowbits(flowbits->type, (uint8_t)flowbits->eval,
         flowbits->ids, flowbits->num_ids, flowbits->group, p);
@@ -263,7 +272,7 @@ IpsOption::EvalStatus FlowBitsOption::eval(Cursor&, Packet* p)
 // helper methods
 //-------------------------------------------------------------------------
 
-static inline BitOp* get_flow_bitop(const Packet* p)
+static inline BitOp* get_flow_bitop(const Packet* p, FlowBitState* flowbit_state)
 {
     Flow* flow = p->flow;
 
@@ -271,12 +280,12 @@ static inline BitOp* get_flow_bitop(const Packet* p)
         return nullptr;
 
     if ( !flow->bitop )
-        flow->bitop = new BitOp(flowbits_count);
+        flow->bitop = new BitOp(flowbit_state->flowbits_count);
 
     return flow->bitop;
 }
 
-static inline int clear_group_bit(BitOp* bitop, char* group)
+static inline int clear_group_bit(BitOp* bitop, char* group, FlowBitState* flowbit_state)
 {
     if ( !group )
         return 0;
@@ -284,7 +293,7 @@ static inline int clear_group_bit(BitOp* bitop, char* group)
     // FIXIT-M why is the hash lookup done at runtime for flowbits groups?
     // a pointer to flowbis_grp should be in flowbits config data
     // this *should* be safe but iff splay mode is disabled
-    auto flowbits_grp = (FLOWBITS_GRP*)ghash_find(flowbits_grp_hash, group);
+    auto flowbits_grp = (FLOWBITS_GRP*)ghash_find(flowbit_state->flowbits_grp_hash, group);
 
     if ( !flowbits_grp )
         return 0;
@@ -303,12 +312,12 @@ static inline int clear_group_bit(BitOp* bitop, char* group)
     return 1;
 }
 
-static inline int toggle_group_bit(BitOp* bitop, char* group)
+static inline int toggle_group_bit(BitOp* bitop, char* group, FlowBitState* flowbit_state)
 {
     if ( !group  )
         return 0;
 
-    auto flowbits_grp = (FLOWBITS_GRP*)ghash_find(flowbits_grp_hash, group);
+    auto flowbits_grp = (FLOWBITS_GRP*)ghash_find(flowbit_state->flowbits_grp_hash, group);
 
     if ( !flowbits_grp )
         return 0;
@@ -328,10 +337,10 @@ static inline int toggle_group_bit(BitOp* bitop, char* group)
 }
 
 static inline int set_xbits_to_group(
-    BitOp* bitop, uint16_t* ids, uint16_t num_ids, char* group)
+    BitOp* bitop, uint16_t* ids, uint16_t num_ids, char* group, FlowBitState* flowbit_state)
 {
     unsigned int i;
-    if (!clear_group_bit(bitop, group))
+    if (!clear_group_bit(bitop, group, flowbit_state))
         return 0;
     for (i = 0; i < num_ids; i++)
         bitop->set(ids[i]);
@@ -340,7 +349,7 @@ static inline int set_xbits_to_group(
 
 static inline int is_set_flowbits(
     BitOp* bitop, uint8_t eval, uint16_t* ids,
-    uint16_t num_ids, char* group)
+    uint16_t num_ids, char* group, FlowBitState* flowbit_state)
 {
     unsigned int i;
     FLOWBITS_GRP* flowbits_grp;
@@ -365,7 +374,7 @@ static inline int is_set_flowbits(
         return 0;
 
     case FLOWBITS_ALL:
-        flowbits_grp = (FLOWBITS_GRP*)ghash_find(flowbits_grp_hash, group);
+        flowbits_grp = (FLOWBITS_GRP*)ghash_find(flowbit_state->flowbits_grp_hash, group);
         if ( flowbits_grp == nullptr )
             return 0;
         for ( i = 0; i <= (unsigned int)(flowbits_grp->max_id >>3); i++ )
@@ -378,7 +387,7 @@ static inline int is_set_flowbits(
         return 1;
 
     case FLOWBITS_ANY:
-        flowbits_grp = (FLOWBITS_GRP*)ghash_find(flowbits_grp_hash, group);
+        flowbits_grp = (FLOWBITS_GRP*)ghash_find(flowbit_state->flowbits_grp_hash, group);
         if ( flowbits_grp == nullptr )
             return 0;
         for ( i = 0; i <= (unsigned int)(flowbits_grp->max_id >>3); i++ )
@@ -401,13 +410,12 @@ static IpsOption::EvalStatus check_flowbits(
     int result = 0;
     int i;
 
-    BitOp* bitop = get_flow_bitop(p);
+    FlowBitState* flowbit_state = SnortConfig::get_conf()->flowbit_state;
+    assert(flowbit_state != nullptr);
 
+    BitOp* bitop = get_flow_bitop(p, flowbit_state);
     if (!bitop)
-    {
-        assert(false);
         return IpsOption::NO_MATCH;
-    }
 
     switch (type)
     {
@@ -418,12 +426,12 @@ static IpsOption::EvalStatus check_flowbits(
         break;
 
     case FLOWBITS_SETX:
-        result = set_xbits_to_group(bitop, ids, num_ids, group);
+        result = set_xbits_to_group(bitop, ids, num_ids, group, flowbit_state);
         break;
 
     case FLOWBITS_UNSET:
         if (eval == FLOWBITS_ALL )
-            clear_group_bit(bitop, group);
+            clear_group_bit(bitop, group, flowbit_state);
         else
         {
             for (i = 0; i < num_ids; i++)
@@ -436,13 +444,13 @@ static IpsOption::EvalStatus check_flowbits(
         if (!group)
             bitop->reset();
         else
-            clear_group_bit(bitop, group);
+            clear_group_bit(bitop, group, flowbit_state);
         result = 1;
         break;
 
     case FLOWBITS_ISSET:
 
-        if (is_set_flowbits(bitop,(uint8_t)eval, ids, num_ids, group))
+        if (is_set_flowbits(bitop,(uint8_t)eval, ids, num_ids, group, flowbit_state))
         {
             result = 1;
         }
@@ -454,7 +462,7 @@ static IpsOption::EvalStatus check_flowbits(
         break;
 
     case FLOWBITS_ISNOTSET:
-        if (!is_set_flowbits(bitop, (uint8_t)eval, ids, num_ids, group))
+        if (!is_set_flowbits(bitop, (uint8_t)eval, ids, num_ids, group, flowbit_state))
         {
             result = 1;
         }
@@ -466,7 +474,7 @@ static IpsOption::EvalStatus check_flowbits(
 
     case FLOWBITS_TOGGLE:
         if (group)
-            toggle_group_bit(bitop, group);
+            toggle_group_bit(bitop, group, flowbit_state);
         else
         {
             for (i = 0; i < num_ids; i++)
@@ -514,20 +522,44 @@ static IpsOption::EvalStatus check_flowbits(
 //-------------------------------------------------------------------------
 // public methods
 //-------------------------------------------------------------------------
-
-void FlowbitResetCounts()
+void flowbits_ginit(SnortConfig* sc)
 {
-    if ( !flowbits_hash )
+    sc->flowbit_state = new FlowBitState;
+    sc->flowbit_state->flowbits_hash = ghash_new(10000, 0, 0, FlowItemFree);
+
+    if ( !sc->flowbit_state->flowbits_hash )
+        FatalError("Could not create flowbits hash.\n");
+
+    // this is used during parse time and runtime so do NOT
+    // enable splay mode (which is NOT useful here anyway)
+    sc->flowbit_state->flowbits_grp_hash = ghash_new(10000, 0, 0, FlowBitsGrpFree);
+
+    if ( !sc->flowbit_state->flowbits_grp_hash )
+        FatalError("could not create flowbits group hash.\n");
+
+    sc->flowbit_state->flowbits_bit_queue = sfqueue_new();
+
+    if ( !sc->flowbit_state->flowbits_bit_queue )
+        FatalError("could not create flowbits bit queue.\n");
+}
+
+void flowbits_gterm(SnortConfig* sc)
+{
+    FlowBitState* flowbit_state = sc->flowbit_state;
+    if (flowbit_state == nullptr)
         return;
 
-    for (GHashNode* n = ghash_findfirst(flowbits_hash);
-        n != nullptr;
-        n = ghash_findnext(flowbits_hash))
-    {
-        FLOWBITS_OBJECT* fb = (FLOWBITS_OBJECT*)n->data;
-        fb->set = 0;
-        fb->isset = 0;
-    }
+    if ( flowbit_state->flowbits_hash )
+        ghash_delete(flowbit_state->flowbits_hash);
+
+    if ( flowbit_state->flowbits_grp_hash )
+        ghash_delete(flowbit_state->flowbits_grp_hash);
+
+    if ( flowbit_state->flowbits_bit_queue )
+        sfqueue_free_all(flowbit_state->flowbits_bit_queue, nullptr);
+
+    delete flowbit_state;
+    flowbit_state = nullptr;
 }
 
 int FlowBits_SetOperation(void* option_data)
@@ -561,7 +593,8 @@ static bool validateName(char* name)
     return true;
 }
 
-static FLOWBITS_OBJECT* getFlowBitItem(char* flowbitName, FLOWBITS_OP* flowbits)
+static FLOWBITS_OBJECT* getFlowBitItem(char* flowbitName, FLOWBITS_OP* flowbits,
+    FlowBitState* flowbit_state)
 {
     FLOWBITS_OBJECT* flowbits_item;
 
@@ -571,33 +604,35 @@ static FLOWBITS_OBJECT* getFlowBitItem(char* flowbitName, FLOWBITS_OP* flowbits)
             s_name, ALLOWED_SPECIAL_CHARS);
     }
 
-    flowbits_item = (FLOWBITS_OBJECT*)ghash_find(flowbits_hash, flowbitName);
+    flowbits_item = (FLOWBITS_OBJECT*)ghash_find(flowbit_state->flowbits_hash, flowbitName);
 
     if (flowbits_item == nullptr)
     {
         flowbits_item = (FLOWBITS_OBJECT*)snort_calloc(sizeof(FLOWBITS_OBJECT));
 
-        if (sfqueue_count(flowbits_bit_queue) > 0)
+        if (sfqueue_count(flowbit_state->flowbits_bit_queue) > 0)
         {
-            flowbits_item->id = (uint16_t)(uintptr_t)sfqueue_remove(flowbits_bit_queue);
+            flowbits_item->id = (uint16_t)(uintptr_t)sfqueue_remove(
+                flowbit_state->flowbits_bit_queue);
         }
         else
         {
-            flowbits_item->id = flowbits_count++;
+            flowbits_item->id = flowbit_state->flowbits_count++;
 
-            if ( !flowbits_count )
+            if ( !flowbit_state->flowbits_count )
             {
                 ParseError("The number of flowbit IDs in the current ruleset exceeds "
-                    "the maximum number of IDs that are allowed (%u).", flowbits_count-1);
+                    "the maximum number of IDs that are allowed (%u).",
+                    flowbit_state->flowbits_count-1);
             }
         }
 
-        int hstatus = ghash_add(flowbits_hash, flowbitName, flowbits_item);
+        int hstatus = ghash_add(flowbit_state->flowbits_hash, flowbitName, flowbits_item);
 
         if (hstatus != GHASH_OK)
             ParseError("Could not add flowbits key (%s) to hash.",flowbitName);
     }
-    flowbits_item->toggle = flowbits_toggle;
+    flowbits_item->toggle = flowbit_state->flowbits_toggle;
     flowbits_item->types |= flowbits->type;
 
     switch (flowbits->type)
@@ -621,7 +656,7 @@ static FLOWBITS_OBJECT* getFlowBitItem(char* flowbitName, FLOWBITS_OP* flowbits)
 }
 
 static void processFlowbits(
-    char* flowbits_names, FLOWBITS_OP* flowbits)
+    char* flowbits_names, FLOWBITS_OP* flowbits, FlowBitState* flowbit_state)
 {
     char** toks;
     int num_toks;
@@ -634,8 +669,6 @@ static void processFlowbits(
     {
         return;
     }
-
-    DebugFormat(DEBUG_FLOWBITS, "%s tag id parsing %s\n", s_name, flowbits_names);
 
     flowbits_name = snort_strdup(flowbits_names);
 
@@ -651,7 +684,7 @@ static void processFlowbits(
         flowbits->num_ids = num_toks;
         for (i = 0; i < num_toks; i++)
         {
-            flowbits_item = getFlowBitItem(toks[i], flowbits);
+            flowbits_item = getFlowBitItem(toks[i], flowbits, flowbit_state);
             flowbits->ids[i] = flowbits_item->id;
         }
         flowbits->eval = FLOWBITS_OR;
@@ -664,7 +697,7 @@ static void processFlowbits(
         flowbits->num_ids = num_toks;
         for (i = 0; i < num_toks; i++)
         {
-            flowbits_item = getFlowBitItem(toks[i], flowbits);
+            flowbits_item = getFlowBitItem(toks[i], flowbits, flowbit_state);
             flowbits->ids[i] = flowbits_item->id;
         }
         flowbits->eval = FLOWBITS_AND;
@@ -680,7 +713,7 @@ static void processFlowbits(
     }
     else
     {
-        flowbits_item = getFlowBitItem(flowbits_name, flowbits);
+        flowbits_item = getFlowBitItem(flowbits_name, flowbits, flowbit_state);
         flowbits->ids = (uint16_t*)snort_calloc(sizeof(*(flowbits->ids)));
         flowbits->num_ids = 1;
         flowbits->ids[0] = flowbits_item->id;
@@ -768,7 +801,7 @@ static void validateFlowbitsSyntax(FLOWBITS_OP* flowbits)
     }
 }
 
-static FLOWBITS_GRP* getFlowBitGroup(char* groupName)
+static FLOWBITS_GRP* getFlowBitGroup(char* groupName, FlowBitState* flowbit_state)
 {
     FLOWBITS_GRP* flowbits_grp = nullptr;
 
@@ -782,62 +815,42 @@ static FLOWBITS_GRP* getFlowBitGroup(char* groupName)
             s_name, ALLOWED_SPECIAL_CHARS);
     }
 
-    flowbits_grp = (FLOWBITS_GRP*)ghash_find(flowbits_grp_hash, groupName);
+    flowbits_grp = (FLOWBITS_GRP*)ghash_find(flowbit_state->flowbits_grp_hash, groupName);
 
     if ( !flowbits_grp )
     {
         // new group defined, add (bitop set later once we know size)
         flowbits_grp = (FLOWBITS_GRP*)snort_calloc(sizeof(*flowbits_grp));
-        int hstatus = ghash_add(flowbits_grp_hash, groupName, flowbits_grp);
+        int hstatus = ghash_add(flowbit_state->flowbits_grp_hash, groupName, flowbits_grp);
 
         if (hstatus != GHASH_OK)
             ParseAbort("Could not add flowbits group (%s) to hash.\n",groupName);
 
-        flowbits_grp_count++;
-        flowbits_grp->group_id = flowbits_grp_count;
+        flowbit_state->flowbits_grp_count++;
+        flowbits_grp->group_id = flowbit_state->flowbits_grp_count;
         flowbits_grp->name = snort_strdup(groupName);
     }
 
     return flowbits_grp;
 }
 
-#ifdef DEBUG_MSGS
-static void printOutFlowbits(FLOWBITS_OP* flowbits)
+static void processFlowBitsWithGroup(char* flowbitsName, char* groupName, FLOWBITS_OP* flowbits,
+    FlowBitState* flowbit_state)
 {
-    DebugFormat(DEBUG_FLOWBITS, "%s: type = %d\n", s_name, flowbits->type);
-    DebugFormat(DEBUG_FLOWBITS, "%s: name = %s\n", s_name, flowbits->name);
-    DebugFormat(DEBUG_FLOWBITS, "%s: eval = %d\n", s_name, flowbits->eval);
-    DebugFormat(DEBUG_FLOWBITS, "%s: num_ids = %d\n", s_name, flowbits->num_ids);
-    DebugFormat(DEBUG_FLOWBITS, "%s: grp_id = %u\n", s_name, flowbits->group_id);
-    DebugFormat(DEBUG_FLOWBITS, "%s: group_name = %s\n", s_name, flowbits->group);
-
-    for (int i = 0; i < flowbits->num_ids; i++)
-    {
-        DebugFormat(DEBUG_FLOWBITS, "%s: value = %d\n", s_name, flowbits->ids[i]);
-    }
-}
-#endif
-
-static void processFlowBitsWithGroup(char* flowbitsName, char* groupName, FLOWBITS_OP* flowbits)
-{
-    FLOWBITS_GRP* flowbits_grp;
-
-    flowbits_grp = getFlowBitGroup(groupName);
-    processFlowbits(flowbitsName, flowbits);
-
+    processFlowbits(flowbitsName, flowbits, flowbit_state);
     if (groupName && !(flowbits->group))
     {
         flowbits->group = snort_strdup(groupName);
+        FLOWBITS_GRP* flowbits_grp = getFlowBitGroup(groupName, flowbit_state);
         flowbits->group_id = flowbits_grp->group_id;
     }
     validateFlowbitsSyntax(flowbits);
-    DEBUG_WRAP(printOutFlowbits(flowbits));
 
     if ( flowbits->group )
-        op_list.push_front(flowbits);
+        flowbit_state->op_list.push_front(flowbits);
 }
 
-static FLOWBITS_OP* flowbits_parse(const char* data)
+static FLOWBITS_OP* flowbits_parse(const char* data, SnortConfig* sc)
 {
     char** toks;
     int num_toks;
@@ -846,7 +859,7 @@ static FLOWBITS_OP* flowbits_parse(const char* data)
     char* flowbitsName = nullptr;
     FLOWBITS_GRP* flowbits_grp;
 
-    FLOWBITS_OP* flowbits = (FLOWBITS_OP*)snort_calloc(sizeof(*flowbits));
+    FLOWBITS_OP* flowbits = new FLOWBITS_OP;
 
     toks = mSplit(data, ",", 0, &num_toks, 0);
 
@@ -858,6 +871,9 @@ static FLOWBITS_OP* flowbits_parse(const char* data)
     {
         ParseAbort("%s: too many arguments.", s_name);
     }
+
+    FlowBitState* flowbit_state = sc->flowbit_state;
+    assert(flowbit_state != nullptr);
 
     typeName = toks[0];
 
@@ -911,7 +927,7 @@ static FLOWBITS_OP* flowbits_parse(const char* data)
         {
             /*Save the group name*/
             groupName = snort_strdup(toks[1]);
-            flowbits_grp = getFlowBitGroup(groupName);
+            flowbits_grp = getFlowBitGroup(groupName, flowbit_state);
             flowbits->group = groupName;
             flowbits->group_id = flowbits_grp->group_id;
         }
@@ -942,7 +958,7 @@ static FLOWBITS_OP* flowbits_parse(const char* data)
     {
         groupName = toks[2];
     }
-    processFlowBitsWithGroup(flowbitsName, groupName, flowbits);
+    processFlowBitsWithGroup(flowbitsName, groupName, flowbits, flowbit_state);
 
     mSplitFree(&toks, num_toks);
     return flowbits;
@@ -958,52 +974,53 @@ static void update_group(FLOWBITS_GRP* flowbits_grp, int id)
     flowbits_grp->GrpBitOp->set(id);
 }
 
-static void init_groups()
+static void init_groups(FlowBitState* flowbit_state)
 {
-    if ( !flowbits_hash or !flowbits_grp_hash )
+    if ( !flowbit_state->flowbits_hash or !flowbit_state->flowbits_grp_hash )
         return;
 
-    for ( GHashNode* n = ghash_findfirst(flowbits_grp_hash);
+    for ( GHashNode* n = ghash_findfirst(flowbit_state->flowbits_grp_hash);
         n != nullptr;
-        n= ghash_findnext(flowbits_grp_hash) )
+        n= ghash_findnext(flowbit_state->flowbits_grp_hash) )
     {
         FLOWBITS_GRP* fbg = (FLOWBITS_GRP*)n->data;
-        fbg->GrpBitOp = new BitOp(flowbits_count);
+        fbg->GrpBitOp = new BitOp(flowbit_state->flowbits_count);
         fbg->GrpBitOp->reset();
     }
 
-    while ( !op_list.empty() )
+    while ( !flowbit_state->op_list.empty() )
     {
-        const FLOWBITS_OP* fbop = op_list.front();
-        FLOWBITS_GRP* fbg = (FLOWBITS_GRP*)ghash_find(flowbits_grp_hash, fbop->group);
+        const FLOWBITS_OP* fbop = flowbit_state->op_list.front();
+        FLOWBITS_GRP* fbg = (FLOWBITS_GRP*)ghash_find(flowbit_state->flowbits_grp_hash,
+            fbop->group);
         assert(fbg);
 
         for ( int i = 0; i < fbop->num_ids; ++i )
             update_group(fbg, fbop->ids[i]);
 
-        op_list.pop_front();
+        flowbit_state->op_list.pop_front();
     }
 }
 
-static void FlowBitsVerify()
+static void FlowBitsVerify(FlowBitState* flowbit_state)
 {
     GHashNode* n;
     unsigned num_flowbits = 0;
     unsigned unchecked = 0, unset = 0;
 
-    if (flowbits_hash == nullptr)
+    if (flowbit_state->flowbits_hash == nullptr)
         return;
 
-    for (n = ghash_findfirst(flowbits_hash);
+    for (n = ghash_findfirst(flowbit_state->flowbits_hash);
         n != nullptr;
-        n= ghash_findnext(flowbits_hash))
+        n= ghash_findnext(flowbit_state->flowbits_hash))
     {
         FLOWBITS_OBJECT* fb = (FLOWBITS_OBJECT*)n->data;
 
-        if (fb->toggle != flowbits_toggle)
+        if (fb->toggle != flowbit_state->flowbits_toggle)
         {
-            sfqueue_add(flowbits_bit_queue, (NODE_DATA)(uintptr_t)fb->id);
-            ghash_remove(flowbits_hash, n->key);
+            sfqueue_add(flowbit_state->flowbits_bit_queue, (NODE_DATA)(uintptr_t)fb->id);
+            ghash_remove(flowbit_state->flowbits_hash, n->key);
             continue;
         }
 
@@ -1026,9 +1043,9 @@ static void FlowBitsVerify()
 
         num_flowbits++;
     }
-    assert(num_flowbits == flowbits_count);
+    assert(num_flowbits == flowbit_state->flowbits_count);
 
-    flowbits_toggle ^= 1;
+    flowbit_state->flowbits_toggle ^= 1;
 
     if ( !num_flowbits )
         return;
@@ -1048,56 +1065,11 @@ static void FlowItemFree(void* d)
 static void FlowBitsGrpFree(void* d)
 {
     FLOWBITS_GRP* data = (FLOWBITS_GRP*)d;
-    if(data->GrpBitOp)
+    if (data->GrpBitOp)
         delete data->GrpBitOp;
     if (data->name)
         snort_free(data->name);
     snort_free(data);
-}
-
-//-------------------------------------------------------------------------
-// api methods
-//-------------------------------------------------------------------------
-
-static void flowbits_ginit(SnortConfig*)
-{
-    flowbits_hash = ghash_new(10000, 0, 0, FlowItemFree);
-
-    if ( !flowbits_hash )
-        FatalError("Could not create flowbits hash.\n");
-
-    // this is used during parse time and runtime so do NOT
-    // enable splay mode (which is NOT useful here anyway)
-    flowbits_grp_hash = ghash_new(10000, 0, 0, FlowBitsGrpFree);
-
-    if ( !flowbits_grp_hash )
-        FatalError("could not create flowbits group hash.\n");
-
-    flowbits_bit_queue = sfqueue_new();
-
-    if ( !flowbits_bit_queue )
-        FatalError("could not create flowbits bit queue.\n");
-}
-
-static void flowbits_gterm(SnortConfig*)
-{
-    if ( flowbits_hash )
-    {
-        ghash_delete(flowbits_hash);
-        flowbits_hash = nullptr;
-    }
-
-    if ( flowbits_grp_hash )
-    {
-        ghash_delete(flowbits_grp_hash);
-        flowbits_grp_hash = nullptr;
-    }
-
-    if ( flowbits_bit_queue )
-    {
-        sfqueue_free_all(flowbits_bit_queue, nullptr);
-        flowbits_bit_queue = nullptr;
-    }
 }
 
 //-------------------------------------------------------------------------
@@ -1128,6 +1100,7 @@ public:
 
     bool begin(const char*, int, SnortConfig*) override;
     bool set(const char*, Value&, SnortConfig*) override;
+    bool end(const char*, int, SnortConfig*) override;
 
     ProfileStats* get_profile() const override
     { return &flowBitsPerfStats; }
@@ -1135,8 +1108,11 @@ public:
     Usage get_usage() const override
     { return DETECT; }
 
+    FLOWBITS_OP* get_data();
+
 public:
     string args;
+    FLOWBITS_OP* fbop = nullptr;
 };
 
 bool FlowbitsModule::begin(const char*, int, SnortConfig*)
@@ -1161,6 +1137,19 @@ bool FlowbitsModule::set(const char*, Value& v, SnortConfig*)
     return true;
 }
 
+bool FlowbitsModule::end(const char*, int, SnortConfig* sc)
+{
+    fbop = flowbits_parse(args.c_str(), sc);
+    return true;
+}
+
+FLOWBITS_OP* FlowbitsModule::get_data()
+{
+    FLOWBITS_OP* tmp = fbop;
+    fbop = nullptr;
+    return tmp;
+}
+
 //-------------------------------------------------------------------------
 // api methods
 //-------------------------------------------------------------------------
@@ -1172,13 +1161,17 @@ static Module* mod_ctor()
 
 static void mod_dtor(Module* m)
 {
-    delete m;
+    FlowbitsModule* fb = (FlowbitsModule*)m;
+    if (fb->fbop)
+        delete fb->fbop;
+
+    delete fb;
 }
 
 static IpsOption* flowbits_ctor(Module* p, OptTreeNode*)
 {
     FlowbitsModule* m = (FlowbitsModule*)p;
-    FLOWBITS_OP* fbop = flowbits_parse(m->args.c_str());
+    FLOWBITS_OP* fbop = m->get_data();
     return new FlowBitsOption(fbop);
 }
 
@@ -1187,11 +1180,11 @@ static void flowbits_dtor(IpsOption* p)
     delete p;
 }
 
-// FIXIT-M updating statics during reload is bad, mkay?
-static void flowbits_verify(SnortConfig*)
+static void flowbits_verify(SnortConfig* sc)
 {
-    init_groups();
-    FlowBitsVerify();
+    FlowBitState* flowbit_state = sc->flowbit_state;
+    init_groups(flowbit_state);
+    FlowBitsVerify(flowbit_state);
 }
 
 #if 0
@@ -1225,8 +1218,8 @@ static const IpsApi flowbits_api =
     },
     OPT_TYPE_DETECTION,
     0, 0,
-    flowbits_ginit,
-    flowbits_gterm,
+    nullptr,
+    nullptr,
     nullptr,
     nullptr,
     flowbits_ctor,

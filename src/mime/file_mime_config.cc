@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2012-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -28,6 +28,8 @@
 
 #include "log/messages.h"
 #include "file_api/file_service.h"
+
+using namespace snort;
 
 void DecodeConfig::set_ignore_data(bool ignored)
 {
@@ -77,6 +79,36 @@ void DecodeConfig::set_uu_depth(int depth)
 int DecodeConfig::get_uu_depth()
 {
     return uu_depth;
+}
+
+void DecodeConfig::set_decompress_pdf(bool enabled)
+{
+    decompress_pdf = enabled;
+}
+
+bool DecodeConfig::is_decompress_pdf()
+{
+    return decompress_pdf;
+}
+
+void DecodeConfig::set_decompress_swf(bool enabled)
+{
+    decompress_swf = enabled;
+}
+
+bool DecodeConfig::is_decompress_swf()
+{
+    return decompress_swf;
+}
+
+void DecodeConfig::set_decompress_zip(bool enabled)
+{
+    decompress_zip = enabled;
+}
+
+bool DecodeConfig::is_decompress_zip()
+{
+    return decompress_zip;
 }
 
 int64_t DecodeConfig::get_file_depth()

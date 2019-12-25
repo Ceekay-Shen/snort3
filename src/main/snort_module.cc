@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -24,10 +24,14 @@
 
 #include "snort_module.h"
 
+#include "detection/detect.h"
+#include "detection/fp_detect.h"
 #include "framework/module.h"
 #include "framework/parameter.h"
 #include "log/messages.h"
 #include "main.h"
+#include "main/snort_debug.h"
+#include "managers/codec_manager.h"
 #include "packet_io/sfdaq_config.h"
 #include "packet_io/trough.h"
 #include "parser/config_file.h"
@@ -39,11 +43,13 @@
 #include "catch/unit_test.h"
 #endif
 
+#include "analyzer.h"
 #include "help.h"
 #include "shell.h"
 #include "snort_config.h"
 #include "thread_config.h"
 
+using namespace snort;
 using namespace std;
 
 //-------------------------------------------------------------------------
@@ -67,14 +73,34 @@ static const Parameter s_delete[] =
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
 };
 
+static const Parameter s_module[] =
+{
+    { "module", Parameter::PT_STRING, nullptr, nullptr,
+      "name of the module to reload" },
+
+    { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
+};
+
+static const Parameter s_pktnum[] =
+{
+    { "pkt_num", Parameter::PT_INT, "1:max53", nullptr,
+      "resume and pause after pkt_num packets" },
+
+    { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
+};
+
 static const Command snort_cmds[] =
 {
     { "show_plugins", main_dump_plugins, nullptr, "show available plugins" },
-    { "delete_inspector", main_delete_inspector, s_delete, "delete an inspector from the default policy" },
+
+    { "delete_inspector", main_delete_inspector, s_delete,
+      "delete an inspector from the default policy" },
+
     { "dump_stats", main_dump_stats, nullptr, "show summary statistics" },
     { "rotate_stats", main_rotate_stats, nullptr, "roll perfmonitor log files" },
     { "reload_config", main_reload_config, s_reload, "load new configuration" },
     { "reload_policy", main_reload_policy, s_reload, "reload part or all of the default policy" },
+    { "reload_module", main_reload_module, s_module, "reload module" },
     { "reload_daq", main_reload_daq, nullptr, "reload daq module" },
     { "reload_hosts", main_reload_hosts, s_reload, "load a new hosts table" },
 
@@ -82,7 +108,10 @@ static const Command snort_cmds[] =
     //{ "process", main_process, nullptr, "process given pcap" },
 
     { "pause", main_pause, nullptr, "suspend packet processing" },
-    { "resume", main_resume, nullptr, "continue packet processing" },
+
+    { "resume", main_resume, s_pktnum, "continue packet processing. "
+      "If number of packet is specified, will resume for n packets and pause" },
+
     { "detach", main_detach, nullptr, "exit shell w/o shutdown" },
     { "quit", main_quit, nullptr, "shutdown and dump-stats" },
     { "help", main_help, nullptr, "this output" },
@@ -101,7 +130,7 @@ static const Command snort_cmds[] =
     exit(0);
 }
 
-[[noreturn]] static void x2c(unsigned x)
+[[noreturn]] static void x2c(uint8_t x)
 {
     printf("0x%2.2X (%u) = '%c'\n", x, x, static_cast<char>(x));
     exit(0);
@@ -129,6 +158,15 @@ static const Command snort_cmds[] =
 // users aren't used to seeing the standard help format for command line
 // args so the few cases where there is a default, we include it in the
 // help as well.
+//
+// command line options can be specified in Lua instead by doing e.g.
+//
+//     snort = { }; snort["-z"] = 2
+//
+// so a default value can't be provided for args that kick off optional
+// run modes such as --rule-to-text because the program will do strange
+// things like waiting on stdin for input that won't be coming.  in these
+// cases the default must only be indicated in the help.
 //-------------------------------------------------------------------------
 
 static const Parameter s_params[] =
@@ -176,7 +214,7 @@ static const Parameter s_params[] =
 
 #ifdef SHELL
     { "-j", Parameter::PT_PORT, nullptr, nullptr,
-      "<port> to listen for telnet connections" },
+      "<port> to listen for Telnet connections" },
 #endif
 
     { "-k", Parameter::PT_ENUM, "all|noip|notcp|noudp|noicmp|none", "all",
@@ -191,10 +229,10 @@ static const Parameter s_params[] =
     { "-M", Parameter::PT_IMPLIED, nullptr, nullptr,
       "log messages to syslog (not alerts)" },
 
-    { "-m", Parameter::PT_INT, "0:", nullptr,
-      "<umask> set umask = <umask>" },
+    { "-m", Parameter::PT_INT, "0x000:0x1FF", nullptr,
+      "<umask> set the process file mode creation mask" },
 
-    { "-n", Parameter::PT_INT, "0:", nullptr,
+    { "-n", Parameter::PT_INT, "0:max53", nullptr,
       "<count> stop after count packets" },
 
     { "-O", Parameter::PT_IMPLIED, nullptr, nullptr,
@@ -215,8 +253,8 @@ static const Parameter s_params[] =
     { "-S", Parameter::PT_STRING, nullptr, nullptr,
       "<x=v> set config variable x equal to value v" },
 
-    { "-s", Parameter::PT_INT, "68:65535", "1514",
-      "<snap> (same as --snaplen); default is 1514" },
+    { "-s", Parameter::PT_INT, "68:65535", "1518",
+      "<snap> (same as --snaplen); default is 1518" },
 
     { "-T", Parameter::PT_IMPLIED, nullptr, nullptr,
       "test and report on the current Snort configuration" },
@@ -236,9 +274,6 @@ static const Parameter s_params[] =
     { "-v", Parameter::PT_IMPLIED, nullptr, nullptr,
       "be verbose" },
 
-    { "-W", Parameter::PT_IMPLIED, nullptr, nullptr,
-      "lists available interfaces" },
-
     { "-X", Parameter::PT_IMPLIED, nullptr, nullptr,
       "dump the raw packet data starting at the link layer" },
 
@@ -248,13 +283,14 @@ static const Parameter s_params[] =
     { "-y", Parameter::PT_IMPLIED, nullptr, nullptr,
       "include year in timestamp in the alert and log files" },
 
-    { "-z", Parameter::PT_INT, "0:", "1",
+    // do not provide parameter default as it will cause the value to change
+    // after allocations in SnortConfig if snort = { } is set in Lua
+    { "-z", Parameter::PT_INT, "0:max32", nullptr,
       "<count> maximum number of packet threads (same as --max-packet-threads); "
       "0 gets the number of CPU cores reported by the system; default is 1" },
 
     { "--alert-before-pass", Parameter::PT_IMPLIED, nullptr, nullptr,
-      "process alert, drop, sdrop, or reject before pass; "
-      "default is pass before alert, drop,..." },
+      "evaluate alert rules before pass rules; default is pass rules first" },
 
     { "--bpf", Parameter::PT_STRING, nullptr, nullptr,
       "<filter options> are standard BPF options, as seen in TCPDump" },
@@ -273,11 +309,17 @@ static const Parameter s_params[] =
     { "--daq", Parameter::PT_STRING, nullptr, nullptr,
       "<type> select packet acquisition module (default is pcap)" },
 
+    { "--daq-batch-size", Parameter::PT_INT, "1:", "64",
+      "<size> set the DAQ receive batch size", },
+
     { "--daq-dir", Parameter::PT_STRING, nullptr, nullptr,
       "<dir> tell snort where to find desired DAQ" },
 
     { "--daq-list", Parameter::PT_IMPLIED, nullptr, nullptr,
       "list packet acquisition modules available in optional dir, default is static modules only" },
+
+    { "--daq-mode", Parameter::PT_ENUM, "passive | inline | read-file", nullptr,
+      "<mode> select DAQ module operating mode (overrides automatic selection)" },
 
     { "--daq-var", Parameter::PT_STRING, nullptr, nullptr,
       "<name=value> specify extra DAQ configuration variable" },
@@ -316,6 +358,9 @@ static const Parameter s_params[] =
     { "--help-counts", Parameter::PT_STRING, "(optional)", nullptr,
       "[<module prefix>] output matching peg counts" },
 
+    { "--help-limits", Parameter::PT_IMPLIED, nullptr, nullptr,
+      "print the int upper bounds denoted by max*" },
+
     { "--help-module", Parameter::PT_STRING, nullptr, nullptr,
       "<module> output description of given module" },
 
@@ -339,6 +384,10 @@ static const Parameter s_params[] =
 
     { "--id-zero", Parameter::PT_IMPLIED, nullptr, nullptr,
       "use id prefix / subdirectory even with one packet thread" },
+
+    { "--include-path", Parameter::PT_STRING, nullptr, nullptr,
+      "<path> where to find Lua and rule included files; "
+      "searched before current or config directories" },
 
     { "--list-buffers", Parameter::PT_IMPLIED, nullptr, nullptr,
       "output available inspection buffers" },
@@ -364,7 +413,7 @@ static const Parameter s_params[] =
     { "--markup", Parameter::PT_IMPLIED, nullptr, nullptr,
       "output help in asciidoc compatible format" },
 
-    { "--max-packet-threads", Parameter::PT_INT, "0:", "1",
+    { "--max-packet-threads", Parameter::PT_INT, "0:max32", nullptr,
       "<count> configure maximum number of packet threads (same as -z)" },
 
     { "--mem-check", Parameter::PT_IMPLIED, nullptr, nullptr,
@@ -379,8 +428,10 @@ static const Parameter s_params[] =
     { "--pause", Parameter::PT_IMPLIED, nullptr, nullptr,
       "wait for resume/quit command before processing packets/terminating", },
 
-    { "--parsing-follows-files", Parameter::PT_IMPLIED, nullptr, nullptr,
-      "parse relative paths from the perspective of the current configuration file" },
+#ifdef REG_TEST
+    { "--pause-after-n", Parameter::PT_INT, "1:max53", nullptr,
+      "<count> pause after count packets", },
+#endif
 
     { "--pcap-file", Parameter::PT_STRING, nullptr, nullptr,
       "<file> file that contains a list of pcaps to read - read mode is implied" },
@@ -391,10 +442,10 @@ static const Parameter s_params[] =
     { "--pcap-dir", Parameter::PT_STRING, nullptr, nullptr,
       "<dir> a directory to recurse to look for pcaps - read mode is implied" },
 
-    { "--pcap-filter", Parameter::PT_STRING, nullptr, nullptr,
+    { "--pcap-filter", Parameter::PT_STRING, nullptr, "*.*cap*",
       "<filter> filter to apply when getting pcaps from file or directory" },
 
-    { "--pcap-loop", Parameter::PT_INT, "-1:", nullptr,
+    { "--pcap-loop", Parameter::PT_INT, "0:max32", nullptr,
       "<count> read all pcaps <count> times;  0 will read until Snort is terminated" },
 
     { "--pcap-no-filter", Parameter::PT_IMPLIED, nullptr, nullptr,
@@ -409,8 +460,13 @@ static const Parameter s_params[] =
     { "--pedantic", Parameter::PT_IMPLIED, nullptr, nullptr,
       "warnings are fatal" },
 
+#ifdef PIGLET
+    { "--piglet", Parameter::PT_IMPLIED, nullptr, nullptr,
+      "enable piglet test harness mode" },
+#endif
+
     { "--plugin-path", Parameter::PT_STRING, nullptr, nullptr,
-      "<path> where to find plugins" },
+      "<path> a colon separated list of directories or plugin libraries" },
 
     { "--process-all-events", Parameter::PT_IMPLIED, nullptr, nullptr,
       "process all action groups" },
@@ -418,11 +474,15 @@ static const Parameter s_params[] =
     { "--rule", Parameter::PT_STRING, nullptr, nullptr,
       "<rules> to be added to configuration; may be repeated" },
 
+    { "--rule-path", Parameter::PT_STRING, nullptr, nullptr,
+      "<path> where to find rules files" },
+
     { "--rule-to-hex", Parameter::PT_IMPLIED, nullptr, nullptr,
       "output so rule header to stdout for text rule on stdin" },
 
-    { "--rule-to-text", Parameter::PT_IMPLIED, nullptr, nullptr,
-      "output plain so rule header to stdout for text rule on stdin" },
+    { "--rule-to-text", Parameter::PT_STRING, "16", nullptr,
+      "output plain so rule header to stdout for text rule on stdin "
+      "(specify delimiter or [Snort_SO_Rule] will be used)" },
 
     { "--run-prefix", Parameter::PT_STRING, nullptr, nullptr,
       "<pfx> prepend this to each output file" },
@@ -435,32 +495,37 @@ static const Parameter s_params[] =
       "enable the interactive command line", },
 #endif
 
-#ifdef PIGLET
-    { "--piglet", Parameter::PT_IMPLIED, nullptr, nullptr,
-      "enable piglet test harness mode" },
-#endif
+    { "--show-file-codes", Parameter::PT_IMPLIED, nullptr, nullptr,
+      "indicate how files are located: A=absolute and W, F, C which are relative "
+      "to the working directory, including file, and config file respectively" },
 
     { "--show-plugins", Parameter::PT_IMPLIED, nullptr, nullptr,
       "list module and plugin versions", },
 
-    { "--skip", Parameter::PT_INT, "0:", nullptr,
+    { "--skip", Parameter::PT_INT, "0:max53", nullptr,
       "<n> skip 1st n packets", },
 
-    { "--snaplen", Parameter::PT_INT, "68:65535", "1514",
+    { "--snaplen", Parameter::PT_INT, "68:65535", "1518",
       "<snap> set snaplen of packet (same as -s)", },
 
     { "--stdin-rules", Parameter::PT_IMPLIED, nullptr, nullptr,
       "read rules from stdin until EOF or a line starting with END is read", },
 
+    { "--talos", Parameter::PT_IMPLIED, nullptr, nullptr,
+      "enable Talos tweak (same as --tweaks talos)", },
+
     { "--treat-drop-as-alert", Parameter::PT_IMPLIED, nullptr, nullptr,
-      "converts drop, sdrop, and reject rules into alert rules during startup" },
+      "converts drop, block, and reset rules into alert rules when loaded" },
 
     { "--treat-drop-as-ignore", Parameter::PT_IMPLIED, nullptr, nullptr,
-      "use drop, sdrop, and reject rules to ignore session traffic when not inline" },
+      "use drop, block, and reset rules to ignore session traffic when not inline" },
+
+    { "--tweaks", Parameter::PT_STRING, nullptr, nullptr,
+      "tune configuration" },
 
 #ifdef UNIT_TEST
     { "--catch-test", Parameter::PT_STRING, nullptr, nullptr,
-        "comma separated list of cat unit test tags or 'all'" },
+      "comma separated list of cat unit test tags or 'all'" },
 #endif
     { "--version", Parameter::PT_IMPLIED, nullptr, nullptr,
       "show version number (same as -V)" },
@@ -495,11 +560,14 @@ static const Parameter s_params[] =
     { "--warn-vars", Parameter::PT_IMPLIED, nullptr, nullptr,
       "warn about variable definition and usage issues" },
 
-    { "--x2c", Parameter::PT_INT, nullptr, nullptr,
+    { "--x2c", Parameter::PT_INT, "0x00:0xFF", nullptr,
       "output ASCII char for given hex (see also --c2x)" },
 
     { "--x2s", Parameter::PT_STRING, nullptr, nullptr,
       "output ASCII string for given byte code (see also --x2c)" },
+
+    { "--trace", Parameter::PT_IMPLIED, nullptr, nullptr,
+      "turn on main loop debug trace" },
 
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
 };
@@ -518,10 +586,12 @@ static const Parameter s_params[] =
     "command line configuration"
 #endif
 
+Trace TRACE_NAME(snort);
+
 class SnortModule : public Module
 {
 public:
-    SnortModule() : Module(s_name, s_help, s_params)
+    SnortModule() : Module(s_name, s_help, s_params, false, &TRACE_NAME(snort))
     { }
 
 #ifdef SHELL
@@ -531,12 +601,13 @@ public:
 
     bool begin(const char*, int, SnortConfig*) override;
     bool set(const char*, Value&, SnortConfig*) override;
+    bool end(const char*, int, SnortConfig*) override;
 
     const PegInfo* get_pegs() const override
     { return proc_names; }
 
     PegCount* get_counts() const override
-    { return (PegCount*) &proc_stats; }
+    { return (PegCount*)&proc_stats; }
 
     bool global_stats() const override
     { return true; }
@@ -544,17 +615,19 @@ public:
     void sum_stats(bool) override
     { }  // accumulate externally
 
+    ProfileStats* get_profile(unsigned, const char*&, const char*&) const override;
+
     Usage get_usage() const override
     { return GLOBAL; }
 
 private:
-    int instance_id;
+    SFDAQModuleConfig* module_config;
 };
 
 bool SnortModule::begin(const char* fqn, int, SnortConfig*)
 {
     if (!strcmp(fqn, "snort"))
-        instance_id = -1;
+        module_config = nullptr;
     return true;
 }
 
@@ -588,7 +661,7 @@ bool SnortModule::set(const char*, Value& v, SnortConfig* sc)
         sc->output_flags |= OUTPUT_FLAG__LINE_BUFFER;
 
     else if ( v.is("-G") || v.is("--logid") )
-        sc->event_log_id = v.get_long() << 16;
+        sc->event_log_id = v.get_uint16() << 16;
 
     else if ( v.is("-g") )
         sc->set_gid(v.get_string());
@@ -597,18 +670,12 @@ bool SnortModule::set(const char*, Value& v, SnortConfig* sc)
         sc->run_flags |= RUN_FLAG__STATIC_HASH;
 
     else if ( v.is("-i") )
-    {
-        instance_id++;
-        if (instance_id > 0)
-            sc->daq_config->set_input_spec(v.get_string(), instance_id);
-        else
-            sc->daq_config->set_input_spec(v.get_string());
-    }
+        sc->daq_config->add_input(v.get_string());
 
 #ifdef SHELL
     else if ( v.is("-j") )
     {
-        sc->remote_control_port = v.get_long();
+        sc->remote_control_port = v.get_uint16();
         sc->remote_control_socket.clear();
     }
 #endif
@@ -626,10 +693,10 @@ bool SnortModule::set(const char*, Value& v, SnortConfig* sc)
         sc->enable_syslog();
 
     else if ( v.is("-m") )
-        sc->set_umask(v.get_string());
+        sc->set_umask(v.get_uint32());
 
     else if ( v.is("-n") )
-        sc->pkt_cnt = v.get_long();
+        sc->pkt_cnt = v.get_uint64();
 
     else if ( v.is("-O") )
         sc->set_obfuscate(true);
@@ -648,14 +715,14 @@ bool SnortModule::set(const char*, Value& v, SnortConfig* sc)
     }
     else if ( v.is("-r") || v.is("--pcap-list") )
     {
-        Trough::add_source(Trough::SOURCE_LIST, v.get_string());
         sc->run_flags |= RUN_FLAG__READ;
+        Trough::add_source(Trough::SOURCE_LIST, v.get_string());
     }
     else if ( v.is("-S") )
         config_set_var(sc, v.get_string());
 
-    else if ( v.is("-s") )
-        sc->daq_config->set_mru_size(v.get_long());
+    else if ( v.is("-s") or v.is("--snaplen") )
+        sc->daq_config->set_mru_size(v.get_uint16());
 
     else if ( v.is("-T") )
         sc->run_flags |= RUN_FLAG__TEST;
@@ -675,9 +742,6 @@ bool SnortModule::set(const char*, Value& v, SnortConfig* sc)
     else if ( v.is("-v") )
         sc->set_verbose(true);
 
-    else if ( v.is("-W") )
-        list_interfaces(sc);
-
     else if ( v.is("-X") )
         sc->set_dump_payload_verbose(true);
 
@@ -688,7 +752,7 @@ bool SnortModule::set(const char*, Value& v, SnortConfig* sc)
         sc->set_show_year(true);
 
     else if ( v.is("-z") || v.is("--max-packet-threads") )
-        ThreadConfig::set_instance_max(v.get_long());
+        ThreadConfig::set_instance_max(v.get_uint32());
 
     else if ( v.is("--alert-before-pass") )
         sc->set_alert_before_pass(true);
@@ -711,22 +775,45 @@ bool SnortModule::set(const char*, Value& v, SnortConfig* sc)
         sc->set_create_pid_file(true);
 
     else if ( v.is("--daq") )
-        sc->daq_config->set_module_name(v.get_string());
+        module_config = sc->daq_config->add_module_config(v.get_string());
+
+    else if ( v.is("--daq-batch-size") )
+        sc->daq_config->set_batch_size(v.get_long());
 
     else if ( v.is("--daq-dir") )
-        sc->daq_config->add_module_dir(v.get_string());
+    {
+        stringstream ss { v.get_string() };
+        string path;
 
+        while ( getline(ss, path, ':') )
+            sc->daq_config->add_module_dir(path.c_str());
+    }
+    else if ( v.is("--daq-mode") )
+    {
+        if (!module_config)
+            return false;
+        switch ( v.get_long() )
+        {
+            case 0:
+                module_config->mode = SFDAQModuleConfig::SFDAQ_MODE_PASSIVE;
+                break;
+            case 1:
+                module_config->mode = SFDAQModuleConfig::SFDAQ_MODE_INLINE;
+                break;
+            case 2:
+                module_config->mode = SFDAQModuleConfig::SFDAQ_MODE_READ_FILE;
+                break;
+        }
+    }
     else if ( v.is("--daq-list") )
         list_daqs(sc);
 
     else if ( v.is("--daq-var") )
     {
-        if (instance_id < 0)
-            sc->daq_config->set_variable(v.get_string());
-        else
-            sc->daq_config->set_variable(v.get_string(), instance_id);
+        if (!module_config)
+            return false;
+        module_config->set_variable(v.get_string());
     }
-
     else if ( v.is("--dirty-pig") )
         sc->set_dirty_pig(true);
 
@@ -760,6 +847,9 @@ bool SnortModule::set(const char*, Value& v, SnortConfig* sc)
     else if ( v.is("--help-counts") )
         help_counts(sc, v.get_string());
 
+    else if ( v.is("--help-limits") )
+        help_limits(sc, v.get_string());
+
     else if ( v.is("--help-module") )
         help_module(sc, v.get_string());
 
@@ -776,13 +866,16 @@ bool SnortModule::set(const char*, Value& v, SnortConfig* sc)
         help_signals(sc, v.get_string());
 
     else if ( v.is("--id-offset") )
-        sc->id_offset = v.get_long();
+        sc->id_offset = v.get_uint16();
 
     else if ( v.is("--id-subdir") )
         sc->id_subdir = true;
 
     else if ( v.is("--id-zero") )
         sc->id_zero = true;
+
+    else if ( v.is("--include-path") )
+        sc->set_include_path(v.get_string());
 
     else if ( v.is("--list-buffers") )
         help_buffers(sc, v.get_string());
@@ -817,24 +910,26 @@ bool SnortModule::set(const char*, Value& v, SnortConfig* sc)
     else if ( v.is("--pause") )
         sc->run_flags |= RUN_FLAG__PAUSE;
 
-    else if ( v.is("--parsing-follows-files") )
-        parsing_follows_files = true;
+#ifdef REG_TEST
+    else if ( v.is("--pause-after-n") )
+        sc->pkt_pause_cnt = v.get_uint64();
+#endif
 
     else if ( v.is("--pcap-file") )
     {
-        Trough::add_source(Trough::SOURCE_FILE_LIST, v.get_string());
         sc->run_flags |= RUN_FLAG__READ;
+        Trough::add_source(Trough::SOURCE_FILE_LIST, v.get_string());
     }
     else if ( v.is("--pcap-dir") )
     {
-        Trough::add_source(Trough::SOURCE_DIR, v.get_string());
         sc->run_flags |= RUN_FLAG__READ;
+        Trough::add_source(Trough::SOURCE_DIR, v.get_string());
     }
     else if ( v.is("--pcap-filter") )
         Trough::set_filter(v.get_string());
 
     else if ( v.is("--pcap-loop") )
-        Trough::set_loop_count(v.get_long());
+        Trough::set_loop_count(v.get_uint32());
 
     else if ( v.is("--pcap-no-filter") )
         Trough::set_filter(nullptr);
@@ -845,14 +940,22 @@ bool SnortModule::set(const char*, Value& v, SnortConfig* sc)
     else if ( v.is("--pcap-show") )
         sc->run_flags |= RUN_FLAG__PCAP_SHOW;
 
+#ifdef PIGLET
+    else if ( v.is("--piglet") )
+        sc->run_flags |= RUN_FLAG__PIGLET;
+#endif
+
     else if ( v.is("--plugin-path") )
-        sc->set_plugin_path(v.get_string());
+        sc->add_plugin_path(v.get_string());
 
     else if ( v.is("--process-all-events") )
         sc->set_process_all_events(true);
 
     else if ( v.is("--rule") )
         parser_append_rules(v.get_string());
+
+    else if ( v.is("--rule-path") )
+        parser_append_includes(v.get_string());
 
     else if ( v.is("--rule-to-hex") )
         dump_rule_hex(sc, v.get_string());
@@ -871,28 +974,29 @@ bool SnortModule::set(const char*, Value& v, SnortConfig* sc)
         sc->run_flags |= RUN_FLAG__SHELL;
 #endif
 
-#ifdef PIGLET
-    else if ( v.is("--piglet") )
-        sc->run_flags |= RUN_FLAG__PIGLET;
-#endif
+    else if ( v.is("--show-file-codes") )
+        sc->run_flags |= RUN_FLAG__SHOW_FILE_CODES;
 
     else if ( v.is("--show-plugins") )
         sc->logging_flags |= LOGGING_FLAG__SHOW_PLUGINS;
 
     else if ( v.is("--skip") )
-        sc->pkt_skip = v.get_long();
-
-    else if ( v.is("--snaplen") )
-        sc->daq_config->set_mru_size(v.get_long());
+        sc->pkt_skip = v.get_uint64();
 
     else if ( v.is("--stdin-rules") )
         sc->stdin_rules = true;
+
+    else if ( v.is("--talos") )
+        sc->set_tweaks("talos");
 
     else if ( v.is("--treat-drop-as-alert") )
         sc->set_treat_drop_as_alert(true);
 
     else if ( v.is("--treat-drop-as-ignore") )
         sc->set_treat_drop_as_ignore(true);
+
+    else if ( v.is("--tweaks") )
+        sc->set_tweaks(v.get_string());
 
 #ifdef UNIT_TEST
     else if ( v.is("--catch-test") )
@@ -932,12 +1036,56 @@ bool SnortModule::set(const char*, Value& v, SnortConfig* sc)
         sc->warning_flags |= (1 << WARN_VARS);
 
     else if ( v.is("--x2c") )
-        x2c(v.get_long());
+        x2c(v.get_uint8());
 
     else if ( v.is("--x2s") )
         x2s(v.get_string());
 
+    else if (v.is("--trace"))
+        Module::enable_trace();
+
     return true;
+}
+
+bool SnortModule::end(const char*, int, SnortConfig* sc)
+{
+    if ( sc->offload_threads and ThreadConfig::get_instance_max() != 1 )
+        ParseError("You can not enable experimental offload with more than one packet thread.");
+
+    return true;
+}
+
+ProfileStats* SnortModule::get_profile(
+    unsigned index, const char*& name, const char*& parent) const
+{
+    switch ( index )
+    {
+    case 0:
+        name = "daq";
+        parent = nullptr;
+        return &daqPerfStats;
+
+    case 1:
+        name = "decode";
+        parent = nullptr;
+        return &decodePerfStats;
+
+    case 2:
+        name = "mpse";
+        parent = nullptr;
+        return &mpsePerfStats;
+
+    case 3:
+        name = "rule_eval";
+        parent = nullptr;
+        return &rulePerfStats;
+
+    case 4:
+        name = "eventq";
+        parent = nullptr;
+        return &eventqPerfStats;
+    }
+    return nullptr;
 }
 
 //-------------------------------------------------------------------------

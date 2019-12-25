@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 // Copyright (C) 1998-2002 Martin Roesch <roesch@sourcefire.com>
 //
@@ -30,13 +30,13 @@
 #include "framework/module.h"
 #include "log/messages.h"
 #include "main/snort_config.h"
-#include "packet_io/intf.h"
 #include "packet_io/sfdaq.h"
 #include "protocols/packet.h"
 #include "utils/util.h"
 #include "utils/util_cstring.h"
 #include "utils/util_net.h"
 
+using namespace snort;
 using namespace std;
 
 #ifndef LOG_AUTHPRIV
@@ -159,10 +159,10 @@ public:
 bool SyslogModule::set(const char*, Value& v, SnortConfig*)
 {
     if ( v.is("facility") )
-        facility = get_facility(v.get_long());
+        facility = get_facility(v.get_uint8());
 
     else if ( v.is("level") )
-        level = get_level(v.get_long());
+        level = get_level(v.get_uint8());
 
     else if ( v.is("options") )
         options = get_options(v.get_string());
@@ -226,7 +226,7 @@ static void AlertSyslog(
         if (SnortConfig::alert_interface())
         {
             SnortSnprintfAppend(event_string, sizeof(event_string),
-                "<%s> ", PRINT_INTERFACE(SFDAQ::get_interface_spec()));
+                "<%s> ", SFDAQ::get_input_spec());
         }
     }
     if ((p != nullptr) && p->ptrs.ip_api.is_ip())

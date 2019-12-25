@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -31,9 +31,7 @@
 #include "memory_profiler_defs.h"
 #include "memory_profiler_active_context.h"
 
-#ifdef UNIT_TEST
-#include "catch/catch.hpp"
-#endif
+using namespace snort;
 
 // -----------------------------------------------------------------------------
 // static variables
@@ -81,7 +79,9 @@ MemoryExclude::~MemoryExclude()
 { mp_active_context.set(saved); }
 
 
-#ifdef UNIT_TEST
+#ifdef CATCH_TEST_BUILD
+
+#include "catch/catch.hpp"
 
 namespace
 {

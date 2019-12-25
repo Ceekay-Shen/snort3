@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 // Copyright (C) 1998-2002 Martin Roesch <roesch@sourcefire.com>
 //
@@ -26,6 +26,8 @@
 
 #include "framework/ips_option.h"
 #include "utils/util.h"
+
+using namespace snort;
 
 OptFpList* AddOptFuncToList(RuleOptEvalFunc ro_eval_func, OptTreeNode* otn)
 {
@@ -84,6 +86,8 @@ void* get_rule_type_data(OptTreeNode* otn, const char* name)
     return nullptr;
 }
 
+namespace snort
+{
 bool otn_has_plugin(OptTreeNode* otn, const char* name)
 {
     OptFpList* fpl = otn->opt_func;
@@ -100,4 +104,4 @@ bool otn_has_plugin(OptTreeNode* otn, const char* name)
     }
     return false;
 }
-
+}

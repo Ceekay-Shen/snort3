@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2012-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -30,6 +30,9 @@
 #include "file_api/file_flows.h"
 #include "log/messages.h"
 #include "search_engines/search_tool.h"
+#include "utils/util_cstring.h"
+
+using namespace snort;
 
 struct MimeToken
 {
@@ -67,11 +70,11 @@ struct MIMESearchInfo
     int length;
 };
 
-MIMESearchInfo mime_search_info;
+static THREAD_LOCAL MIMESearchInfo mime_search_info;
+static THREAD_LOCAL MIMESearch* mime_current_search = nullptr;
 
 SearchTool* mime_hdr_search_mpse = nullptr;
 MIMESearch mime_hdr_search[HDR_LAST];
-MIMESearch* mime_current_search = nullptr;
 
 static void get_mime_eol(const uint8_t* ptr, const uint8_t* end,
     const uint8_t** eol, const uint8_t** eolm)
@@ -163,7 +166,7 @@ void MimeSession::setup_decode(const char* data, int size, bool cnt_xf)
  *
  * @return  i       index into p->payload where we stopped looking at data
  */
-const uint8_t* MimeSession::process_mime_header(const uint8_t* ptr,
+const uint8_t* MimeSession::process_mime_header(Packet* p, const uint8_t* ptr,
     const uint8_t* data_end_marker)
 {
     const uint8_t* eol = data_end_marker;
@@ -305,7 +308,7 @@ const uint8_t* MimeSession::process_mime_header(const uint8_t* ptr,
             state_flags &= ~MIME_FLAG_DATA_HEADER_CONT;
         }
 
-        int ret = handle_header_line(ptr, eol, max_header_name_len);
+        int ret = handle_header_line(ptr, eol, max_header_name_len, p);
         if (ret < 0)
             return nullptr;
         else if (ret > 0)
@@ -367,10 +370,20 @@ const uint8_t* MimeSession::process_mime_header(const uint8_t* ptr,
             cont_disp)
         {
             bool disp_cont = (state_flags & MIME_FLAG_IN_CONT_DISP_CONT) ? true : false;
-            if (log_config->log_filename && log_state )
+            int len = extract_file_name((const char*&)cont_disp, eolm - cont_disp, &disp_cont);
+
+            if (len > 0)
             {
-                log_state->log_file_name(cont_disp, eolm - cont_disp, &disp_cont);
+                filename.assign((const char*)cont_disp, len);
+
+                if (log_config->log_filename && log_state)
+                {
+                    log_state->log_file_name(cont_disp, len);
+                }
             }
+            else
+                filename.clear();
+
             if (disp_cont)
             {
                 state_flags |= MIME_FLAG_IN_CONT_DISP_CONT;
@@ -479,8 +492,9 @@ void MimeSession::reset_mime_state()
 }
 
 const uint8_t* MimeSession::process_mime_data_paf(
-    Flow* flow, const uint8_t* start, const uint8_t* end, bool upload, FilePosition position)
+    Packet* p, const uint8_t* start, const uint8_t* end, bool upload, FilePosition position)
 {
+    Flow* flow = p->flow;
     bool done_data = is_end_of_data(flow);
 
     /* if we've just entered the data state, check for a dot + end of line
@@ -500,7 +514,7 @@ const uint8_t* MimeSession::process_mime_data_paf(
             {
                 /* if we're normalizing and not ignoring data copy data end marker
                  * and dot to alt buffer */
-                if (normalize_data(start, end) < 0)
+                if (normalize_data(start, end, p) < 0)
                     return nullptr;
 
                 reset_mime_state();
@@ -512,7 +526,7 @@ const uint8_t* MimeSession::process_mime_data_paf(
         if (data_state == STATE_DATA_INIT)
             data_state = STATE_DATA_HEADER;
 
-        /* XXX A line starting with a '.' that isn't followed by a '.' is
+        /* A line starting with a '.' that isn't followed by a '.' is
          * deleted (RFC 821 - 4.5.2.  TRANSPARENCY).  If data starts with
          * '. text', i.e a dot followed by white space then text, some
          * servers consider it data header and some data body.
@@ -531,37 +545,25 @@ const uint8_t* MimeSession::process_mime_data_paf(
 
     if (data_state == STATE_DATA_HEADER)
     {
-#ifdef DEBUG_MSGS
-        if (data_state == STATE_DATA_HEADER)
-        {
-            DEBUG_WRAP(DebugMessage(DEBUG_FILE, "DATA HEADER STATE ~~~~~~~~~~~~~~~~~~~~~~\n"); );
-        }
-        else
-        {
-            DEBUG_WRAP(DebugMessage(DEBUG_FILE, "DATA UNKNOWN STATE ~~~~~~~~~~~~~~~~~~~~~\n"); );
-        }
-#endif
-
-        start = process_mime_header(start, end);
+        start = process_mime_header(p, start, end);
         if (start == nullptr)
             return nullptr;
     }
 
-    if (normalize_data(start, end) < 0)
+    if (normalize_data(start, end, p) < 0)
         return nullptr;
-    /* now we shouldn't have to worry about copying any data to the alt buffer
-     *      * only mime headers if we find them and only if we're ignoring data */
+
+    // now we shouldn't have to worry about copying any data to the alt buffer
+    // only mime headers if we find them and only if we're ignoring data
 
     while ((start != nullptr) && (start < end))
     {
         switch (data_state)
         {
         case STATE_MIME_HEADER:
-            DEBUG_WRAP(DebugMessage(DEBUG_FILE, "MIME HEADER STATE ~~~~~~~~~~~~~~~~~~~~~~\n"); );
-            start = process_mime_header(start, end);
+            start = process_mime_header(p, start, end);
             break;
         case STATE_DATA_BODY:
-            DEBUG_WRAP(DebugMessage(DEBUG_FILE, "DATA BODY STATE ~~~~~~~~~~~~~~~~~~~~~~~~\n"); );
             start = process_mime_body(start, end, isFileEnd(position) );
             break;
         }
@@ -571,7 +573,7 @@ const uint8_t* MimeSession::process_mime_data_paf(
 
     if ((decode_state) != nullptr)
     {
-        DecodeConfig* conf= decode_conf;
+        DecodeConfig* conf = decode_conf;
         const uint8_t* buffer = nullptr;
         uint32_t buf_size = 0;
 
@@ -579,16 +581,28 @@ const uint8_t* MimeSession::process_mime_data_paf(
 
         if (conf)
         {
-            int detection_size = decode_state->get_detection_depth();
-            set_file_data(buffer, (uint16_t)detection_size);
+            const uint8_t* decomp_buffer = nullptr;
+            uint32_t detection_size, decomp_buf_size = 0;
+
+            detection_size = (uint32_t)decode_state->get_detection_depth();
+
+            DecodeResult result = decode_state->decompress_data(
+                buffer, detection_size, decomp_buffer, decomp_buf_size
+            );
+
+            if ( result != DECODE_SUCCESS )
+                decompress_alert();
+
+            set_file_data(decomp_buffer, decomp_buf_size);
         }
 
         /*Process file type/file signature*/
         FileFlows* file_flows = FileFlows::get_file_flows(flow);
-        if (file_flows && file_flows->file_process(buffer, buf_size, position, upload)
+        if (file_flows && file_flows->file_process(p, buffer, buf_size, position, upload)
             && (isFileStart(position)) && log_state)
         {
-            log_state->set_file_name_from_log(flow);
+            file_flows->set_file_name((const uint8_t*)filename.c_str(), filename.length());
+            filename.clear();
         }
         if (mime_stats)
         {
@@ -627,9 +641,10 @@ const uint8_t* MimeSession::process_mime_data_paf(
 
 // Main function for mime processing
 // This should be called when mime data is available
-const uint8_t* MimeSession::process_mime_data(Flow* flow, const uint8_t* start,
+const uint8_t* MimeSession::process_mime_data(Packet* p, const uint8_t* start,
     int data_size, bool upload, FilePosition position)
 {
+    Flow* flow = p->flow;
     const uint8_t* attach_start = start;
     const uint8_t* attach_end;
 
@@ -637,7 +652,7 @@ const uint8_t* MimeSession::process_mime_data(Flow* flow, const uint8_t* start,
 
     if (position != SNORT_FILE_POSITION_UNKNOWN)
     {
-        process_mime_data_paf(flow, attach_start, data_end_marker,
+        process_mime_data_paf(p, attach_start, data_end_marker,
             upload, position);
         return data_end_marker;
     }
@@ -651,7 +666,7 @@ const uint8_t* MimeSession::process_mime_data(Flow* flow, const uint8_t* start,
         {
             attach_end = start;
             finalFilePosition(&position);
-            process_mime_data_paf(flow, attach_start, attach_end,
+            process_mime_data_paf(p, attach_start, attach_end,
                 upload, position);
             data_state = STATE_MIME_HEADER;
             position = SNORT_FILE_START;
@@ -664,7 +679,7 @@ const uint8_t* MimeSession::process_mime_data(Flow* flow, const uint8_t* start,
     if ((start == data_end_marker) && (attach_start < data_end_marker))
     {
         updateFilePosition(&position, get_file_processed_size(flow));
-        process_mime_data_paf(flow, attach_start, data_end_marker,
+        process_mime_data_paf(p, attach_start, data_end_marker,
             upload, position);
     }
 
@@ -691,6 +706,68 @@ MailLogState* MimeSession::get_log_state()
     return log_state;
 }
 
+int MimeSession::extract_file_name(const char*& start, int length, bool* disp_cont)
+{
+    const char* tmp = nullptr;
+    const char* end = start+length;
+
+    if (length <= 0)
+        return -1;
+
+    if (!(*disp_cont))
+    {
+        tmp = SnortStrcasestr(start, length, "filename");
+
+        if ( tmp == nullptr )
+            return -1;
+
+        tmp = tmp + 8;
+        while ( (tmp < end) && ((isspace(*tmp)) || (*tmp == '=') ))
+        {
+            tmp++;
+        }
+    }
+    else
+        tmp = start;
+
+    if (tmp < end)
+    {
+        if (*tmp == '"' || (*disp_cont))
+        {
+            if (*tmp == '"')
+            {
+                if (*disp_cont)
+                {
+                    *disp_cont = false;
+                    return (tmp - start);
+                }
+                tmp++;
+            }
+            start = tmp;
+            tmp = SnortStrnPbrk(start,(end - tmp),"\"");
+            if (tmp == nullptr )
+            {
+                if ((end - tmp) > 0 )
+                {
+                    tmp = end;
+                    *disp_cont = true;
+                }
+                else
+                    return -1;
+            }
+            else
+                *disp_cont = false;
+            end = tmp;
+        }
+        else
+        {
+            start = tmp;
+        }
+        return (end - start);
+    }
+    return -1;
+}
+
 /*
  * This is the initialization function for mime processing.
  * This should be called when snort initializes
@@ -699,14 +776,12 @@ void MimeSession::init()
 {
     const MimeToken* tmp;
 
-    /* Header search */
+    MimeDecode::init();
+
     mime_hdr_search_mpse = new SearchTool;
+
     if (mime_hdr_search_mpse == nullptr)
-    {
-        // FIXIT-M make configurable or at least fall back to any
-        // available search engine
-        FatalError("Could not instantiate ac_bnfa search engine.\n");
-    }
+        FatalError("Could not instantiate search engine.\n");
 
     for (tmp = &mime_hdrs[0]; tmp->name != nullptr; tmp++)
     {
@@ -719,7 +794,6 @@ void MimeSession::init()
     mime_hdr_search_mpse->prep();
 }
 
-// Free anything that needs it before shutting down preprocessor
 void MimeSession::exit()
 {
     if (mime_hdr_search_mpse != nullptr)

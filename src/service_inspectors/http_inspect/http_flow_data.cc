@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -25,10 +25,15 @@
 
 #include "decompress/file_decomp.h"
 
+#include "http_cutter.h"
+#include "http_common.h"
+#include "http_enum.h"
 #include "http_module.h"
 #include "http_test_manager.h"
 #include "http_transaction.h"
 
+using namespace snort;
+using namespace HttpCommon;
 using namespace HttpEnums;
 
 unsigned HttpFlowData::inspector_id = 0;
@@ -40,14 +45,12 @@ uint64_t HttpFlowData::instance_count = 0;
 HttpFlowData::HttpFlowData() : FlowData(inspector_id)
 {
 #ifdef REG_TEST
-    if (HttpTestManager::use_test_output())
+    seq_num = ++instance_count;
+    if (HttpTestManager::use_test_output(HttpTestManager::IN_HTTP) &&
+        !HttpTestManager::use_test_input(HttpTestManager::IN_HTTP))
     {
-        seq_num = ++instance_count;
-        if (!HttpTestManager::use_test_input())
-        {
-            printf("Flow Data construct %" PRIu64 "\n", seq_num);
-            fflush(nullptr);
-        }
+        printf("Flow Data construct %" PRIu64 "\n", seq_num);
+        fflush(nullptr);
     }
 #endif
     HttpModule::increment_peg_counts(PEG_CONCURRENT_SESSIONS);
@@ -59,7 +62,8 @@ HttpFlowData::HttpFlowData() : FlowData(inspector_id)
 HttpFlowData::~HttpFlowData()
 {
 #ifdef REG_TEST
-    if (!HttpTestManager::use_test_input() && HttpTestManager::use_test_output())
+    if (HttpTestManager::use_test_output(HttpTestManager::IN_HTTP) &&
+        !HttpTestManager::use_test_input(HttpTestManager::IN_HTTP))
     {
         printf("Flow Data destruct %" PRIu64 "\n", seq_num);
         fflush(nullptr);
@@ -73,7 +77,8 @@ HttpFlowData::~HttpFlowData()
         delete infractions[k];
         delete events[k];
         delete[] section_buffer[k];
-        HttpTransaction::delete_transaction(transaction[k]);
+        delete[] partial_buffer[k];
+        HttpTransaction::delete_transaction(transaction[k], nullptr);
         delete cutter[k];
         if (compress_stream[k] != nullptr)
         {
@@ -90,6 +95,13 @@ HttpFlowData::~HttpFlowData()
     if (fd_state != nullptr)
         File_Decomp_StopFree(fd_state);
     delete_pipeline();
+
+    while (discard_list != nullptr)
+    {
+        HttpTransaction* tmp = discard_list;
+        discard_list = discard_list->next;
+        delete tmp;
+    }
 }
 
 void HttpFlowData::half_reset(SourceId source_id)
@@ -100,9 +112,12 @@ void HttpFlowData::half_reset(SourceId source_id)
     data_length[source_id] = STAT_NOT_PRESENT;
     body_octets[source_id] = STAT_NOT_PRESENT;
     section_size_target[source_id] = 0;
-    section_size_max[source_id] = 0;
+    stretch_section_to_packet[source_id] = false;
+    detained_inspection[source_id] = false;
     file_depth_remaining[source_id] = STAT_NOT_PRESENT;
     detect_depth_remaining[source_id] = STAT_NOT_PRESENT;
+    detection_status[source_id] = DET_REACTIVATING;
+
     compression[source_id] = CMP_NONE;
     if (compress_stream[source_id] != nullptr)
     {
@@ -155,6 +170,23 @@ void HttpFlowData::trailer_prep(SourceId source_id)
         delete compress_stream[source_id];
         compress_stream[source_id] = nullptr;
     }
+    detection_status[source_id] = DET_REACTIVATING;
+}
+
+void HttpFlowData::garbage_collect()
+{
+    HttpTransaction** current = &discard_list;
+    while (*current != nullptr)
+    {
+        if ((*current)->is_clear())
+        {
+            HttpTransaction* tmp = *current;
+            *current = (*current)->next;
+            delete tmp;
+        }
+        else
+            current = &(*current)->next;
+    }
 }
 
 bool HttpFlowData::add_to_pipeline(HttpTransaction* latest)
@@ -191,12 +223,12 @@ void HttpFlowData::delete_pipeline()
 {
     for (int k=pipeline_front; k != pipeline_back; k = (k+1) % MAX_PIPELINE)
     {
-        HttpTransaction::delete_transaction(pipeline[k]);
+        delete pipeline[k];
     }
     delete[] pipeline;
 }
 
-HttpInfractions* HttpFlowData::get_infractions(HttpEnums::SourceId source_id)
+HttpInfractions* HttpFlowData::get_infractions(SourceId source_id)
 {
     if (infractions[source_id] != nullptr)
         return infractions[source_id];
@@ -205,7 +237,7 @@ HttpInfractions* HttpFlowData::get_infractions(HttpEnums::SourceId source_id)
     return transaction[source_id]->get_infractions(source_id);
 }
 
-HttpEventGen* HttpFlowData::get_events(HttpEnums::SourceId source_id)
+HttpEventGen* HttpFlowData::get_events(SourceId source_id)
 {
     if (events[source_id] != nullptr)
         return events[source_id];

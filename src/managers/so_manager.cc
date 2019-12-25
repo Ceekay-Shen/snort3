@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -34,7 +34,9 @@
 #include <sstream>
 
 #include "log/messages.h"
+#include "parser/parse_so_rule.h"
 
+using namespace snort;
 using namespace std;
 
 static list<const SoApi*> s_rules;
@@ -45,7 +47,7 @@ static list<const SoApi*> s_rules;
 
 void SoManager::add_plugin(const SoApi* api)
 {
-    s_rules.push_back(api);
+    s_rules.emplace_back(api);
 }
 
 void SoManager::release_plugins()
@@ -88,7 +90,7 @@ static const uint8_t* compress(const string& text, unsigned& len)
     if ( ret != Z_OK )
         return nullptr;
 
-    stream.next_in = (Bytef*)s;
+    stream.next_in = const_cast<Bytef*>(reinterpret_cast<const uint8_t*>(s));
     stream.avail_in = text.size();
 
     stream.next_out = so_buf;
@@ -121,7 +123,7 @@ static const char* expand(const uint8_t* data, unsigned len)
     if ( inflateInit2(&stream, window_bits) != Z_OK )
         return nullptr;
 
-    stream.next_in = (Bytef*)data;
+    stream.next_in = const_cast<Bytef*>(data);
     stream.avail_in = (uInt)len;
 
     stream.next_out = (Bytef*)so_buf;
@@ -193,28 +195,16 @@ static const SoApi* get_so_api(const char* soid)
     return nullptr;
 }
 
-const char* SoManager::get_so_options(const char* soid)
+const char* SoManager::get_so_rule(const char* soid)
 {
     const SoApi* api = get_so_api(soid);
 
     if ( !api )
         return nullptr;
 
-    if ( !api->length )
-        return ")";  // plain stub is full rule
-
     const char* rule = revert(api->rule, api->length);
 
-    if ( !rule )
-        return nullptr;
-
-    // FIXIT-L this approach won't tolerate spaces and might get
-    // fooled by matching content (should it precede this)
-    char opt[32];
-    snprintf(opt, sizeof(opt), "soid:%s;", soid);
-    const char* s = strstr(rule, opt);
-
-    return s ? s + strlen(opt) : nullptr;
+    return rule;
 }
 
 SoEvalFunc SoManager::get_so_eval(const char* soid, const char* so, void** data)
@@ -243,32 +233,28 @@ void SoManager::dump_rule_stubs(const char*)
 
     for ( auto* p : s_rules )
     {
-        const char* s;
         const char* rule = revert(p->rule, p->length);
 
         if ( !rule )
             continue;
 
-        // FIXIT-L need to properly parse rule to avoid
-        // confusing other text for soid option
-        if ( !(s = strstr(rule, "soid:")) )
+        std::string stub;
+
+        if ( !get_so_stub(rule, stub) )
             continue;
 
-        if ( !(s = strchr(s, ';')) )
-            continue;
+        cout << stub << endl;
 
-        // FIXIT-L strip newlines (optional?)
-        if ( !p->length )
-            cout << rule << endl;
-        else
-        {
-            string stub(rule, ++s-rule);
-            cout << stub << ")" << endl;
-        }
         ++c;
     }
     if ( !c )
         cerr << "no rules to dump" << endl;
+}
+
+static void strip_newline(string& s)
+{
+    if ( s.find_last_of('\n') == s.length()-1 )
+        s.pop_back();
 }
 
 static void get_var(const string& s, string& v)
@@ -289,13 +275,13 @@ static void get_var(const string& s, string& v)
     v = s.substr(pos, end-pos);
 }
 
-const unsigned hex_per_row = 16;
-
 void SoManager::rule_to_hex(const char*)
 {
     stringstream buffer;
     buffer << cin.rdbuf();
+
     string text = buffer.str();
+    strip_newline(text);
 
     unsigned idx;
     string data;
@@ -303,6 +289,8 @@ void SoManager::rule_to_hex(const char*)
 
     string var;
     get_var(text, var);
+
+    const unsigned hex_per_row = 16;
 
     cout << "static const uint8_t rule_" << var;
     cout << "[] =" << endl;
@@ -326,37 +314,25 @@ void SoManager::rule_to_hex(const char*)
     cout << data.size() << ";" << endl;
 }
 
-void SoManager::rule_to_text(const char*)
+void SoManager::rule_to_text(const char* delim)
 {
     stringstream buffer;
     buffer << cin.rdbuf();
-    string text = buffer.str();
 
-    unsigned len = text.size(), idx;
-    const uint8_t* data = (const uint8_t*)text.c_str();
+    string text = buffer.str();
+    strip_newline(text);
 
     string var;
     get_var(text, var);
 
-    cout << "static const uint8_t rule_" << var;
-    cout << "[] =" << endl;
-    cout << "{" << endl << "   ";
-    cout << hex << uppercase;
+    if ( !delim or !*delim )
+        delim = "[Snort_SO_Rule]";
 
-    for ( idx = 0; idx <= len; idx++ )
-    {
-        if ( idx && !(idx % hex_per_row) )
-            cout << endl << "   ";
-
-        unsigned byte = (idx == len) ? 0 : data[idx];
-        cout << " 0x" << setfill('0') << setw(2) << byte << ",";
-    }
-    if ( idx % hex_per_row )
-        cout << endl;
-
-    cout << dec;
-    cout << "};" << endl;
-    cout << "static const unsigned rule_" << var;
-    cout << "_len = 0;" << endl;
+    cout << "static const char* rule_" << var << " = ";
+    cout << "R\"" << delim << "(" << endl;
+    cout << text << endl;
+    cout << ')' << delim << "\";" << endl;
+    cout << endl;
+    cout << "static const unsigned rule_" << var << "_len = 0;" << endl;
 }
 

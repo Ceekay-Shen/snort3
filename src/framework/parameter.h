@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -31,6 +31,10 @@
 #include <functional>
 #include "main/snort_types.h"
 
+namespace snort
+{
+class Value;
+
 struct SO_PUBLIC Parameter
 {
     using RangeQuery = std::function<const char*()>;
@@ -41,7 +45,7 @@ struct SO_PUBLIC Parameter
         PT_LIST,       // range is Parameter*, no default
         PT_DYNAMIC,    // range is RangeQuery*
         PT_BOOL,       // if you are reading this, get more coffee
-        PT_INT,        // signed 64 bits or less determined by range
+        PT_INT,        // signed 53 bits or less determined by range
         PT_INTERVAL,   // string that defines an interval, bounds within range
         PT_REAL,       // double
         PT_PORT,       // 0 to 64K-1 unless specified otherwise
@@ -64,10 +68,13 @@ struct SO_PUBLIC Parameter
     const char* deflt;
     const char* help;
 
+    Parameter(const char* n, Type t, const void* r, const char* d, const char* h) :
+        name(n), type(t), range(r), deflt(d), help(h) { }
+
     const char* get_type() const;
     const char* get_range() const;
 
-    bool validate(class Value&) const;
+    bool validate(Value&) const;
 
     bool is_positional() const
     { return ( name && *name == '~' ); }
@@ -91,6 +98,6 @@ struct SO_PUBLIC Parameter
     // 0-based; -1 if not found; list is | delimited
     static int index(const char* list, const char* key);
 };
-
+}
 #endif
 

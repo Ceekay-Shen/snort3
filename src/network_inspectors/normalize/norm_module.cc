@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2010-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -26,6 +26,7 @@
 #include "main/policy.h"
 #include "stream/tcp/tcp_normalizer.h"
 
+using namespace snort;
 using namespace std;
 
 static bool allow_names(NormalizerConfig* config, const char* s)
@@ -115,7 +116,7 @@ static const Parameter norm_tcp_params[] =
     { "urp", Parameter::PT_BOOL, nullptr, "true",
       "adjust urgent pointer if beyond segment length" },
 
-    { "ips", Parameter::PT_BOOL, nullptr, "false",
+    { "ips", Parameter::PT_BOOL, nullptr, "true",
       "ensure consistency in retransmitted data" },
 
     { "ecn", Parameter::PT_SELECT, "off | packet | stream", "off",
@@ -371,9 +372,7 @@ bool NormalizeModule::end(const char* fqn, int, SnortConfig* sc)
         {
             if ( Norm_IsEnabled(&config, NORM_IP4_BASE) )
                 Norm_Enable(&config, NORM_IP4_TTL);
-        }
-        if ( (policy->new_ttl > 1) && (policy->new_ttl >= policy->min_ttl) )
-        {
+
             if ( Norm_IsEnabled(&config, NORM_IP6_BASE) )
                 Norm_Enable(&config, NORM_IP6_TTL);
         }
@@ -387,16 +386,16 @@ void NormalizeModule::add_test_peg(const PegInfo& norm) const
 
     std::string* test_name = new std::string("test_");
     test_name->append(norm.name);
-    test_text.push_back(test_name);
+    test_text.emplace_back(test_name);
     test.name = test_text.back()->c_str();
 
     std::string* test_info = new std::string("test ");
     test_info->append(norm.help);
-    test_text.push_back(test_info);
+    test_text.emplace_back(test_info);
     test.help = test_text.back()->c_str();
 
     test.type = norm.type;
-    test_pegs.push_back(test);
+    test_pegs.emplace_back(test);
 }
 
 const PegInfo* NormalizeModule::get_pegs() const
@@ -410,7 +409,7 @@ const PegInfo* NormalizeModule::get_pegs() const
     while ( p->name )
     {
         add_test_peg(*p);
-        test_pegs.push_back(*p);
+        test_pegs.emplace_back(*p);
         p++;
     }
 
@@ -420,11 +419,11 @@ const PegInfo* NormalizeModule::get_pegs() const
     while ( p->name )
     {
         add_test_peg(*p);
-        test_pegs.push_back(*p);
+        test_pegs.emplace_back(*p);
         p++;
     }
 
-    test_pegs.push_back(*p);
+    test_pegs.emplace_back(*p);
     return &test_pegs[0];
 }
 

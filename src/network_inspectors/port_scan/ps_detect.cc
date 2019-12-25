@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2004-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -44,6 +44,8 @@
 #include "utils/stats.h"
 
 #include "ps_inspect.h"
+
+using namespace snort;
 
 PADDING_GUARD_BEGIN
 struct PS_HASH_KEY
@@ -312,9 +314,9 @@ bool PortScan::ps_tracker_lookup(
         key.scanner.clear();
 
         if (ps_pkt->reverse_pkt)
-            key.scanned.set(*p->ptrs.ip_api.get_src());
+            key.scanned = *p->ptrs.ip_api.get_src();
         else
-            key.scanned.set(*p->ptrs.ip_api.get_dst());
+            key.scanned = *p->ptrs.ip_api.get_dst();
 
         *scanned = ps_tracker_get(&key);
     }
@@ -325,9 +327,9 @@ bool PortScan::ps_tracker_lookup(
         key.scanned.clear();
 
         if (ps_pkt->reverse_pkt)
-            key.scanner.set(*p->ptrs.ip_api.get_dst());
+            key.scanner = *p->ptrs.ip_api.get_dst();
         else
-            key.scanner.set(*p->ptrs.ip_api.get_src());
+            key.scanner = *p->ptrs.ip_api.get_src();
 
         *scanner = ps_tracker_get(&key);
     }
@@ -416,11 +418,11 @@ void PortScan::ps_proto_update_window(unsigned interval, PS_PROTO* proto, time_t
 **  @param PS_PROTO pointer to structure to update
 **  @param int      number to increment portscan counter
 **  @param u_long   IP address of other host
-**  @param u_short  port/ip_proto to track
+**  @param unsigned short  port/ip_proto to track
 **  @param time_t   time the packet was received. update windows.
 */
 int PortScan::ps_proto_update(PS_PROTO* proto, int ps_cnt, int pri_cnt,
-    unsigned window, const SfIp* ip, u_short port, time_t pkt_time)
+    unsigned window, const SfIp* ip, unsigned short port, time_t pkt_time)
 {
     if (!proto)
         return 0;
@@ -468,7 +470,7 @@ int PortScan::ps_proto_update(PS_PROTO* proto, int ps_cnt, int pri_cnt,
     if (!proto->u_ips.equals(*ip, false))
     {
         proto->u_ip_count++;
-        proto->u_ips.set(*ip);
+        proto->u_ips = *ip;
     }
 
     /* we need to do the IP comparisons in host order */
@@ -476,21 +478,21 @@ int PortScan::ps_proto_update(PS_PROTO* proto, int ps_cnt, int pri_cnt,
     if (proto->low_ip.is_set())
     {
         if (proto->low_ip.greater_than(*ip))
-            proto->low_ip.set(*ip);
+            proto->low_ip = *ip;
     }
     else
     {
-        proto->low_ip.set(*ip);
+        proto->low_ip = *ip;
     }
 
     if (proto->high_ip.is_set())
     {
         if (proto->high_ip.less_than(*ip))
-            proto->high_ip.set(*ip);
+            proto->high_ip = *ip;
     }
     else
     {
-        proto->high_ip.set(*ip);
+        proto->high_ip = *ip;
     }
 
     if (proto->u_ports != port)
@@ -536,11 +538,6 @@ static int ps_update_open_ports(PS_PROTO* proto, unsigned short port)
     {
         proto->open_ports[iCtr] = port;
         proto->open_ports_cnt++;
-
-        if (proto->alerts == PS_ALERT_GENERATED)
-        {
-            proto->alerts = PS_ALERT_OPEN_PORT;
-        }
     }
 
     return 0;
@@ -560,7 +557,6 @@ void PortScan::ps_tracker_update_tcp(PS_PKT* ps_pkt, PS_TRACKER* scanner,
     PS_TRACKER* scanned)
 {
     Packet* p = (Packet*)ps_pkt->pkt;
-    uint32_t session_flags = 0x0;
     unsigned win = config->tcp_window;
 
     SfIp cleared;
@@ -587,7 +583,7 @@ void PortScan::ps_tracker_update_tcp(PS_PKT* ps_pkt, PS_TRACKER* scanner,
     // this should be completely redone and port_scan should require stream_tcp
     if ( p->flow and (p->flow->ssn_state.session_flags & SSNFLAG_COUNTED_INITIALIZE) )
     {
-        session_flags = p->flow->get_session_flags();
+        uint32_t session_flags = p->flow->get_session_flags();
 
         if ((session_flags & SSNFLAG_SEEN_CLIENT) &&
             !(session_flags & SSNFLAG_SEEN_SERVER) &&
@@ -647,22 +643,14 @@ void PortScan::ps_tracker_update_tcp(PS_PKT* ps_pkt, PS_TRACKER* scanner,
             !(p->packet_flags & PKT_STREAM_EST))
         {
             if (scanned)
-            {
                 ps_update_open_ports(&scanned->proto, p->ptrs.sp);
-            }
-
-            if (scanner)
-            {
-                if (scanner->proto.alerts == PS_ALERT_GENERATED)
-                    scanner->proto.alerts = PS_ALERT_OPEN_PORT;
-            }
         }
     }
     /*
     ** Stream didn't create a session on the SYN packet,
     ** so check specifically for SYN here.
     */
-    else if (p->ptrs.tcph && (p->ptrs.tcph->th_flags == TH_SYN))
+    else if ( p->ptrs.tcph and p->ptrs.tcph->is_syn_only() )
     {
         /* No session established, packet only has SYN.  SYN only
         ** packet always from client, so use dp.
@@ -684,7 +672,7 @@ void PortScan::ps_tracker_update_tcp(PS_PKT* ps_pkt, PS_TRACKER* scanner,
     ** so check specifically for SYN & ACK here.  Clear based
     ** on the 'completion' of three-way handshake.
     */
-    else if (p->ptrs.tcph && (p->ptrs.tcph->th_flags == (TH_SYN|TH_ACK)))
+    else if ( p->ptrs.tcph and p->ptrs.tcph->is_syn_ack() )
     {
         if (scanned)
         {
@@ -745,12 +733,12 @@ void PortScan::ps_tracker_update_ip(PS_PKT* ps_pkt, PS_TRACKER* scanner,
 
     if (scanned)
     {
-        ps_proto_update(&scanned->proto, 1, 0, win, &cleared, (u_short)p->get_ip_proto_next(), 0);
+        ps_proto_update(&scanned->proto, 1, 0, win, &cleared, (unsigned short)p->get_ip_proto_next(), 0);
     }
 
     if (scanner)
     {
-        ps_proto_update(&scanner->proto, 1, 0, win, &cleared, (u_short)p->get_ip_proto_next(), 0);
+        ps_proto_update(&scanner->proto, 1, 0, win, &cleared, (unsigned short)p->get_ip_proto_next(), 0);
     }
 }
 
@@ -815,9 +803,6 @@ void PortScan::ps_tracker_update_icmp(
     Packet* p = (Packet*)ps_pkt->pkt;
     unsigned win = config->icmp_window;
 
-    SfIp cleared;
-    cleared.clear();
-
     if (p->ptrs.icmph)
     {
         switch (p->ptrs.icmph->type)
@@ -826,13 +811,22 @@ void PortScan::ps_tracker_update_icmp(
         case ICMP_TIMESTAMP:
         case ICMP_ADDRESS:
         case ICMP_INFO_REQUEST:
-            ps_proto_update(&scanner->proto, 1, 0, win,
-                p->ptrs.ip_api.get_dst(), 0, packet_time());
+            if (scanner)
+            {
+                ps_proto_update(&scanner->proto, 1, 0, win,
+                    p->ptrs.ip_api.get_dst(), 0, packet_time());
+            }
             break;
 
         case ICMP_DEST_UNREACH:
-            ps_proto_update(&scanner->proto, 0, 1, win, &cleared, 0, 0);
-            scanner->priority_node = 1;
+            if (scanner)
+            {
+                SfIp cleared;
+                cleared.clear();
+
+                ps_proto_update(&scanner->proto, 0, 1, win, &cleared, 0, 0);
+                scanner->priority_node = 1;
+            }
             break;
 
         default:

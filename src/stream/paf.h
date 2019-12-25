@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2011-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -25,9 +25,16 @@
 #ifndef PAF_H
 #define PAF_H
 
+#include "main/thread.h"
+#include "profiler/profiler_defs.h"
 #include "stream/stream_splitter.h"
 
-struct SnortConfig;
+namespace snort
+{
+struct Packet;
+}
+
+extern THREAD_LOCAL snort::ProfileStats pafPerfStats;
 
 void* paf_new(unsigned max);     // create new paf config (per policy)
 void paf_delete(void*);  // free config
@@ -40,7 +47,7 @@ struct PAF_State     // per session direction
     uint32_t fpt;    // current flush point
     uint32_t tot;    // total bytes flushed
 
-    StreamSplitter::Status paf;  // current scan state
+    snort::StreamSplitter::Status paf;  // current scan state
 };
 
 void paf_setup(PAF_State*);  // called at session start
@@ -54,12 +61,12 @@ inline uint32_t paf_position (PAF_State* ps)
 
 inline uint32_t paf_initialized (PAF_State* ps)
 {
-    return ( ps->paf != StreamSplitter::START );
+    return ( ps->paf != snort::StreamSplitter::START );
 }
 
 inline uint32_t paf_active (PAF_State* ps)
 {
-    return ( ps->paf != StreamSplitter::ABORT );
+    return ( ps->paf != snort::StreamSplitter::ABORT );
 }
 
 inline void paf_jump(PAF_State* ps, uint32_t n)
@@ -69,10 +76,8 @@ inline void paf_jump(PAF_State* ps, uint32_t n)
 }
 
 // called on each in order segment
-int32_t paf_check(
-    StreamSplitter* paf_config, PAF_State*, Flow* ssn,
-    const uint8_t* data, uint32_t len, uint32_t total,
-    uint32_t seq, uint32_t* flags);
+int32_t paf_check(snort::StreamSplitter* paf_config, PAF_State*, snort::Packet* p,
+    const uint8_t* data, uint32_t len, uint32_t total, uint32_t seq, uint32_t* flags);
 
 #endif
 

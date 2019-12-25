@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -30,6 +30,7 @@
 #include "parser/parse_ip.h"
 #include "protocols/packet.h"
 
+using namespace snort;
 using namespace std;
 
 #define FILE_KEY ".file"
@@ -53,13 +54,12 @@ static const PegInfo bind_pegs[] =
 // binder module
 //-------------------------------------------------------------------------
 
-#define INT32_MAX_STR "2147483647"
 static const Parameter binder_when_params[] =
 {
     // FIXIT-L when.policy_id should be an arbitrary string auto converted
     // into index for binder matching and lookups
 
-    { "ips_policy_id", Parameter::PT_INT, "0:", "0",
+    { "ips_policy_id", Parameter::PT_INT, "0:max32", "0",
       "unique ID for selection of this config by external logic" },
 
     { "ifaces", Parameter::PT_BIT_LIST, "255", nullptr,
@@ -89,10 +89,13 @@ static const Parameter binder_when_params[] =
     { "dst_ports", Parameter::PT_BIT_LIST, "65535", nullptr,
       "list of destination ports" },
 
-    { "src_zone", Parameter::PT_INT, "0:" INT32_MAX_STR, nullptr,
+    { "zones", Parameter::PT_BIT_LIST, "63", nullptr,
+      "zones" },
+
+    { "src_zone", Parameter::PT_BIT_LIST, "63", nullptr,
       "source zone" },
 
-    { "dst_zone", Parameter::PT_INT, "0:" INT32_MAX_STR, nullptr,
+    { "dst_zone", Parameter::PT_BIT_LIST, "63", nullptr,
       "destination zone" },
 
     { "role", Parameter::PT_ENUM, "client | server | any", "any",
@@ -168,7 +171,7 @@ static void set_ip_var(sfip_var_t*& var, const char* val)
 {
     if ( var )
         sfvar_free(var);
-    var = sfip_var_from_string(val);
+    var = sfip_var_from_string(val, "binder");
 }
 
 bool BinderModule::set(const char* fqn, Value& v, SnortConfig*)
@@ -203,16 +206,16 @@ bool BinderModule::set(const char* fqn, Value& v, SnortConfig*)
         work->when.split_nets = true;
     }
     else if ( v.is("ips_policy_id") )
-        work->when.ips_id = v.get_long();
+        work->when.ips_id_user = v.get_uint32();
 
     else if ( v.is("proto") )
     {
-        const PktType mask[] =
+        const unsigned mask[] =
         {
-            PktType::ANY, PktType::IP, PktType::ICMP, PktType::TCP, PktType::UDP,
-            PktType::PDU, PktType::FILE
+            PROTO_BIT__ANY_TYPE, PROTO_BIT__IP, PROTO_BIT__ICMP,
+            PROTO_BIT__TCP, PROTO_BIT__UDP, PROTO_BIT__PDU, PROTO_BIT__FILE
         };
-        work->when.protos = (unsigned)mask[v.get_long()];
+        work->when.protos = mask[v.get_uint8()];
     }
     else if ( v.is("ports") )
     {
@@ -230,21 +233,31 @@ bool BinderModule::set(const char* fqn, Value& v, SnortConfig*)
         work->when.split_ports = true;
     }
 
+    else if ( v.is("zones") )
+    {
+        v.get_bits(work->when.src_zones);
+        unsplit_zones = true;
+    }
     else if ( v.is("src_zone") )
-        work->when.src_zone = v.get_long();
-
+    {
+        v.get_bits(work->when.src_zones);
+        work->when.split_zones = true;
+    }
     else if ( v.is("dst_zone") )
-        work->when.dst_zone = v.get_long();
+    {
+        v.get_bits(work->when.dst_zones);
+        work->when.split_zones = true;
+    }
 
     else if ( v.is("role") )
-        work->when.role = (BindWhen::Role)v.get_long();
+        work->when.role = (BindWhen::Role)v.get_uint8();
 
     else if ( v.is("vlans") )
         v.get_bits(work->when.vlans);
 
     // use
     else if ( v.is("action") )
-        work->use.action = (BindUse::Action)(v.get_long());
+        work->use.action = (BindUse::Action)(v.get_uint8());
 
     else if ( v.is("file") )
         add_file(v.get_string(), FILE_KEY);
@@ -280,6 +293,8 @@ bool BinderModule::begin(const char* fqn, int idx, SnortConfig*)
     {
         work = new Binding;
         unsplit_nets = false;
+        unsplit_ports = false;
+        unsplit_zones = false;
         use_name_count = 0;
         use_type_count = 0;
     }
@@ -296,6 +311,9 @@ static void split_nets_warning()
 static void split_ports_warning()
 { ParseWarning(WARN_CONF, "src_ports and dst_ports override ports"); }
 
+static void split_zones_warning()
+{ ParseWarning(WARN_CONF, "src_zones and dst_zones override zones"); }
+
 bool BinderModule::end(const char* fqn, int idx, SnortConfig* sc)
 {
     if ( idx && !strcmp(fqn, BIND_NAME) )
@@ -311,6 +329,9 @@ bool BinderModule::end(const char* fqn, int idx, SnortConfig* sc)
 
         if ( unsplit_ports && work->when.split_ports )
             split_ports_warning();
+
+        if ( unsplit_zones && work->when.split_zones )
+            split_zones_warning();
 
         if ( use_type_count > 1 || use_name_count > 1 )
             file_name_type_error();
@@ -342,7 +363,7 @@ bool BinderModule::end(const char* fqn, int idx, SnortConfig* sc)
         if ( work->use.name.empty() )
             work->use.name = work->use.type;
 
-        bindings.push_back(work);
+        bindings.emplace_back(work);
         work = nullptr;
     }
     return true;
@@ -354,7 +375,7 @@ void BinderModule::add(const char* svc, const char* type)
     b->when.svc = svc;
     b->use.type = type;
     b->use.name = type;
-    bindings.push_back(b);
+    bindings.emplace_back(b);
 }
 
 void BinderModule::add(unsigned proto, const char* type)
@@ -363,7 +384,7 @@ void BinderModule::add(unsigned proto, const char* type)
     b->when.protos = proto;
     b->use.type = type;
     b->use.name = type;
-    bindings.push_back(b);
+    bindings.emplace_back(b);
 }
 
 vector<Binding*>& BinderModule::get_data()

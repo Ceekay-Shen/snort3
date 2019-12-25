@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2003-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -30,10 +30,13 @@
 
 struct HashFnc;
 
+namespace snort
+{
 #define XHASH_NOMEM    (-2)
 #define XHASH_ERR      (-1)
 #define XHASH_OK        0
 #define XHASH_INTABLE   1
+#define XHASH_PENDING   2
 
 struct XHashNode
 {
@@ -97,12 +100,14 @@ SO_PUBLIC XHash* xhash_new(int nrows, int keysize, int datasize, unsigned long m
     int recycle_flag);
 
 SO_PUBLIC void xhash_set_max_nodes(XHash* h, int max_nodes);
-
+SO_PUBLIC int xhash_change_memcap(XHash *t, unsigned long new_memcap, unsigned *max_work);
+SO_PUBLIC int xhash_free_overallocations(XHash* t, unsigned work_limit, unsigned* num_freed);
 SO_PUBLIC void xhash_delete(XHash* h);
 SO_PUBLIC int xhash_make_empty(XHash*);
 
 SO_PUBLIC int xhash_add(XHash* h, void* key, void* data);
 SO_PUBLIC XHashNode* xhash_get_node(XHash* t, const void* key);
+SO_PUBLIC XHashNode* xhash_get_node_with_prune(XHash* t, const void* key, bool* prune_performed);
 SO_PUBLIC int xhash_remove(XHash* h, void* key);
 
 //  Get the # of Nodes in HASH the table
@@ -133,6 +138,11 @@ inline unsigned xhash_overhead_bytes(XHash* t)
 inline unsigned xhash_overhead_blocks(XHash* t)
 { return t->overhead_blocks; }
 
+// Get the amount of space required to allocate a new node in the xhash t.
+inline size_t xhash_required_mem(XHash *t)
+{ return sizeof(XHashNode) + t->pad + t->keysize + t->datasize; }
+
+SO_PUBLIC int xhash_free_anr_lru(XHash* t);
 SO_PUBLIC void* xhash_mru(XHash* t);
 SO_PUBLIC void* xhash_lru(XHash* t);
 SO_PUBLIC void* xhash_find(XHash* h, void* key);
@@ -148,6 +158,7 @@ SO_PUBLIC int xhash_free_node(XHash* t, XHashNode* node);
 
 typedef uint32_t (* hash_func)(HashFnc*, const unsigned char* d, int n);
 
+
 // return 0 for ==, 1 for != ; FIXIT-L convert to bool
 typedef int (* keycmp_func)(const void* s1, const void* s2, size_t n);
 
@@ -155,6 +166,6 @@ SO_PUBLIC void xhash_set_keyops(XHash* h, hash_func, keycmp_func);
 
 SO_PUBLIC XHashNode* xhash_gfindfirst(XHash* t);
 SO_PUBLIC XHashNode* xhash_gfindnext(XHash* t);
-
+} // namespace snort
 #endif
 

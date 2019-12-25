@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -27,17 +27,17 @@
 #include <cassert>
 
 #include "detection/detection_util.h"
-#include "main/snort_types.h"
 #include "utils/util.h"
 
 #include "file_decomp_pdf.h"
 #include "file_decomp_swf.h"
+#include "file_decomp_zip.h"
 
 #ifdef UNIT_TEST
-#include "catch/catch.hpp"
+#include "catch/snort_catch.h"
 #endif
 
-SNORT_FORCED_INCLUSION_DEFINITION(file_decomp);
+using namespace snort;
 
 static const char PDF_Sig[5] = { '%', 'P', 'D', 'F', '-' };
 static const char SWF_ZLIB_Sig[3] = { 'C', 'W', 'S' };
@@ -45,6 +45,7 @@ static const char SWF_ZLIB_Sig[3] = { 'C', 'W', 'S' };
 static const char SWF_LZMA_Sig[3] = { 'Z', 'W', 'S' };
 #endif
 static const char SWF_Uncomp_Sig[3] = { 'F', 'W', 'S' };
+static const char ZIP_Sig[4] = { 'P', 'K', 0x03, 0x04 };
 
 /* Please assure that the following value correlates with the set of sig's */
 #define MAX_SIG_LENGTH (5)
@@ -65,6 +66,9 @@ static struct sig_map_s
 #ifdef HAVE_LZMA
     { SWF_LZMA_Sig, sizeof(SWF_LZMA_Sig), false, FILE_TYPE_SWF, FILE_COMPRESSION_TYPE_LZMA },
 #endif
+
+    { ZIP_Sig, sizeof(ZIP_Sig), false, FILE_TYPE_ZIP, FILE_COMPRESSION_TYPE_NONE },
+
     { nullptr, 0, false, FILE_TYPE_NONE, FILE_COMPRESSION_TYPE_NONE }
 };
 
@@ -196,6 +200,9 @@ static fd_status_t Initialize_Decompression(fd_session_t* SessionPtr)
         Ret_Code = File_Decomp_Init_PDF(SessionPtr);
         break;
     }
+    case ( FILE_TYPE_ZIP ):
+        Ret_Code = File_Decomp_Init_ZIP(SessionPtr);
+        break;
     default:
         return( File_Decomp_Error );
     }
@@ -222,6 +229,11 @@ static fd_status_t Process_Decompression(fd_session_t* SessionPtr)
         Ret_Code = File_Decomp_PDF(SessionPtr);
         break;
     }
+    case ( FILE_TYPE_ZIP ):
+    {
+        Ret_Code = File_Decomp_ZIP(SessionPtr);
+        break;
+    }
     default:
         return( File_Decomp_Error );
     }
@@ -232,6 +244,8 @@ static fd_status_t Process_Decompression(fd_session_t* SessionPtr)
     return( Ret_Code );
 }
 
+namespace snort
+{
 /* The caller provides Compr_Depth, Decompr_Depth and Modes in the session object.
    Based on the requested Modes, gear=up to initialize the potential decompressors. */
 fd_status_t File_Decomp_Init(fd_session_t* SessionPtr)
@@ -242,7 +256,6 @@ fd_status_t File_Decomp_Init(fd_session_t* SessionPtr)
         return( File_Decomp_Error );
 
     SessionPtr->State = STATE_READY;
-    SessionPtr->File_Type = FILE_TYPE_NONE;
     SessionPtr->Decomp_Type = FILE_COMPRESSION_TYPE_NONE;
 
     for ( Sig=0; Signature_Map[Sig].Sig != nullptr; Sig++ )
@@ -262,6 +275,10 @@ fd_status_t File_Decomp_Init(fd_session_t* SessionPtr)
             ((SessionPtr->Modes & FILE_SWF_LZMA_BIT) != 0) )
             Signature_Map[Sig].Enabled = true;
 #endif
+
+        if ( (Signature_Map[Sig].File_Type == FILE_TYPE_ZIP ) &&
+            ((SessionPtr->Modes & FILE_ZIP_DEFL_BIT) != 0) )
+            Signature_Map[Sig].Enabled = true;
     }
 
     return( File_Decomp_OK );
@@ -280,6 +297,7 @@ fd_session_t* File_Decomp_New()
     New_Session->Next_In = nullptr;
     New_Session->Avail_Out = 0;
     New_Session->Next_Out = nullptr;
+    New_Session->File_Type = FILE_TYPE_NONE;
 
     return New_Session;
 }
@@ -336,6 +354,8 @@ fd_status_t File_Decomp_End(fd_session_t* SessionPtr)
     {
         return( File_Decomp_End_PDF(SessionPtr) );
     }
+    case ( FILE_TYPE_ZIP ):
+        return( File_Decomp_End_ZIP(SessionPtr) );
     }
 
     return( File_Decomp_Error );
@@ -381,6 +401,10 @@ void File_Decomp_Free(fd_session_t* SessionPtr)
         assert(SessionPtr->PDF);
         snort_free(SessionPtr->PDF);
         break;
+    case FILE_TYPE_ZIP:
+        assert(SessionPtr->ZIP);
+        snort_free(SessionPtr->ZIP);
+        break;
     }
 
     delete SessionPtr;
@@ -392,6 +416,8 @@ void File_Decomp_Alert(fd_session_t* SessionPtr, int Event)
         (SessionPtr->Alert_Context) )
         (SessionPtr->Alert_Callback)(SessionPtr->Alert_Context, Event);
 }
+
+} // namespace snort
 
 //--------------------------------------------------------------------------
 // unit tests 
@@ -432,6 +458,7 @@ TEST_CASE("File_Decomp_New", "[file_decomp]")
     REQUIRE(p_s->Avail_Out == 0);
     REQUIRE(p_s->Next_In == nullptr);
     REQUIRE(p_s->Next_Out == nullptr);
+    REQUIRE(p_s->File_Type == FILE_TYPE_NONE);
     File_Decomp_Free(p_s);
 }
 

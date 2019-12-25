@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -22,11 +22,14 @@
 #include "config.h"
 #endif
 
+#include "framework/data_bus.h"
 #include "framework/logger.h"
 #include "framework/module.h"
 #include "log/text_log.h"
 #include "protocols/packet.h"
+#include "pub_sub/daq_message_event.h"
 
+using namespace snort;
 using namespace std;
 
 #define S_NAME "log_hext"
@@ -37,6 +40,72 @@ static const char* s_help = "output payload suitable for daq hext";
 static THREAD_LOCAL TextLog* hext_log = nullptr;
 static THREAD_LOCAL unsigned s_pkt_num = 0;
 
+
+class DaqMessageEventHandler : public DataHandler
+{
+public:
+    DaqMessageEventHandler() : DataHandler(S_NAME) { }
+    void handle(DataEvent&, Flow*) override;
+};
+
+void DaqMessageEventHandler::handle(DataEvent& event, Flow*)
+{
+    if (!hext_log)
+        return;
+
+    DaqMessageEvent* dme = (DaqMessageEvent*) &event;
+
+    const char* cmd;
+    switch (dme->get_type()) {
+        case DAQ_MSG_TYPE_SOF:
+            cmd = "sof";
+            break;
+        case DAQ_MSG_TYPE_EOF:
+            cmd = "eof";
+            break;
+        default:
+            return;
+    }
+
+    const Flow_Stats_t* fs = (const Flow_Stats_t*) dme->get_header();
+
+    SfIp src, dst;
+    char shost[INET6_ADDRSTRLEN];
+    char dhost[INET6_ADDRSTRLEN];
+
+    src.set(fs->initiatorIp);
+    dst.set(fs->responderIp);
+
+    src.ntop(shost, sizeof(shost));
+    dst.ntop(dhost, sizeof(dhost));
+
+    int vlan_tag = fs->vlan_tag == 0xfff ?  0 : fs->vlan_tag;
+
+    TextLog_Print(hext_log,
+        "\n$%s %d %d %d %d %s %d %s %d %d %d %d %d %d %d %d %d %d %d %d %d %d\n",
+        cmd,
+        fs->ingressZone,
+        fs->egressZone,
+        fs->ingressIntf,
+        fs->egressIntf,
+        shost, ntohs(fs->initiatorPort),
+        dhost, ntohs(fs->responderPort),
+        fs->opaque,
+        fs->initiatorPkts,
+        fs->responderPkts,
+        fs->initiatorPktsDropped,
+        fs->responderPktsDropped,
+        fs->initiatorBytesDropped,
+        fs->responderBytesDropped,
+        fs->isQoSAppliedOnSrcIntf,
+        fs->sof_timestamp.tv_sec,
+        fs->eof_timestamp.tv_sec,
+        vlan_tag,
+        fs->address_space_id,
+        fs->protocol);
+}
+
+
 //-------------------------------------------------------------------------
 // impl stuff
 //-------------------------------------------------------------------------
@@ -44,7 +113,7 @@ static THREAD_LOCAL unsigned s_pkt_num = 0;
 static void log_raw(const Packet* p)
 {
     TextLog_Print(hext_log, "\n# %u [%u]\n",
-        s_pkt_num++, p->pkth->caplen);
+        s_pkt_num++, p->pktlen);
 }
 
 static void log_header(const Packet* p)
@@ -106,10 +175,10 @@ static const Parameter s_params[] =
     { "raw", Parameter::PT_BOOL, nullptr, "false",
       "output all full packets if true, else just TCP payload" },
 
-    { "limit", Parameter::PT_INT, "0:", "0",
+    { "limit", Parameter::PT_INT, "0:maxSZ", "0",
       "set maximum size in MB before rollover (0 is unlimited)" },
 
-    { "width", Parameter::PT_INT, "0:", "20",
+    { "width", Parameter::PT_INT, "0:max32", "20",
       "set line width (0 is unlimited)" },
 
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
@@ -129,7 +198,7 @@ public:
 public:
     bool file;
     bool raw;
-    unsigned long limit;
+    size_t limit;
     unsigned width;
 };
 
@@ -142,10 +211,10 @@ bool HextModule::set(const char*, Value& v, SnortConfig*)
         raw = v.get_bool();
 
     else if ( v.is("limit") )
-        limit = v.get_long() * 1024 * 1024;
+        limit = v.get_size() * 1024 * 1024;
 
     else if ( v.is("width") )
-        width = v.get_long();
+        width = v.get_uint32();
 
     else
         return false;
@@ -189,6 +258,8 @@ HextLogger::HextLogger(HextModule* m)
     limit = m->limit;
     width = m->width;
     raw = m->raw;
+    DataBus::subscribe(DAQ_SOF_MSG_EVENT, new DaqMessageEventHandler());
+    DataBus::subscribe(DAQ_EOF_MSG_EVENT, new DaqMessageEventHandler());
 }
 
 void HextLogger::open()
@@ -208,7 +279,7 @@ void HextLogger::log(Packet* p, const char*, Event*)
     if ( raw )
     {
         log_raw(p);
-        log_data(p->pkt, p->pkth->caplen, width);
+        log_data(p->pkt, p->pktlen, width);
     }
     else if ( p->has_tcp_data() )
     {

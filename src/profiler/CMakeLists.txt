@@ -26,11 +26,23 @@ set ( PROFILER_SOURCES
     time_profiler.h
     )
 
-add_library ( profiler STATIC
+add_library ( profiler OBJECT
     ${PROFILER_SOURCES}
     ${PROFILER_INCLUDES}
 )
 
 install (FILES ${PROFILER_INCLUDES}
     DESTINATION "${INCLUDE_INSTALL_PATH}/profiler"
+)
+
+add_catch_test( memory_context_test
+    NO_TEST_SOURCE
+    SOURCES
+        memory_context.cc
+)
+
+add_catch_test( profiler_stats_table_test
+    NO_TEST_SOURCE
+    SOURCES
+        profiler_stats_table.cc
 )

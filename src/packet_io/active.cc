@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -29,54 +29,56 @@
 #include "main/snort_config.h"
 #include "managers/action_manager.h"
 #include "protocols/tcp.h"
+#include "pub_sub/active_events.h"
 #include "stream/stream.h"
 #include "utils/dnet_header.h"
 
 #include "sfdaq.h"
+#include "sfdaq_instance.h"
+#include "sfdaq_module.h"
+
+using namespace snort;
 
 #define MAX_ATTEMPTS 20
 
-// these can't be pkt flags because we do the handling
-// of these flags following all processing and the drop
-// or response may have been produced by a pseudopacket.
-THREAD_LOCAL Active::ActiveStatus Active::active_status = Active::AST_ALLOW;
-THREAD_LOCAL Active::ActiveAction Active::active_action = Active::ACT_PASS;
-THREAD_LOCAL Active::ActiveAction Active::delayed_active_action = Active::ACT_PASS;
-
-THREAD_LOCAL int Active::active_tunnel_bypass = 0;
-THREAD_LOCAL bool Active::active_suspend = false;
+const char* Active::act_str[Active::ACT_MAX][Active::AST_MAX] =
+{
+    { "allow", "error", "error", "error" },
+    { "hold", "error", "error", "error" },
+    { "retry", "error", "error", "error" },
+    { "drop", "cant_drop", "would_drop", "force_drop" },
+    { "block", "cant_block", "would_block", "force_block" },
+    { "reset", "cant_reset", "would_reset", "force_reset" },
+};
+bool Active::enabled = false;
 
 THREAD_LOCAL uint8_t Active::s_attempts = 0;
-THREAD_LOCAL uint64_t Active::s_injects = 0;
-
-bool Active::s_enabled = false;
+THREAD_LOCAL bool Active::s_suspend = false;
+THREAD_LOCAL Active::Counts snort::active_counts;
 
 typedef int (* send_t) (
-    const DAQ_PktHdr_t* h, int rev, const uint8_t* buf, uint32_t len);
+    DAQ_Msg_h msg, int rev, const uint8_t* buf, uint32_t len);
 
 static THREAD_LOCAL eth_t* s_link = nullptr;
 static THREAD_LOCAL ip_t* s_ipnet = nullptr;
 static THREAD_LOCAL send_t s_send = SFDAQ::inject;
 
-Active::ActiveStatus Active::get_status()
-{ return active_status; }
-
 //--------------------------------------------------------------------
 // helpers
 
 int Active::send_eth(
-    const DAQ_PktHdr_t*, int, const uint8_t* buf, uint32_t len)
+    DAQ_Msg_h, int, const uint8_t* buf, uint32_t len)
 {
     ssize_t sent = eth_send(s_link, buf, len);
-    s_injects++;
+    active_counts.injects++;
     return ( (uint32_t)sent != len );
 }
 
 int Active::send_ip(
-    const DAQ_PktHdr_t*, int, const uint8_t* buf, uint32_t len)
+    DAQ_Msg_h, int, const uint8_t* buf, uint32_t len)
 {
     ssize_t sent = ip_send(s_ipnet, buf, len);
-    s_injects++;
+    active_counts.injects++;
     return ( (uint32_t)sent != len );
 }
 
@@ -140,33 +142,39 @@ void Active::kill_session(Packet* p, EncodeFlags flags)
         return;
 
     case PktType::TCP:
-        Active::send_reset(p, 0);
+        send_reset(p, 0);
         if ( flags & ENC_FLAG_FWD )
-            Active::send_reset(p, ENC_FLAG_FWD);
+            send_reset(p, ENC_FLAG_FWD);
         break;
 
     default:
-        if ( Active::packet_force_dropped() )
-            Active::send_unreach(p, UnreachResponse::FWD);
+        if ( packet_force_dropped() )
+            send_unreach(p, UnreachResponse::FWD);
         else
-            Active::send_unreach(p, UnreachResponse::PORT);
+            send_unreach(p, UnreachResponse::PORT);
         break;
     }
 }
 
 //--------------------------------------------------------------------
 
-bool Active::init(SnortConfig* sc)
+void Active::init(SnortConfig* sc)
+{
+    if (sc->max_responses > 0)
+        Active::set_enabled();
+}
+
+bool Active::thread_init(SnortConfig* sc)
 {
     s_attempts = sc->respond_attempts;
 
     if ( s_attempts > MAX_ATTEMPTS )
         s_attempts = MAX_ATTEMPTS;
 
-    if ( s_enabled && !s_attempts )
+    if ( enabled && !s_attempts )
         s_attempts = 1;
 
-    if ( s_enabled && (!SFDAQ::can_inject() || !sc->respond_device.empty()) )
+    if ( enabled && (!SFDAQ::can_inject() || !sc->respond_device.empty()) )
     {
         if ( SnortConfig::read_mode() || !open(sc->respond_device.c_str()) )
         {
@@ -177,20 +185,13 @@ bool Active::init(SnortConfig* sc)
 #endif
         }
     }
+
     return true;
 }
 
-void Active::term()
+void Active::thread_term()
 {
     Active::close();
-}
-
-bool Active::is_enabled()
-{ return s_enabled and s_attempts; }
-
-void Active::set_enabled(bool on_off)
-{
-    s_enabled = on_off;
 }
 
 //--------------------------------------------------------------------
@@ -212,7 +213,7 @@ void Active::send_reset(Packet* p, EncodeFlags ef)
         if ( !rej )
             return;
 
-        s_send(p->pkth, !(ef & ENC_FLAG_FWD), rej, len);
+        s_send(p->daq_msg, !(ef & ENC_FLAG_FWD), rej, len);
     }
 }
 
@@ -229,7 +230,7 @@ void Active::send_unreach(Packet* p, UnreachResponse type)
     if ( !rej )
         return;
 
-    s_send(p->pkth, 1, rej, len);
+    s_send(p->daq_msg, 1, rej, len);
 }
 
 bool Active::send_data(
@@ -248,7 +249,10 @@ bool Active::send_data(
         seg = PacketManager::encode_response(TcpResponse::RST, tmp_flags, p, plen);
 
         if ( seg )
-            s_send(p->pkth, !(tmp_flags & ENC_FLAG_FWD), seg, plen);
+        {
+            s_send(p->daq_msg, !(tmp_flags & ENC_FLAG_FWD), seg, plen);
+            active_counts.injects++;
+        }
     }
     flags |= ENC_FLAG_SEQ;
 
@@ -268,7 +272,8 @@ bool Active::send_data(
             if ( !seg )
                 return false;
 
-            s_send(p->pkth, !(flags & ENC_FLAG_FWD), seg, plen);
+            s_send(p->daq_msg, !(flags & ENC_FLAG_FWD), seg, plen);
+            active_counts.injects++;
 
             buf += toSend;
             sent += toSend;
@@ -283,7 +288,8 @@ bool Active::send_data(
     if ( !seg )
         return false;
 
-    s_send(p->pkth, !(flags & ENC_FLAG_FWD), seg, plen);
+    s_send(p->daq_msg, !(flags & ENC_FLAG_FWD), seg, plen);
+    active_counts.injects++;
 
     if (flags & ENC_FLAG_RST_CLNT)
     {
@@ -293,7 +299,10 @@ bool Active::send_data(
         seg = PacketManager::encode_response(TcpResponse::RST, flags, p, plen);
 
         if ( seg )
-            s_send(p->pkth, !(flags & ENC_FLAG_FWD), seg, plen);
+        {
+            s_send(p->daq_msg, !(flags & ENC_FLAG_FWD), seg, plen);
+            active_counts.injects++;
+        }
     }
 
     return true;
@@ -315,7 +324,7 @@ void Active::inject_data(
     if ( !seg )
         return;
 
-    s_send(p->pkth, !(flags & ENC_FLAG_FWD), seg, plen);
+    s_send(p->daq_msg, !(flags & ENC_FLAG_FWD), seg, plen);
 }
 
 //--------------------------------------------------------------------
@@ -364,7 +373,7 @@ void Active::cant_drop()
 
 void Active::update_status(const Packet* p, bool force)
 {
-    if ( suspended() )
+    if ( s_suspend )
         cant_drop();
 
     else if ( force )
@@ -386,7 +395,7 @@ void Active::update_status(const Packet* p, bool force)
 
 void Active::daq_update_status(const Packet* p)
 {
-    if ( suspended() )
+    if ( s_suspend )
     {
         cant_drop();
     }
@@ -413,21 +422,39 @@ void Active::daq_drop_packet(const Packet* p)
     daq_update_status(p);
 }
 
-bool Active::daq_retry_packet(const Packet *p)
+bool Active::retry_packet(const Packet* p)
 {
-    bool retry_queued = false;
+    if (active_action != ACT_PASS || !SFDAQ::forwarding_packet(p->pkth))
+        return false;
 
-    // FIXIT-M may need to confirm this packet is not a retransmit...2.9.x has a check for that
-    if ( !p->is_rebuilt() && ( active_action == ACT_PASS ) && SFDAQ::can_retry() )
+    // FIXIT-L semi-arbitrary heuristic for preventing retry queue saturation - reevaluate later
+    if (!p->daq_instance || p->daq_instance->get_pool_available() < p->daq_instance->get_batch_size())
     {
-        if ( SFDAQ::forwarding_packet(p->pkth) )
-        {
-            active_action = ACT_RETRY;
-            retry_queued = true;
-        }
+        // Fall back on dropping the packet and relying on the host to retransmit
+        active_action = ACT_DROP;
+        daq_stats.retries_dropped++;
+        return false;
     }
 
-    return retry_queued;
+    // If a retransmit would be added to the retry queue, drop it instead.
+    // FIXIT-L this behavior needs to be reevaluated and probably moved somewhere else
+    if (p->packet_flags & PKT_RETRANSMIT)
+        active_action = ACT_DROP;
+    else
+        active_action = ACT_RETRY;
+
+    return true;
+}
+
+bool Active::hold_packet(const Packet*)
+{
+    if ( active_action < ACT_HOLD )
+    {
+        active_action = ACT_HOLD;
+        return true;
+    }
+
+    return false;
 }
 
 void Active::allow_session(Packet* p)
@@ -445,8 +472,8 @@ void Active::allow_session(Packet* p)
 
 void Active::block_session(Packet* p, bool force)
 {
-    update_status(p, force);
     active_action = ACT_BLOCK;
+    update_status(p, force);
 
     if ( force or SnortConfig::inline_mode() or SnortConfig::treat_drop_as_ignore() )
         Stream::block_flow(p);
@@ -462,9 +489,9 @@ void Active::reset_session(Packet* p, bool force)
     if ( force or SnortConfig::inline_mode() or SnortConfig::treat_drop_as_ignore() )
         Stream::drop_flow(p);
 
-    if ( s_enabled and SnortConfig::get_conf()->max_responses )
+    if ( enabled )
     {
-        ActionManager::queue_reject(p);
+        ActionManager::queue_reject(SnortConfig::get_conf(), p);
 
         if ( p->flow )
         {
@@ -480,7 +507,7 @@ void Active::set_delayed_action(ActiveAction action, bool force)
 {
     delayed_active_action = action;
 
-    if (force)
+    if ( force )
         active_status = AST_FORCE;
 }
 
@@ -488,7 +515,7 @@ void Active::apply_delayed_action(Packet* p)
 {
     bool force = (active_status == AST_FORCE);
 
-    switch (delayed_active_action)
+    switch ( delayed_active_action )
     {
     case ACT_PASS:
         break;
@@ -500,6 +527,10 @@ void Active::apply_delayed_action(Packet* p)
         break;
     case ACT_RESET:
         reset_session(p, force);
+        break;
+    case ACT_RETRY:
+        if(!retry_packet(p))
+            drop_packet(p, force);
         break;
     default:
         break;
@@ -545,63 +576,10 @@ void Active::close()
     s_ipnet = nullptr;
 }
 
-static const char* act_str[Active::ACT_MAX][Active::AST_MAX] =
+void Active::reset()
 {
-    { "allow", "error", "error", "error" },
-    { "drop", "cant_drop", "would_drop", "force_drop" },
-    { "block", "cant_block", "would_block", "force_block" },
-    { "reset", "cant_reset", "would_reset", "force_reset" },
-};
-
-const char* Active::get_action_string()
-{
-    return act_str[active_action][active_status];
+    active_tunnel_bypass = 0;
+    active_status = AST_ALLOW;
+    active_action = ACT_PASS;
+    delayed_active_action = ACT_PASS;
 }
-
-void Active::suspend()
-{ active_suspend = true; }
-
-void Active::resume()
-{ active_suspend = false; }
-
-bool Active::suspended()
-{ return active_suspend; }
-
-Active::ActiveAction Active::get_action()
-{ return active_action; }
-
-bool Active::can_block()
-{ return active_status == AST_ALLOW or active_status == AST_FORCE; }
-
-void Active::block_again()
-{ active_action = ACT_BLOCK; }
-
-void Active::reset_again()
-{ active_action = ACT_RESET; }
-
-bool Active::packet_was_dropped()
-{ return ( active_action >= ACT_DROP ); }
-
-bool Active::packet_retry_requested()
-{ return ( active_action == ACT_RETRY ); }
-
-bool Active::session_was_blocked()
-{ return ( active_action >= ACT_BLOCK); }
-
-bool Active::packet_would_be_dropped()
-{ return (active_status == AST_WOULD ); }
-
-bool Active::packet_force_dropped()
-{ return (active_status == AST_FORCE ); }
-
-void Active::set_tunnel_bypass()
-{ active_tunnel_bypass++; }
-
-void Active::clear_tunnel_bypass()
-{ active_tunnel_bypass--; }
-
-bool Active::get_tunnel_bypass()
-{ return ( active_tunnel_bypass > 0 ); }
-
-uint64_t Active::get_injects()
-{ return s_injects; }

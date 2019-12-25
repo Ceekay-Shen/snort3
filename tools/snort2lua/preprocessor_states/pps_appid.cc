@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -134,6 +134,19 @@ bool AppId::convert(std::istringstream& data_stream)
             else
             {
                 data_api.failed_conversion(arg_stream,  "appid: thirdparty_appid_dir <missing_arg>");
+                tmpval = false;
+            }
+        }
+        else if (keyword == "tp_config_path")
+        {
+            std::string file_name;
+            if (arg_stream >> file_name)
+            {
+                tmpval = table_api.add_option("tp_appid_config", file_name);
+            }
+            else
+            {
+                data_api.failed_conversion(arg_stream,  "appid: tp_config_path <missing_arg>");
                 tmpval = false;
             }
         }

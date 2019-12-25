@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -63,6 +63,8 @@
 #include "asn1_detect.h"
 #include "asn1_util.h"
 
+using namespace snort;
+
 #define BITSTRING_OPT  "bitstring_overflow"
 #define DOUBLE_OPT     "double_overflow"
 #define PRINT_OPT      "print"
@@ -83,7 +85,7 @@ static THREAD_LOCAL ProfileStats asn1PerfStats;
 class Asn1Option : public IpsOption
 {
 public:
-    Asn1Option(ASN1_CTXT& c) : IpsOption(s_name, RULE_OPTION_TYPE_BUFFER_USE)
+    Asn1Option(const ASN1_CTXT& c) : IpsOption(s_name, RULE_OPTION_TYPE_BUFFER_USE)
     { config = c; }
 
     uint32_t hash() const override;
@@ -153,7 +155,7 @@ bool Asn1Option::operator==(const IpsOption& rhs) const
 
 IpsOption::EvalStatus Asn1Option::eval(Cursor& c, Packet* p)
 {
-    Profile profile(asn1PerfStats);
+    RuleProfile profile(asn1PerfStats);
 
     //  Failed if there is no data to decode.
     if (!p->data)
@@ -180,13 +182,13 @@ static const Parameter s_params[] =
     { PRINT_OPT, Parameter::PT_IMPLIED, nullptr, nullptr,
       "dump decode data to console; always true" },
 
-    { LENGTH_OPT, Parameter::PT_INT, "0:", nullptr,
+    { LENGTH_OPT, Parameter::PT_INT, "0:max32", nullptr,
       "compares ASN.1 type lengths with the supplied argument" },
 
-    { ABS_OFFSET_OPT, Parameter::PT_INT, "0:", nullptr,
+    { ABS_OFFSET_OPT, Parameter::PT_INT, "0:65535", nullptr,
       "absolute offset from the beginning of the packet" },
 
-    { REL_OFFSET_OPT, Parameter::PT_INT, nullptr, nullptr,
+    { REL_OFFSET_OPT, Parameter::PT_INT, "-65535:65535", nullptr,
       "relative offset from the cursor" },
 
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
@@ -230,17 +232,17 @@ bool Asn1Module::set(const char*, Value& v, SnortConfig*)
     else if ( v.is(LENGTH_OPT) )
     {
         data.length = 1;
-        data.max_length = v.get_long();
+        data.max_length = v.get_uint32();
     }
     else if ( v.is(ABS_OFFSET_OPT) )
     {
         data.offset_type = ABS_OFFSET;
-        data.offset = v.get_long();
+        data.offset = v.get_uint16();
     }
     else if ( v.is(REL_OFFSET_OPT) )
     {
         data.offset_type = REL_OFFSET;
-        data.offset = v.get_long();
+        data.offset = v.get_int32();
     }
     else
         return false;

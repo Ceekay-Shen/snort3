@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -21,23 +21,30 @@
 #ifndef PROFILER_H
 #define PROFILER_H
 
+#include "main/thread.h"
 #include "profiler_defs.h"
 
+namespace snort
+{
 class Module;
+}
 
 class Profiler
 {
 public:
-    static void register_module(Module*);
-    static void register_module(const char*, const char*, Module*);
-    static void register_module(const char*, const char*, get_profile_stats_fn);
+    static void register_module(snort::Module*);
+    static void register_module(const char*, const char*, snort::Module*);
 
-    // FIXIT-L do we need to call on main thread?
-    // call from packet threads, just before thread termination
+    static void start();
+    static void stop(uint64_t);
+
     static void consolidate_stats();
+
     static void reset_stats();
     static void show_stats();
 };
 
+extern THREAD_LOCAL snort::ProfileStats totalPerfStats;
+extern THREAD_LOCAL snort::ProfileStats otherPerfStats;
 
 #endif

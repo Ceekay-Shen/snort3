@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -26,6 +26,7 @@
 
 #include <cassert>
 
+using namespace snort;
 using namespace std;
 
 #define SSH_EVENT_RESPOVERFLOW_STR \
@@ -105,13 +106,13 @@ ProfileStats* SshModule::get_profile() const
 bool SshModule::set(const char*, Value& v, SnortConfig*)
 {
     if ( v.is("max_encrypted_packets") )
-        conf->MaxEncryptedPackets = v.get_long();
+        conf->MaxEncryptedPackets = v.get_uint16();
 
     else if ( v.is("max_client_bytes") )
-        conf->MaxClientBytes = v.get_long();
+        conf->MaxClientBytes = v.get_uint16();
 
     else if ( v.is("max_server_version_len") )
-        conf->MaxServerVersionLen = v.get_long();
+        conf->MaxServerVersionLen = v.get_uint8();
 
     else
         return false;

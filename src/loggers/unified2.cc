@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2007-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -52,6 +52,7 @@
 #include "utils/util.h"
 #include "utils/util_cstring.h"
 
+using namespace snort;
 using namespace std;
 
 #define S_NAME "unified2"
@@ -61,7 +62,7 @@ using namespace std;
 
 struct Unified2Config
 {
-    unsigned int limit;
+    size_t limit;
     int nostamp;
     bool legacy_events;
 };
@@ -215,15 +216,15 @@ static void alert_event(Packet* p, const char*, Unified2Config* config, const Ev
         u2_event.pkt_ip_proto = (uint8_t)p->get_ip_proto_next();
 
         const char* app_name = p->flow ?
-            appid_api.get_application_name(p->flow, p->is_from_client()) : nullptr;
+            appid_api.get_application_name(*p->flow, p->is_from_client()) : nullptr;
 
         if ( app_name )
             memcpy_s(u2_event.app_name, sizeof(u2_event.app_name),
                 app_name, strlen(app_name) + 1);
-    }
 
-    u2_event.snort_status = Active::get_status();
-    u2_event.snort_action = Active::get_action();
+        u2_event.snort_status = p->active->get_status();
+        u2_event.snort_action = p->active->get_action();
+    }
 
     Serial_Unified2_Header hdr;
     uint32_t write_len = sizeof(hdr) + sizeof(u2_event);
@@ -318,8 +319,9 @@ static void AlertExtraData(
         uint32_t len = 0;
         uint32_t type = 0;
         uint8_t* write_buffer;
+        LogFunction log_func = log_funcs[xid-1];
 
-        if ( log_funcs[xid-1](flow, &write_buffer, &len, &type) && (len > 0) )
+        if ( log_func(flow, &write_buffer, &len, &type) && (len > 0) )
         {
             _WriteExtraData(config, event_id, event_second, write_buffer, len, type);
         }
@@ -346,8 +348,6 @@ static void _Unified2LogPacketAlert(
     {
         logheader.event_id = htonl(event->event_reference);
         logheader.event_second = htonl(event->ref_time.tv_sec);
-
-        DebugMessage(DEBUG_LOG, "------------\n");
     }
     else
     {
@@ -359,7 +359,7 @@ static void _Unified2LogPacketAlert(
     {
         logheader.packet_second = htonl((uint32_t)p->pkth->ts.tv_sec);
         logheader.packet_microsecond = htonl((uint32_t)p->pkth->ts.tv_usec);
-        pkt_length = ( p->is_rebuilt() ) ? p->dsize : p->pkth->caplen;
+        pkt_length = ( p->is_rebuilt() ) ? p->dsize : p->pktlen;
         logheader.packet_length = htonl(pkt_length + u2h_len);
         write_len += pkt_length + u2h_len;
     }
@@ -600,9 +600,9 @@ static int s_blocked_flag[] =
     U2_BLOCKED_FLAG_BLOCK,
 };
 
-static int GetU2Flags(const Packet*, uint8_t* pimpact)
+static int GetU2Flags(const Packet* p, uint8_t* pimpact)
 {
-    Active::ActiveStatus dispos = Active::get_status();
+    Active::ActiveStatus dispos = p->active->get_status();
 
     if ( dispos > Active::AST_ALLOW )
         *pimpact = U2_FLAG_BLOCKED;
@@ -659,9 +659,11 @@ static void _AlertIP4_v2(Packet* p, const char*, Unified2Config* config, const E
             alertdata.sport_itype = htons(p->ptrs.icmph->type);
             alertdata.dport_icode = htons(p->ptrs.icmph->code);
         }
-
-        alertdata.sport_itype = htons(p->ptrs.sp);
-        alertdata.dport_icode = htons(p->ptrs.dp);
+        else
+        {
+            alertdata.sport_itype = htons(p->ptrs.sp);
+            alertdata.dport_icode = htons(p->ptrs.dp);
+        }
 
         if ( p->proto_bits & PROTO_BIT__MPLS )
             alertdata.mpls_label = htonl(p->ptrs.mplsHdr.label);
@@ -672,7 +674,7 @@ static void _AlertIP4_v2(Packet* p, const char*, Unified2Config* config, const E
         alertdata.pad2 = htons((uint16_t)p->user_ips_policy_id);
 
         const char* app_name = p->flow ?
-            appid_api.get_application_name(p->flow, p->is_from_client()) : nullptr;
+            appid_api.get_application_name(*p->flow, p->is_from_client()) : nullptr;
 
         if ( app_name )
             memcpy_s(alertdata.app_name, sizeof(alertdata.app_name),
@@ -745,9 +747,11 @@ static void _AlertIP6_v2(Packet* p, const char*, Unified2Config* config, const E
             alertdata.sport_itype = htons(p->ptrs.icmph->type);
             alertdata.dport_icode = htons(p->ptrs.icmph->code);
         }
-
-        alertdata.sport_itype = htons(p->ptrs.sp);
-        alertdata.dport_icode = htons(p->ptrs.dp);
+        else
+        {
+            alertdata.sport_itype = htons(p->ptrs.sp);
+            alertdata.dport_icode = htons(p->ptrs.dp);
+        }
 
         if ( p->proto_bits & PROTO_BIT__MPLS )
             alertdata.mpls_label = htonl(p->ptrs.mplsHdr.label);
@@ -758,7 +762,7 @@ static void _AlertIP6_v2(Packet* p, const char*, Unified2Config* config, const E
         alertdata.pad2 = htons((uint16_t)p->user_ips_policy_id);
 
         const char* app_name = p->flow ?
-            appid_api.get_application_name(p->flow, p->is_from_client()) : nullptr;
+            appid_api.get_application_name(*p->flow, p->is_from_client()) : nullptr;
 
         if ( app_name )
             memcpy_s(alertdata.app_name, sizeof(alertdata.app_name),
@@ -789,7 +793,7 @@ static const Parameter s_params[] =
     { "legacy_events", Parameter::PT_BOOL, nullptr, "false",
       "generate Snort 2.X style events for barnyard2 compatibility" },
 
-    { "limit", Parameter::PT_INT, "0:", "0",
+    { "limit", Parameter::PT_INT, "0:maxSZ", "0",
       "set maximum size in MB before rollover (0 is unlimited)" },
 
     { "nostamp", Parameter::PT_BOOL, nullptr, "true",
@@ -813,7 +817,7 @@ public:
     { return CONTEXT; }
 
 public:
-    unsigned limit;
+    size_t limit;
     bool nostamp;
     bool legacy_events;
 };
@@ -821,7 +825,7 @@ public:
 bool U2Module::set(const char*, Value& v, SnortConfig*)
 {
     if ( v.is("limit") )
-        limit = v.get_long() * 1024 * 1024;
+        limit = v.get_size() * 1024 * 1024;
 
     else if ( v.is("nostamp") )
         nostamp = v.get_bool();

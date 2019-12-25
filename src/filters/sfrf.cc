@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2009-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -26,6 +26,7 @@
 
 #include "sfrf.h"
 
+#include "main/thread.h"
 #include "detection/rules.h"
 #include "hash/ghash.h"
 #include "hash/xhash.h"
@@ -34,6 +35,8 @@
 #include "utils/cpp_macros.h"
 #include "utils/sflsq.h"
 #include "utils/util.h"
+
+using namespace snort;
 
 // Number of hash rows for gid 1 (rules)
 #define SFRF_GEN_ID_1_ROWS 4096
@@ -44,6 +47,9 @@
 #define SFRF_NO_REVERT_LIMIT 1000
 
 // private data ...
+
+THREAD_LOCAL RateFilterStats rate_filter_stats;
+
 /* Key to find tracking nodes in trackingHash.
  */
 PADDING_GUARD_BEGIN
@@ -93,7 +99,7 @@ typedef struct
     time_t revertTime;
 } tSFRFTrackingNode;
 
-XHash* rf_hash = nullptr;
+static THREAD_LOCAL XHash* rf_hash = nullptr;
 
 // private methods ...
 static int _checkThreshold(
@@ -199,6 +205,19 @@ static void SFRF_SidNodeFree(void* item)
     snort_free(pSidnode);
 }
 
+int SFRF_Alloc(unsigned int memcap)
+{
+    if ( rf_hash == nullptr )
+    {
+        SFRF_New(memcap);
+
+        if ( rf_hash == nullptr )
+            return -1;
+    }
+    return 0;
+}
+
+
 /*  Add a permanent threshold object to the threshold table. Multiple
  * objects may be defined for each gid and sid pair. Internally
  * a unique threshold id is generated for each pair.
@@ -213,24 +232,14 @@ static void SFRF_SidNodeFree(void* item)
  *
  * @return @retval  0 successfully added the thresholding object, !0 otherwise
 */
-int SFRF_ConfigAdd(
-    SnortConfig*, RateFilterConfig* rf_config, tSFRFConfigNode* cfgNode)
+int SFRF_ConfigAdd(SnortConfig*, RateFilterConfig* rf_config, tSFRFConfigNode* cfgNode)
 {
     GHash* genHash;
     tSFRFSidNode* pSidNode;
     tSFRFConfigNode* pNewConfigNode;
     tSFRFGenHashKey key = { 0,0 };
 
-    PolicyId policy_id = get_network_policy()->policy_id;
-
-    // Auto init - memcap must be set 1st, which is not really a problem
-    if ( rf_hash == nullptr )
-    {
-        SFRF_New(rf_config->memcap);
-
-        if ( rf_hash == nullptr )
-            return -1;
-    }
+    PolicyId policy_id = get_ips_policy()->policy_id;
 
     if ((rf_config == nullptr) || (cfgNode == nullptr))
         return -1;
@@ -405,7 +414,7 @@ static int SFRF_TestObject(
     // if the count were not incremented in such cases, the
     // threshold would never be exceeded.
     if ( !cfgNode->seconds && dynNode->count > cfgNode->count )
-        if ( cfgNode->newAction == RULE_TYPE__DROP )
+        if ( cfgNode->newAction == Actions::DROP )
             dynNode->count--;
 
 #ifdef SFRF_DEBUG
@@ -455,7 +464,7 @@ int SFRF_TestThreshold(
     int status = -1;
     tSFRFGenHashKey key;
 
-    PolicyId policy_id = get_network_policy()->policy_id;
+    PolicyId policy_id = get_ips_policy()->policy_id;
 
 #ifdef SFRF_DEBUG
     printf("--%d-%u-%u: %s() entering\n", 0, gid, sid, __func__);
@@ -744,7 +753,7 @@ static int _checkThreshold(
     fflush(stdout);
 #endif
 
-    return RULE_TYPE__MAX + cfgNode->newAction;
+    return Actions::MAX + cfgNode->newAction;
 }
 
 static void _updateDependentThresholds(
@@ -756,8 +765,8 @@ static void _updateDependentThresholds(
     time_t curTime
     )
 {
-    if ( gid == GENERATOR_INTERNAL &&
-        sid == INTERNAL_EVENT_SESSION_DEL )
+    if ( gid == GID_SESSION &&
+        sid == SESSION_EVENT_CLEAR )
     {
         // decrementing counters - this results in the following sequence:
         // 1. sfdos_thd_test_threshold(gid internal, sid DEL)
@@ -766,17 +775,13 @@ static void _updateDependentThresholds(
         // 4.    |       _updateDependentThresholds(gid internal, sid ADD)
         // 5.    continue with regularly scheduled programming (ie step 1)
 
-        SFRF_TestThreshold(config, gid, INTERNAL_EVENT_SESSION_ADD,
+        SFRF_TestThreshold(config, gid, SESSION_EVENT_SETUP,
             sip, dip, curTime, SFRF_COUNT_DECREMENT);
         return;
     }
 }
 
-static tSFRFTrackingNode* _getSFRFTrackingNode(
-    const SfIp* ip,
-    unsigned tid,
-    time_t curTime
-    )
+static tSFRFTrackingNode* _getSFRFTrackingNode(const SfIp* ip, unsigned tid, time_t curTime)
 {
     tSFRFTrackingNode* dynNode = nullptr;
     tSFRFTrackingNodeKey key;
@@ -784,14 +789,21 @@ static tSFRFTrackingNode* _getSFRFTrackingNode(
     /* Setup key */
     key.ip = *(ip);
     key.tid = tid;
-    key.policyId = get_network_policy()->policy_id;
+    key.policyId = get_ips_policy()->policy_id;
     key.padding = 0;
 
     /*
      * Check for any Permanent sid objects for this gid or add this one ...
      */
     XHashNode* hnode = xhash_get_node(rf_hash, (void*)&key);
-    if ( hnode && hnode->data )
+    if ( !hnode )
+    {
+        // xhash_get_node fails to insert only if rf_hash is full.
+        rate_filter_stats.xhash_nomem_peg++;
+        return dynNode;
+    }
+
+    if ( hnode->data )
     {
         dynNode = (tSFRFTrackingNode*)hnode->data;
 
@@ -807,4 +819,3 @@ static tSFRFTrackingNode* _getSFRFTrackingNode(
     }
     return dynNode;
 }
-

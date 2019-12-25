@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -26,11 +26,13 @@
 #include <libgen.h>
 #include <lua.hpp>
 
+#include <algorithm>
 #include <cassert>
 #include <iostream>
 #include <mutex>
-#include <stack>
 #include <string>
+#include <unordered_map>
+#include <vector>
 
 #include "framework/base_api.h"
 #include "framework/module.h"
@@ -48,6 +50,11 @@
 
 #include "plugin_manager.h"
 
+// "Lua" includes
+#include "lua_bootstrap.h"
+#include "lua_coreinit.h"
+
+using namespace snort;
 using namespace std;
 
 struct ModHook
@@ -62,8 +69,9 @@ struct ModHook
     void init();
 };
 
-typedef std::list<ModHook*> ModuleList;
-static ModuleList s_modules;
+static std::unordered_map<std::string, ModHook*> s_modules;
+static std::unordered_map<std::string, const Parameter*> s_pmap;
+
 static unsigned s_errors = 0;
 
 std::set<uint32_t> ModuleManager::gids;
@@ -87,7 +95,20 @@ extern "C"
     bool set_number(const char* fqn, double val);
     bool set_string(const char* fqn, const char* val);
     bool set_alias(const char* from, const char* to);
+
+    const char* push_include_path(const char* file);
+    void pop_include_path();
 }
+
+//-------------------------------------------------------------------------
+// boot foo
+//-------------------------------------------------------------------------
+
+const char* ModuleManager::get_lua_bootstrap()
+{ return lua_bootstrap; }
+
+const char* ModuleManager::get_lua_coreinit()
+{ return lua_coreinit; }
 
 //-------------------------------------------------------------------------
 // ModHook foo
@@ -173,14 +194,14 @@ static void trace(const char* s, const char* fqn, Value& v)
     if ( v.get_type() == Value::VT_STR )
         printf("%s: %s = '%s'\n", s, fqn, v.get_string());
     else
-        printf("%s: %s = %ld\n", s, fqn, v.get_long());
+        printf("%s: %s = " STDi64 "\n", s, fqn, v.get_int64());
 }
 
 static ModHook* get_hook(const char* s)
 {
-    for ( auto p : s_modules )
-        if ( !strcmp(p->mod->get_name(), s) )
-            return p;
+    auto mh = s_modules.find(s);
+    if ( mh != s_modules.end() )
+        return mh->second;
 
     return nullptr;
 }
@@ -199,16 +220,16 @@ static DumpFormat dump_fmt = DF_STD;
 static void dump_field_std(const string& key, const Parameter* p)
 {
     cout << Markup::item();
-    cout << Markup::escape(p->get_type());
+    cout << p->get_type();
     cout << " " << Markup::emphasis(Markup::escape(key));
 
     if ( p->deflt )
-        cout << " = " << Markup::escape(p->deflt);
+        cout << " = " << p->deflt;
 
     cout << ": " << p->help;
 
     if ( const char* r = p->get_range() )
-        cout << " { " << Markup::escape(r) << " }";
+        cout << " { " << r << " }";
 
     cout << endl;
 }
@@ -220,14 +241,14 @@ static void dump_field_tab(const string& key, const Parameter* p)
     cout << "\t" << Markup::emphasis(Markup::escape(key));
 
     if ( p->deflt )
-        cout << "\t" << Markup::escape(p->deflt);
+        cout << "\t" << p->deflt;
     else
         cout << "\t";
 
     cout << "\t" << p->help;
 
     if ( const char* r = p->get_range() )
-        cout << "\t" << Markup::escape(r);
+        cout << "\t" << r;
     else
         cout << "\t";
 
@@ -327,7 +348,7 @@ static void dump_table(string& key, const char* pfx, const Parameter* p, bool li
 //-------------------------------------------------------------------------
 
 static const Parameter* get_params(
-    const string& sfx, const Parameter* p, int idx = 1)
+    const string& sfx, Module* m, const Parameter* p, int idx = 1)
 {
     size_t pos = sfx.find_first_of('.');
     std::string new_fqn;
@@ -345,8 +366,17 @@ static const Parameter* get_params(
     }
 
     string name = new_fqn.substr(0, new_fqn.find_first_of('.'));
-    while ( p->name && name != p->name )
+
+    while ( p->name )
+    {
+        if ( *p->name == '$' and m->matches(p->name, name) )
+            break;
+
+        else if ( name == p->name )
+            break;
+
         ++p;
+    }
 
     if ( !p->name )
         return nullptr;
@@ -370,7 +400,7 @@ static const Parameter* get_params(
     }
 
     p = (const Parameter*)p->range;
-    return get_params(new_fqn, p, idx);
+    return get_params(new_fqn, m, p, idx);
 }
 
 // FIXIT-M vars may have been defined on command line. that mechanism will
@@ -467,21 +497,21 @@ static bool set_value(const char* fqn, Value& v)
         return found;
     }
 
-    if ( mod->get_usage() != Module::INSPECT && only_inspection_policy() )
-            return true;
+    const Parameter* p;
+    auto a = s_pmap.find(t);
 
-    if ( mod->get_usage() != Module::DETECT && only_ips_policy() )
-            return true;
+    if ( a != s_pmap.end() )
+        p = a->second;
 
-    if ( mod->get_usage() != Module::CONTEXT && only_network_policy() )
-            return true;
+    else
+    {
+        // now we must traverse the mod params to get the leaf
+        string s = fqn;
+        p = get_params(s, mod, mod->get_parameters());
 
-    // now we must traverse the mod params to get the leaf
-    string s = fqn;
-    const Parameter* p = get_params(s, mod->get_parameters());
-
-    if ( !p )
-        p = get_params(s, mod->get_default_parameters());
+        if ( !p )
+            p = get_params(s, mod, mod->get_default_parameters());
+    }
 
     if ( !p )
     {
@@ -502,8 +532,8 @@ static bool set_value(const char* fqn, Value& v)
 
     if ( v.get_type() == Value::VT_STR )
         ParseError("invalid %s = '%s'", fqn, v.get_string());
-    else if ( v.get_real() == v.get_long() )
-        ParseError("invalid %s = %ld", fqn, v.get_long());
+    else if ( v.get_real() == v.get_int64() )
+        ParseError("invalid %s = " STDi64, fqn, v.get_int64());
     else
         ParseError("invalid %s = %g", fqn, v.get_real());
 
@@ -530,36 +560,41 @@ static bool top_level(const char* s)
 
 static bool begin(Module* m, const Parameter* p, const char* s, int idx, int depth)
 {
-    if ( !p )
+    // Module::(verified_)begin() will be called for top-level tables, lists, and list items only
+    if ( top_level(s) )
     {
-        p = m->get_parameters();
-        assert(p);
-    }
-
-    // Module::begin() top-level, lists, and list items only
-    if ( top_level(s) or
-         (!idx and p->type == Parameter::PT_LIST) or
-         (idx and p->type != Parameter::PT_LIST) )
-    {
-        //printf("begin %s %d\n", s, idx);
         if ( !m->verified_begin(s, idx, s_config) )
             return false;
-    }
-    // don't set list defaults
-    if ( m->is_list() or p->type == Parameter::PT_LIST )
-    {
-        if ( !idx )
+        // don't set list defaults
+        if ( m->is_list() and !idx )
             return true;
+        if ( !p )
+        {
+            p = m->get_parameters();
+            assert(p);
+        }
     }
-
-    // set list item defaults only if explicitly configured
-    // (this is why it is done here and not in the loop below)
-    if ( p->type == Parameter::PT_LIST )
+    else
     {
-        const Parameter* t =
-            reinterpret_cast<const Parameter*>(p->range);
+        assert(p);
+        if ( (!idx and p->type == Parameter::PT_LIST) or
+             (idx and p->type != Parameter::PT_LIST) )
+        {
+            if ( !m->verified_begin(s, idx, s_config) )
+                return false;
+        }
+        if ( p->type == Parameter::PT_LIST )
+        {
+            // don't set list defaults (list items have idx > 0)
+            if ( !idx )
+                return true;
 
-        return begin(m, t, s, idx, depth+1);
+            // set list item defaults only if explicitly configured
+            // (this is why it is done here and not in the loop below)
+            const Parameter* list_item_params = reinterpret_cast<const Parameter*>(p->range);
+
+            return begin(m, list_item_params, s, idx, depth+1);
+        }
     }
 
     // don't begin subtables again
@@ -577,10 +612,9 @@ static bool begin(Module* m, const Parameter* p, const char* s, int idx, int dep
         // traverse subtables only to set defaults
         case Parameter::PT_TABLE:
             {
-                const Parameter* t =
-                    reinterpret_cast<const Parameter*>(p->range);
+                const Parameter* table_item_params = reinterpret_cast<const Parameter*>(p->range);
 
-                if ( !begin(m, t, fqn.c_str(), idx, depth+1) )
+                if ( !begin(m, table_item_params, fqn.c_str(), idx, depth+1) )
                     return false;
             }
             break;
@@ -594,7 +628,6 @@ static bool begin(Module* m, const Parameter* p, const char* s, int idx, int dep
             if ( p->deflt )
             {
                 bool b = p->get_bool();
-                //printf("set default %s = %s\n", fqn.c_str(), p->deflt);
                 set_bool(fqn.c_str(), b);
             }
             break;
@@ -605,7 +638,6 @@ static bool begin(Module* m, const Parameter* p, const char* s, int idx, int dep
             if ( p->deflt )
             {
                 double d = p->get_number();
-                //printf("set default %s = %f\n", fqn.c_str(), d);
                 set_number(fqn.c_str(), d);
             }
             break;
@@ -613,10 +645,7 @@ static bool begin(Module* m, const Parameter* p, const char* s, int idx, int dep
         // everything else is a string of some sort
         default:
             if ( p->deflt )
-            {
-                //printf("set default %s = %s\n", fqn.c_str(), p->deflt);
                 set_string(fqn.c_str(), p->deflt);
-            }
             break;
         }
         ++p;
@@ -642,9 +671,26 @@ static bool end(Module* m, const Parameter* p, const char* s, int idx)
          (!idx and p->type == Parameter::PT_LIST) or
          (idx and p->type != Parameter::PT_LIST) )
     {
-        //printf("end %s %d\n", s, idx);
         return m->verified_end(s, idx, s_config);
     }
+    return true;
+}
+
+static bool interested(Module* m)
+{
+    if ( m->get_usage() == Module::GLOBAL &&
+         only_inspection_policy() && !default_inspection_policy() )
+        return false;
+
+    if ( m->get_usage() != Module::INSPECT && only_inspection_policy() )
+        return false;
+
+    if ( m->get_usage() != Module::DETECT && only_ips_policy() )
+        return false;
+
+    if ( m->get_usage() != Module::CONTEXT && only_network_policy() )
+        return false;
+
     return true;
 }
 
@@ -661,8 +707,6 @@ SO_PUBLIC bool set_alias(const char* from, const char* to)
 
 SO_PUBLIC bool open_table(const char* s, int idx)
 {
-    //printf("open %s %d\n", s, idx);
-
     const char* orig = s;
     string fqn = s;
     set_type(fqn);
@@ -679,37 +723,31 @@ SO_PUBLIC bool open_table(const char* s, int idx)
     if ( !h || (h->api && h->api->type == PT_IPS_OPTION) )
         return false;
 
-    // FIXIT-M only basic modules and inspectors can be reloaded at present
-    if ( ( Snort::is_reloading() )
-            and h->api and h->api->type != PT_INSPECTOR )
+    // FIXIT-M only basic modules, inspectors and ips actions can be reloaded at present
+    if ( ( Snort::is_reloading() ) and h->api
+            and h->api->type != PT_INSPECTOR and h->api->type != PT_IPS_ACTION )
         return false;
 
     Module* m = h->mod;
     const Parameter* p = nullptr;
 
-    if ( m->get_usage() != Module::INSPECT && only_inspection_policy() )
-        return true;
-
-    if ( m->get_usage() != Module::DETECT && only_ips_policy() )
-        return true;
-
-    if ( m->get_usage() != Module::CONTEXT && only_network_policy() )
-        return true;
+    if ( !interested(m) )
+        return false;
 
     if ( strcmp(m->get_name(), s) )
     {
         std::string sfqn = s;
-        p = get_params(sfqn, m->get_parameters(), idx);
+        p = get_params(sfqn, m, m->get_parameters(), idx);
 
         if ( !p )
-            p = get_params(sfqn, m->get_default_parameters(), idx);
+            p = get_params(sfqn, m, m->get_default_parameters(), idx);
 
         if ( !p )
         {
             ParseError("can't find %s", s);
             return false;
         }
-        else if ((idx > 0) && (p->type == Parameter::PT_TABLE))
+        else if ( (idx > 0) && (p->type == Parameter::PT_TABLE) )
         {
             ParseError("%s is a table; all elements must be named", s);
             return false;
@@ -730,13 +768,12 @@ SO_PUBLIC bool open_table(const char* s, int idx)
         ParseError("can't open %s", m->get_name());
         return false;
     }
+
     return true;
 }
 
 SO_PUBLIC void close_table(const char* s, int idx)
 {
-    //printf("close %s %d\n", s, idx);
-
     string fqn = s;
     set_type(fqn);
     s = fqn.c_str();
@@ -744,103 +781,64 @@ SO_PUBLIC void close_table(const char* s, int idx)
     string key = fqn;
     set_top(key);
 
+    const bool top = !idx && key == s;
+
     if ( ModHook* h = get_hook(key.c_str()) )
     {
-        if ( h->mod->get_usage() != Module::INSPECT && only_inspection_policy() )
-            return;
-
-        if ( h->mod->get_usage() != Module::DETECT && only_ips_policy() )
-            return;
-
-        if ( h->mod->get_usage() != Module::CONTEXT && only_network_policy() )
-            return;
-
         if ( !end(h->mod, nullptr, s, idx) )
             ParseError("can't close %s", h->mod->get_name());
 
-        else if ( !s_name.empty() )
-            PluginManager::instantiate(h->api, h->mod, s_config, s_name.c_str());
-
-        else if ( !idx && h->api && (key == s) )
-            PluginManager::instantiate(h->api, h->mod, s_config);
+        else if (h->api && top)
+        {
+            if ( !s_name.empty() )
+                PluginManager::instantiate(h->api, h->mod, s_config, s_name.c_str());
+            else
+                PluginManager::instantiate(h->api, h->mod, s_config);
+        }
     }
-    s_name.clear();
-    s_type.clear();
+
+    if ( top )
+    {
+        s_name.clear();
+        s_type.clear();
+    }
 }
 
 SO_PUBLIC bool set_bool(const char* fqn, bool b)
 {
-    //printf("bool %s %d\n", fqn, b);
     Value v(b);
     return set_value(fqn, v);
 }
 
 SO_PUBLIC bool set_number(const char* fqn, double d)
 {
-    //printf("real %s %f\n", fqn, d);
     Value v(d);
     return set_value(fqn, v);
 }
 
 SO_PUBLIC bool set_string(const char* fqn, const char* s)
 {
-    //printf("string %s %s\n", fqn, s);
     Value v(s);
     return set_value(fqn, v);
 }
 
-struct DirStackItem
+SO_PUBLIC const char* push_include_path(const char* file)
 {
-    string previous_dir;
-    string base_name;
-};
-
-static std::stack<DirStackItem> dir_stack;
-
-SO_PUBLIC const char* push_relative_path(const char* file)
-{
-    if ( !parsing_follows_files )
-        return file;
-
-    dir_stack.push(DirStackItem());
-    DirStackItem& dsi = dir_stack.top();
-
-    char pwd[PATH_MAX];
-
-    if ( getcwd(pwd, sizeof(pwd)) == nullptr )
-        FatalError("Unable to determine process running directory\n");
-
-    dsi.previous_dir = pwd;
-
-    char* base_name_buf = snort_strdup(file);
-    dsi.base_name = basename(base_name_buf);
-    snort_free(base_name_buf);
-
-    char* dir_name_buf = snort_strdup(file);
-    char* dir_name = dirname(dir_name_buf);
-
-    if ( chdir(dir_name) != 0 )
-        FatalError("Unable to access %s\n", dir_name);
-
-    snort_free(dir_name_buf);
-
-    return dsi.base_name.c_str();
+    static std::string path;
+    path = "";
+    const char* code = get_config_file(file, path);
+    push_parse_location(code, path.c_str(), file);
+    return path.c_str();
 }
 
-SO_PUBLIC void pop_relative_path()
+SO_PUBLIC void pop_include_path()
 {
-    if ( !parsing_follows_files )
-        return;
-
-    assert( !dir_stack.empty() );
-
-    // We came from this directory, so it should still exist
-    const char* prev_dir = dir_stack.top().previous_dir.c_str();
-    if ( chdir(prev_dir) != 0 )
-        FatalError("Unable to access %s\n", prev_dir);
-
-    dir_stack.pop();
+    pop_parse_location();
 }
+
+//-------------------------------------------------------------------------
+// private methods
+//-------------------------------------------------------------------------
 
 static bool comp_mods(const ModHook* l, const ModHook* r)
 {
@@ -853,6 +851,10 @@ static bool comp_gids(const ModHook* l, const ModHook* r)
 {
     const Module* lm = l->mod;
     const Module* rm = r->mod;
+
+    if ( lm->get_gid() == rm->get_gid() )
+        return comp_mods(l, r);
+
     return ( lm->get_gid() < rm->get_gid() );
 }
 
@@ -867,8 +869,8 @@ void ModuleManager::init()
 
 void ModuleManager::term()
 {
-    for ( auto* p : s_modules )
-        delete p;
+    for ( auto& mh : s_modules )
+        delete mh.second;
 
     s_modules.clear();
 }
@@ -876,7 +878,10 @@ void ModuleManager::term()
 void ModuleManager::add_module(Module* m, const BaseApi* b)
 {
     ModHook* mh = new ModHook(m, b);
-    s_modules.push_back(mh);
+
+    assert(s_modules.find(mh->mod->get_name()) == s_modules.end());
+
+    s_modules[mh->mod->get_name()] = mh;
 
     Profiler::register_module(m);
 
@@ -886,9 +891,9 @@ void ModuleManager::add_module(Module* m, const BaseApi* b)
 
 Module* ModuleManager::get_module(const char* s)
 {
-    for ( auto p : s_modules )
-        if ( !strcmp(p->mod->get_name(), s) )
-            return p->mod;
+    auto mh = s_modules.find(s);
+    if ( mh != s_modules.end() )
+        return mh->second->mod;
 
     return nullptr;
 }
@@ -905,15 +910,22 @@ Module* ModuleManager::get_default_module(const char* s, SnortConfig* sc)
     return mod;
 }
 
-const char* ModuleManager::get_current_module()
-{ return s_current.c_str(); }
-
 list<Module*> ModuleManager::get_all_modules()
 {
     list<Module*> ret;
 
-    for ( auto& m : s_modules )
-       ret.push_back(m->mod);
+    for ( auto& mh : s_modules )
+       ret.emplace_back(mh.second->mod);
+
+    return ret;
+}
+
+static list<ModHook*> get_all_modhooks()
+{
+    list<ModHook*> ret;
+
+    for ( auto& mh : s_modules )
+       ret.emplace_back(mh.second);
 
     return ret;
 }
@@ -930,18 +942,19 @@ unsigned ModuleManager::get_errors()
 void ModuleManager::list_modules(const char* s)
 {
     PlugType pt = s ? PluginManager::get_type(s) : PT_MAX;
-    s_modules.sort(comp_mods);
+    auto mod_hooks = get_all_modhooks();
+    mod_hooks.sort(comp_mods);
     unsigned c = 0;
 
-    for ( auto* p : s_modules )
+    for ( auto* mh : mod_hooks )
     {
         if (
             !s || !*s ||
-            (p->api && p->api->type == pt) ||
-            (!p->api && !strcmp(s, "basic"))
+            (mh->api && mh->api->type == pt) ||
+            (!mh->api && !strcmp(s, "basic"))
             )
         {
-            LogMessage("%s\n", p->mod->get_name());
+            LogMessage("%s\n", mh->mod->get_name());
             c++;
         }
     }
@@ -951,28 +964,30 @@ void ModuleManager::list_modules(const char* s)
 
 void ModuleManager::show_modules()
 {
-    s_modules.sort(comp_mods);
+    auto mod_hooks = get_all_modhooks();
+    mod_hooks.sort(comp_mods);
 
-    for ( auto* p : s_modules )
+    for ( auto* mh : mod_hooks )
     {
-        const char* t = p->api ? PluginManager::get_type_name(p->api->type) : "basic";
+        const char* t = mh->api ? PluginManager::get_type_name(mh->api->type) : "basic";
 
         cout << Markup::item();
-        cout << Markup::emphasis(p->mod->get_name());
+        cout << Markup::emphasis(mh->mod->get_name());
         cout << " (" << t;
-        cout << "): " << p->mod->get_help();
+        cout << "): " << mh->mod->get_help();
         cout << endl;
     }
 }
 
 void ModuleManager::dump_modules()
 {
-    s_modules.sort(comp_mods);
+    auto mod_hooks = get_all_modhooks();
+    mod_hooks.sort(comp_mods);
     Dumper d("Modules");
 
-    for ( auto* p : s_modules )
-        if ( !p->api )
-            d.dump(p->mod->get_name());
+    for ( auto* mh : mod_hooks )
+        if ( !mh->api )
+            d.dump(mh->mod->get_name());
 }
 
 static const char* mod_type(const BaseApi* api)
@@ -1003,30 +1018,31 @@ void ModuleManager::show_module(const char* name)
         cerr << "module name required" << endl;
         return;
     }
-    s_modules.sort(comp_gids);
+    auto mod_hooks = get_all_modhooks();
+    mod_hooks.sort(comp_gids);
     unsigned c = 0;
 
-    for ( auto p : s_modules )
+    for ( auto* mh : mod_hooks )
     {
-        const Module* m = p->mod;
+        const Module* m = mh->mod;
         assert(m);
 
         if ( strcmp(m->get_name(), name) )
             continue;
 
-        cout << endl << Markup::head(3) << Markup::escape(name) << endl << endl;
+        cout << endl << Markup::head(3) << name << endl << endl;
 
         if ( const char* h = m->get_help() )
-            cout << endl << "What: " << Markup::escape(h) << endl;
+            cout << endl << "What: " << h << endl;
 
-        cout << endl << "Type: "  << mod_type(p->api) << endl;
+        cout << endl << "Type: "  << mod_type(mh->api) << endl;
         cout << endl << "Usage: "  << mod_use(m->get_usage()) << endl;
 
         const Parameter* params = m->get_parameters();
         const Parameter* def_params = m->get_default_parameters();
 
         if ( ( params and params->type < Parameter::PT_MAX ) ||
-             ( def_params and params->type < Parameter::PT_MAX ) )
+             ( def_params and def_params->type < Parameter::PT_MAX ) )
         {
             cout << endl << "Configuration: " << endl << endl;
             show_configs(name, true);
@@ -1055,6 +1071,30 @@ void ModuleManager::show_module(const char* name)
         cout << "no match" << endl;
 }
 
+void ModuleManager::reload_module(const char* name, SnortConfig* sc)
+{
+    ModHook* h = get_hook(name);
+
+    // FIXIT-L: we can check that h->api is not null here or inside instantiate.
+    // Both alternatives prevent crashing in instantiate(). However,
+    // checking it here might be too aggressive, because we are also saying it
+    // is an error. That makes the caller of this function
+    // (get_updated_module()) discard other legitimate reload operations, e.g.
+    // the newly read configuration. We should decide on this when proper
+    // reload functionality gets implemented.
+    if ( h and h->api and h->mod and sc )
+    {
+        PluginManager::instantiate(h->api, h->mod, sc);
+        s_errors += get_parse_errors();
+    }
+    else
+    {
+        cout << "Module " << name <<" doesn't exist or reload not implemented.";
+        cout << endl;
+        ++s_errors;
+    }
+}
+
 static bool selected(const Module* m, const char* pfx, bool exact)
 {
     if ( !pfx )
@@ -1071,12 +1111,13 @@ static bool selected(const Module* m, const char* pfx, bool exact)
 
 void ModuleManager::show_configs(const char* pfx, bool exact)
 {
-    s_modules.sort(comp_mods);
+    auto mod_hooks = get_all_modhooks();
+    mod_hooks.sort(comp_mods);
     unsigned c = 0;
 
-    for ( auto p : s_modules )
+    for ( auto* mh : mod_hooks )
     {
-        Module* m = p->mod;
+        Module* m = mh->mod;
         string s;
 
         if ( !selected(m, pfx, exact) )
@@ -1118,18 +1159,18 @@ void ModuleManager::show_configs(const char* pfx, bool exact)
 void ModuleManager::dump_defaults(const char* pfx)
 {
     dump_fmt = DF_LUA;
-    cout << "require('snort_config')" << endl;
     show_configs(pfx);
 }
 
 void ModuleManager::show_commands(const char* pfx, bool exact)
 {
-    s_modules.sort(comp_mods);
+    auto mod_hooks = get_all_modhooks();
+    mod_hooks.sort(comp_mods);
     unsigned n = 0;
 
-    for ( auto p : s_modules )
+    for ( auto* mh : mod_hooks )
     {
-        const Module* m = p->mod;
+        const Module* m = mh->mod;
 
         if ( !selected(m, pfx, exact) )
             continue;
@@ -1143,11 +1184,11 @@ void ModuleManager::show_commands(const char* pfx, bool exact)
         {
             cout << Markup::item();
             cout << Markup::emphasis_on();
-            cout << Markup::escape(p->mod->get_name());
-            cout << "." << Markup::escape(c->name);
+            cout << mh->mod->get_name();
+            cout << "." << c->name;
             cout << Markup::emphasis_off();
             cout << c->get_arg_list();
-            cout << ": " << Markup::escape(c->help);
+            cout << ": " << c->help;
             cout << endl;
             c++;
         }
@@ -1164,12 +1205,13 @@ bool ModuleManager::gid_in_use(uint32_t gid)
 
 void ModuleManager::show_gids(const char* pfx, bool exact)
 {
-    s_modules.sort(comp_gids);
+    auto mod_hooks = get_all_modhooks();
+    mod_hooks.sort(comp_gids);
     unsigned c = 0;
 
-    for ( auto p : s_modules )
+    for ( auto* mh : mod_hooks )
     {
-        const Module* m = p->mod;
+        const Module* m = mh->mod;
         assert(m);
 
         if ( !selected(m, pfx, exact) )
@@ -1183,7 +1225,7 @@ void ModuleManager::show_gids(const char* pfx, bool exact)
             cout << Markup::emphasis_on();
             cout << gid;
             cout << Markup::emphasis_off();
-            cout << ": " << Markup::escape(m->get_name());
+            cout << ": " << m->get_name();
             cout << endl;
         }
         c++;
@@ -1207,12 +1249,13 @@ static const char* peg_op(CountType ct)
 
 void ModuleManager::show_pegs(const char* pfx, bool exact)
 {
-    s_modules.sort(comp_gids);
+    auto mod_hooks = get_all_modhooks();
+    mod_hooks.sort(comp_gids);
     unsigned c = 0;
 
-    for ( auto p : s_modules )
+    for ( auto* mh : mod_hooks )
     {
-        const Module* m = p->mod;
+        const Module* m = mh->mod;
         assert(m);
 
         if ( !selected(m, pfx, exact) )
@@ -1227,48 +1270,13 @@ void ModuleManager::show_pegs(const char* pfx, bool exact)
         {
             cout << Markup::item();
             cout << Markup::emphasis_on();
-            cout << Markup::escape(p->mod->get_name());
-            cout << "." << Markup::escape(pegs->name);
+            cout << mh->mod->get_name();
+            cout << "." << pegs->name;
             cout << Markup::emphasis_off();
-            cout << ": " << Markup::escape(pegs->help);
-            cout << Markup::escape(peg_op(pegs->type));
+            cout << ": " << pegs->help;
+            cout << peg_op(pegs->type);
             cout << endl;
             ++pegs;
-        }
-        c++;
-    }
-    if ( !c )
-        cout << "no match" << endl;
-}
-
-void ModuleManager::show_rules(const char* pfx, bool exact)
-{
-    s_modules.sort(comp_gids);
-    unsigned c = 0;
-
-    for ( auto p : s_modules )
-    {
-        const Module* m = p->mod;
-
-        if ( !selected(m, pfx, exact) )
-            continue;
-
-        const RuleMap* r = m->get_rules();
-        unsigned gid = m->get_gid();
-
-        if ( !r )
-            continue;
-
-        while ( r->msg )
-        {
-            cout << Markup::item();
-            cout << Markup::emphasis_on();
-            cout << gid << ":" << r->sid;
-            cout << Markup::emphasis_off();
-            cout << " (" << m->get_name() << ")";
-            cout << " " << Markup::escape(r->msg);
-            cout << endl;
-            r++;
         }
         c++;
     }
@@ -1280,11 +1288,13 @@ void ModuleManager::load_commands(Shell* sh)
 {
     // FIXIT-L ideally only install commands from configured modules
     // FIXIT-L install commands into working shell
+    auto mod_hooks = get_all_modhooks();
+    mod_hooks.sort(comp_mods);
 
-    for ( auto p : s_modules )
+    for ( auto* mh : mod_hooks )
     {
-        if ( p->reg )
-            sh->install(p->mod->get_name(), p->reg);
+        if ( mh->reg )
+            sh->install(mh->mod->get_name(), mh->reg);
     }
 }
 
@@ -1312,12 +1322,12 @@ static void make_rule(ostream& os, const Module* m, const RuleMap* r)
 // (we don't want to suppress it because it could mean something is broken)
 void ModuleManager::load_rules(SnortConfig* sc)
 {
-    s_modules.sort(comp_gids);
-    push_parse_location("builtin");
+    auto mod_hooks = get_all_modhooks();
+    mod_hooks.sort(comp_gids);
 
-    for ( auto p : s_modules )
+    for ( auto* mh : mod_hooks )
     {
-        const Module* m = p->mod;
+        const Module* m = mh->mod;
         const RuleMap* r = m->get_rules();
 
         if ( !r )
@@ -1332,107 +1342,232 @@ void ModuleManager::load_rules(SnortConfig* sc)
 
             // note:  you can NOT do ss.str().c_str() here
             const string& rule = ss.str();
-            ParseConfigString(sc, rule.c_str());
+            parse_rules_string(sc, rule.c_str());
 
             r++;
         }
     }
-    pop_parse_location();
 }
 
-void ModuleManager::dump_rules(const char* pfx)
+void ModuleManager::dump_stats(SnortConfig*, const char* skip, bool dynamic)
 {
-    s_modules.sort(comp_gids);
-    unsigned len = pfx ? strlen(pfx) : 0;
-    unsigned c = 0;
+    auto mod_hooks = get_all_modhooks();
+    mod_hooks.sort(comp_mods);
 
-    for ( auto p : s_modules )
+    for ( auto* mh : mod_hooks )
     {
-        const Module* m = p->mod;
-
-        if ( pfx && strncmp(m->get_name(), pfx, len) )
-            continue;
-
-        const RuleMap* r = m->get_rules();
-
-        if ( !r )
-            continue;
-
-        ostream& ss = cout;
-
-        while ( r->msg )
-        {
-            make_rule(ss, m, r);
-            r++;
-        }
-        c++;
-    }
-    if ( !c )
-        cout << "no match" << endl;
-}
-
-void ModuleManager::dump_msg_map(const char* pfx)
-{
-    s_modules.sort(comp_gids);
-    unsigned len = pfx ? strlen(pfx) : 0;
-    unsigned c = 0;
-
-    for ( auto p : s_modules )
-    {
-        const Module* m = p->mod;
-
-        if ( pfx && strncmp(m->get_name(), pfx, len) )
-            continue;
-
-        const RuleMap* r = m->get_rules();
-
-        if ( !r )
-            continue;
-
-        unsigned gid = m->get_gid();
-
-        while ( r->msg )
-        {
-            cout << gid << " || " << r->sid << " || ";
-            cout << m->get_name() << ": ";
-            cout << r->msg << endl;
-            r++;
-        }
-        c++;
-    }
-    if ( !c )
-        cout << "no match" << endl;
-}
-
-void ModuleManager::dump_stats(SnortConfig*, const char* skip)
-{
-    for ( auto p : s_modules )
-    {
-        if ( !skip || !strstr(skip, p->mod->get_name()) )
+        if ( !skip || !strstr(skip, mh->mod->get_name()) )
         {
             std::lock_guard<std::mutex> lock(stats_mutex);
-            p->mod->show_stats();
+            if ( dynamic )
+                mh->mod->show_dynamic_stats();
+            else
+                mh->mod->show_stats();
         }
     }
 }
 
 void ModuleManager::accumulate(SnortConfig*)
 {
-    for ( auto p : s_modules )
+    auto mod_hooks = get_all_modhooks();
+
+    for ( auto* mh : mod_hooks )
     {
         std::lock_guard<std::mutex> lock(stats_mutex);
-        p->mod->sum_stats(true);
+        mh->mod->prep_counts();
+        mh->mod->sum_stats(true);
     }
-    std::lock_guard<std::mutex> lock(stats_mutex);
-    pc_sum();
+}
+
+void ModuleManager::accumulate_offload(const char* name)
+{
+    ModHook* mh = get_hook(name);
+    if ( mh )
+    {
+        std::lock_guard<std::mutex> lock(stats_mutex);
+        mh->mod->prep_counts();
+        mh->mod->sum_stats(true);
+    }
 }
 
 void ModuleManager::reset_stats(SnortConfig*)
 {
-    for ( auto p : s_modules )
+    auto mod_hooks = get_all_modhooks();
+
+    for ( auto* mh : mod_hooks )
     {
         std::lock_guard<std::mutex> lock(stats_mutex);
-        p->mod->reset_stats();
+        mh->mod->reset_stats();
     }
+}
+
+//-------------------------------------------------------------------------
+// parameter loading
+//-------------------------------------------------------------------------
+
+static void load_table(string&, const Parameter*);
+
+static void load_field(string& key, const Parameter* p)
+{
+    unsigned n = key.size();
+
+    if ( p->name )
+    {
+        if ( n )
+            key += ".";
+        key += p->name;
+    }
+
+    if ( p->type == Parameter::PT_TABLE or p->type == Parameter::PT_LIST )
+        load_table(key, (const Parameter*)p->range);
+
+    else
+        s_pmap[key] = p;
+
+    key.erase(n);
+}
+
+static void load_table(string& key, const Parameter* p)
+{
+    while ( p && p->name )
+        load_field(key, p++);
+}
+
+void ModuleManager::load_params()
+{
+    auto mod_hooks = get_all_modhooks();
+    mod_hooks.sort(comp_mods);
+
+    for ( auto* mh : mod_hooks )
+    {
+        Module* m = mh->mod;
+        string s;
+
+        if ( m->is_list() )
+        {
+            s = m->name;
+
+            if ( m->params->name )
+                load_table(s, m->params);
+            else
+                load_field(s, m->params);
+        }
+        else if ( m->is_table() )
+        {
+            s = m->name;
+            load_table(s, m->params);
+        }
+        else
+        {
+            load_field(s, m->params);
+        }
+
+        s = m->name;
+
+        if ( m->default_params )
+            load_table(s, m->default_params);
+    }
+}
+
+const Parameter* ModuleManager::get_parameter(const char* table, const char* option)
+{
+    string key = table;
+    key += '.';
+    key += option;
+
+    auto a = s_pmap.find(key);
+
+    if (a != s_pmap.end() )
+        return a->second;
+
+    return nullptr;
+}
+
+//--------------------------------------------------------------------------
+// builtin rule outputs
+//--------------------------------------------------------------------------
+
+struct RulePtr
+{
+    const Module* mod;
+    const RuleMap* rule;
+
+    RulePtr(const Module* m, const RuleMap* r) : mod(m), rule(r) { }
+
+    bool operator< (RulePtr& rhs) const
+    {
+        if ( mod->get_gid() != rhs.mod->get_gid() )
+            return mod->get_gid() < rhs.mod->get_gid();
+
+         return rule->sid < rhs.rule->sid;
+    }
+};
+
+static std::vector<RulePtr> get_rules(const char* pfx, bool exact = false)
+{
+    auto mod_hooks = get_all_modhooks();
+    std::vector<RulePtr> rule_set;
+
+    for ( auto* mh : mod_hooks )
+    {
+        const Module* m = mh->mod;
+
+        if ( !selected(m, pfx, exact) )
+            continue;
+
+        const RuleMap* r = m->get_rules();
+
+        if ( !r )
+            continue;
+
+        while ( r->msg )
+            rule_set.push_back(RulePtr(m, r++));
+    }
+    std::sort(rule_set.begin(), rule_set.end());
+    return rule_set;
+}
+
+void ModuleManager::dump_rules(const char* pfx)
+{
+    std::vector<RulePtr> rule_set = get_rules(pfx);
+
+    for ( auto rp : rule_set )
+        make_rule(cout, rp.mod, rp.rule);
+
+    if ( !rule_set.size() )
+        cout << "no match" << endl;
+}
+
+void ModuleManager::show_rules(const char* pfx, bool exact)
+{
+    std::vector<RulePtr> rule_set = get_rules(pfx, exact);
+
+    for ( auto rp : rule_set )
+    {
+        cout << Markup::item();
+        cout << Markup::emphasis_on();
+        cout << rp.mod->get_gid() << ":" << rp.rule->sid;
+        cout << Markup::emphasis_off();
+        cout << " (" << rp.mod->get_name() << ")";
+        cout << " " << rp.rule->msg;
+        cout << endl;
+    }
+    if ( !rule_set.size() )
+        cout << "no match" << endl;
+}
+
+void ModuleManager::dump_msg_map(const char* pfx)
+{
+    std::vector<RulePtr> rule_set = get_rules(pfx);
+
+    for ( auto rp : rule_set )
+    {
+        cout << rp.mod->get_gid() << " || ";
+        cout << rp.rule->sid << " || ";
+        cout << rp.mod->get_name() << ": ";
+        cout << rp.rule->msg << endl;
+    }
+    if ( !rule_set.size() )
+        cout << "no match" << endl;
 }
 

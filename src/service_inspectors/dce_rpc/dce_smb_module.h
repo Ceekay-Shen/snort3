@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -25,17 +25,13 @@
 #include "framework/module.h"
 #include "dce_list.h"
 
+namespace snort
+{
 struct SnortConfig;
+}
 
 #define DCE2_VALID_SMB_VERSION_FLAG_V1 1
 #define DCE2_VALID_SMB_VERSION_FLAG_V2 2
-
-enum dce2SmbFileInspection
-{
-    DCE2_SMB_FILE_INSPECTION_OFF = 0,
-    DCE2_SMB_FILE_INSPECTION_ON,
-    DCE2_SMB_FILE_INSPECTION_ONLY
-};
 
 enum dce2SmbFingerprintPolicy
 {
@@ -55,32 +51,33 @@ struct dce2SmbShare
 
 struct dce2SmbProtoConf
 {
-    dce2CoProtoConf common;
+    dce2CoProtoConf common; // This member must be first
     dce2SmbFingerprintPolicy smb_fingerprint_policy;
     uint8_t smb_max_chain;
     uint8_t smb_max_compound;
     uint16_t smb_valid_versions_mask;
-    dce2SmbFileInspection smb_file_inspection;
     int16_t smb_file_depth;
     DCE2_List* smb_invalid_shares;
     bool legacy_mode;
 };
 
-class Dce2SmbModule : public Module
+extern Trace TRACE_NAME(dce_smb);
+
+class Dce2SmbModule : public snort::Module
 {
 public:
     Dce2SmbModule();
     ~Dce2SmbModule() override;
 
-    bool set(const char*, Value&, SnortConfig*) override;
+    bool set(const char*, snort::Value&, snort::SnortConfig*) override;
 
     unsigned get_gid() const override
     { return GID_DCE2; }
 
-    const RuleMap* get_rules() const override;
+    const snort::RuleMap* get_rules() const override;
     const PegInfo* get_pegs() const override;
     PegCount* get_counts() const override;
-    ProfileStats* get_profile(unsigned, const char*&, const char*&) const override;
+    snort::ProfileStats* get_profile() const override;
     void get_data(dce2SmbProtoConf&);
 
     Usage get_usage() const override
@@ -92,25 +89,8 @@ private:
 
 void print_dce2_smb_conf(dce2SmbProtoConf& config);
 
-inline bool DCE2_ScSmbFileInspection(const dce2SmbProtoConf* sc)
-{
-    if (sc == nullptr)
-        return false;
-    return ((sc->smb_file_inspection == DCE2_SMB_FILE_INSPECTION_ON)
-           || (sc->smb_file_inspection == DCE2_SMB_FILE_INSPECTION_ONLY));
-}
-
-inline bool DCE2_ScSmbFileInspectionOnly(const dce2SmbProtoConf* sc)
-{
-    if (sc == nullptr)
-        return false;
-    return sc->smb_file_inspection == DCE2_SMB_FILE_INSPECTION_ONLY;
-}
-
 inline int64_t DCE2_ScSmbFileDepth(const dce2SmbProtoConf* sc)
 {
-    if (!DCE2_ScSmbFileInspection(sc))
-        return -1;
     return sc->smb_file_depth;
 }
 

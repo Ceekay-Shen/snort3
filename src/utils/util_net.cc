@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2003-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -26,7 +26,9 @@
 #include "sfip/sf_cidr.h"
 #include "util_cstring.h"
 
-char* ObfuscateIpToText(const SfIp* ip, SfCidr& homenet, SfCidr& obfunet, InetBuf& ab)
+namespace snort
+{
+char* ObfuscateIpToText(const SfIp* ip, const SfCidr& homenet, SfCidr& obfunet, InetBuf& ab)
 {
     ab[0] = 0;
 
@@ -42,12 +44,11 @@ char* ObfuscateIpToText(const SfIp* ip, SfCidr& homenet, SfCidr& obfunet, InetBu
     }
     else
     {
-        SfIp tmp;
-        tmp.set(*ip);
+        SfIp tmp(*ip);
 
         if ( homenet.is_set() )
         {
-            if ( homenet.contains(&tmp) == SFIP_CONTAINS )
+            if ( homenet.contains(ip) == SFIP_CONTAINS )
                 tmp.obfuscate(&obfunet);
         }
         else
@@ -55,10 +56,10 @@ char* ObfuscateIpToText(const SfIp* ip, SfCidr& homenet, SfCidr& obfunet, InetBu
             tmp.obfuscate(&obfunet);
         }
 
-        const char* tmp_buf = tmp.ntoa();
-        SnortSnprintf(ab, sizeof(ab), "%s", tmp_buf);
+        SfIpString ip_str;
+        SnortSnprintf(ab, sizeof(ab), "%s", tmp.ntop(ip_str));
     }
 
     return ab;
 }
-
+}

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -24,26 +24,24 @@
 
 #include "tcp_module.h"
 
+#include "main/snort_config.h"
 #include "profiler/profiler_defs.h"
+#include "stream/paf.h"
 
-using namespace std;
+using namespace snort;
 
 //-------------------------------------------------------------------------
 // stream_tcp module
 //-------------------------------------------------------------------------
 
 THREAD_LOCAL ProfileStats s5TcpPerfStats;
-THREAD_LOCAL ProfileStats s5TcpNewSessPerfStats;
-THREAD_LOCAL ProfileStats s5TcpStatePerfStats;
-THREAD_LOCAL ProfileStats s5TcpDataPerfStats;
-THREAD_LOCAL ProfileStats s5TcpInsertPerfStats;
-THREAD_LOCAL ProfileStats s5TcpPAFPerfStats;
-THREAD_LOCAL ProfileStats s5TcpFlushPerfStats;
-THREAD_LOCAL ProfileStats s5TcpBuildPacketPerfStats;
 
 const PegInfo tcp_pegs[] =
 {
     SESSION_PEGS("tcp"),
+    { CountType::SUM, "instantiated", "new sessions instantiated" },
+    { CountType::SUM, "setups", "session initializations" },
+    { CountType::SUM, "restarts", "sessions restarted" },
     { CountType::SUM, "resyns", "SYN received on established session" },
     { CountType::SUM, "discards", "tcp packets discarded" },
     { CountType::SUM, "events", "events generated" },
@@ -78,7 +76,16 @@ const PegInfo tcp_pegs[] =
     { CountType::SUM, "syns", "number of syn packets" },
     { CountType::SUM, "syn_acks", "number of syn-ack packets" },
     { CountType::SUM, "resets", "number of reset packets" },
-    { CountType::SUM, "fins", "number of fin packets"},
+    { CountType::SUM, "fins", "number of fin packets" },
+    { CountType::SUM, "packets_held", "number of packets held" },
+    { CountType::SUM, "held_packet_rexmits", "number of retransmits of held packets" },
+    { CountType::SUM, "held_packets_dropped", "number of held packets dropped" },
+    { CountType::SUM, "held_packets_passed", "number of held packets passed" },
+    { CountType::NOW, "cur_packets_held", "number of packets currently held" },
+    { CountType::MAX, "max_packets_held", "maximum number of packets held simultaneously" },
+    { CountType::SUM, "held_packet_limit_exceeded", "number of times limit of max held packets exceeded" },
+    { CountType::SUM, "partial_flushes", "number of partial flushes initiated" },
+    { CountType::SUM, "partial_flush_bytes", "partial flush total bytes" },
     { CountType::END, nullptr, nullptr }
 };
 
@@ -128,20 +135,20 @@ THREAD_LOCAL TcpStats tcpStats;
 static const Parameter stream_tcp_small_params[] =
 {
     { "count", Parameter::PT_INT, "0:2048", "0",
-      "limit number of small segments queued" },
+      "number of consecutive TCP small segments considered to be excessive (129:12)" },
 
     { "maximum_size", Parameter::PT_INT, "0:2048", "0",
-      "limit number of small segments queued" },
+      "minimum bytes for a TCP segment not to be considered small (129:12)" },
 
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
 };
 
 static const Parameter stream_queue_limit_params[] =
 {
-    { "max_bytes", Parameter::PT_INT, "0:", "1048576",
+    { "max_bytes", Parameter::PT_INT, "0:max32", "1048576",
       "don't queue more than given bytes per session and direction" },
 
-    { "max_segments", Parameter::PT_INT, "0:", "2621",
+    { "max_segments", Parameter::PT_INT, "0:max32", "2621",
       "don't queue more than given segments per session and direction" },
 
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
@@ -149,20 +156,22 @@ static const Parameter stream_queue_limit_params[] =
 
 static const Parameter s_params[] =
 {
-    { "flush_factor", Parameter::PT_INT, "0:", "0",
+    { "flush_factor", Parameter::PT_INT, "0:65535", "0",
       "flush upon seeing a drop in segment size after given number of non-decreasing segments" },
 
-    { "ignore_any_rules", Parameter::PT_BOOL, nullptr, "false",
-      "process tcp content rules w/o ports only if rules with ports are present" },
-
     { "max_window", Parameter::PT_INT, "0:1073725440", "0",
-      "maximum allowed tcp window" },
+      "maximum allowed TCP window" },
 
-    { "overlap_limit", Parameter::PT_INT, "0:255", "0",
+    { "overlap_limit", Parameter::PT_INT, "0:max32", "0",
       "maximum number of allowed overlapping segments per session" },
 
     { "max_pdu", Parameter::PT_INT, "1460:32768", "16384",
       "maximum reassembled PDU size" },
+
+    // FIXIT-H: This should become an API call so that
+    // an inspector can enable no-ack processing on specific flows
+    { "no_ack", Parameter::PT_BOOL, nullptr, "false",
+      "received data is implicitly acked immediately" },
 
     { "policy", Parameter::PT_ENUM, TCP_POLICIES, "bsd",
       "determines operating system characteristics like reassembly" },
@@ -170,7 +179,7 @@ static const Parameter s_params[] =
     { "reassemble_async", Parameter::PT_BOOL, nullptr, "true",
       "queue data for reassembly before traffic is seen in both directions" },
 
-    { "require_3whs", Parameter::PT_INT, "-1:86400", "-1",
+    { "require_3whs", Parameter::PT_INT, "-1:max31", "-1",
       "don't track midstream sessions after given seconds from start up; -1 tracks all" },
 
     { "show_rebuilt_packets", Parameter::PT_BOOL, nullptr, "false",
@@ -182,8 +191,11 @@ static const Parameter s_params[] =
     { "small_segments", Parameter::PT_TABLE, stream_tcp_small_params, nullptr,
       "limit number of small segments queued" },
 
-    { "session_timeout", Parameter::PT_INT, "1:86400", "30",
+    { "session_timeout", Parameter::PT_INT, "1:max31", "30",
       "session tracking timeout" },
+
+    { "track_only", Parameter::PT_BOOL, nullptr, "false",
+      "disable reassembly if true" },
 
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
 };
@@ -235,39 +247,9 @@ ProfileStats* StreamTcpModule::get_profile(
         return &s5TcpPerfStats;
 
     case 1:
-        name = "tcpNewSess";
-        parent = "stream_tcp";
-        return &s5TcpNewSessPerfStats;
-
-    case 2:
-        name = "tcpState";
-        parent = "stream_tcp";
-        return &s5TcpStatePerfStats;
-
-    case 3:
-        name = "tcpData";
-        parent = "tcpState";
-        return &s5TcpDataPerfStats;
-
-    case 4:
-        name = "tcpPktInsert";
-        parent = "tcpData";
-        return &s5TcpInsertPerfStats;
-
-    case 5:
-        name = "tcpPAF";
-        parent = "tcpState";
-        return &s5TcpPAFPerfStats;
-
-    case 6:
-        name = "tcpFlush";
-        parent = "tcpState";
-        return &s5TcpFlushPerfStats;
-
-    case 7:
-        name = "tcpBuildPacket";
-        parent = "tcpFlush";
-        return &s5TcpBuildPacketPerfStats;
+        name = "paf";
+        parent = nullptr;
+        return &pafPerfStats;
     }
     return nullptr;
 }
@@ -282,37 +264,37 @@ TcpStreamConfig* StreamTcpModule::get_data()
 bool StreamTcpModule::set(const char*, Value& v, SnortConfig*)
 {
     if ( v.is("count") )
-        config->max_consec_small_segs = v.get_long();
+        config->max_consec_small_segs = v.get_uint16();
 
     else if ( v.is("maximum_size") )
-        config->max_consec_small_seg_size = v.get_long();
+        config->max_consec_small_seg_size = v.get_uint16();
 
     else if ( v.is("flush_factor") )
-        config->flush_factor = v.get_long();
-
-    else if ( v.is("ignore_any_rules") )
-        config->flags |= STREAM_CONFIG_IGNORE_ANY;
+        config->flush_factor = v.get_uint16();
 
     else if ( v.is("max_bytes") )
-        config->max_queued_bytes = v.get_long();
+        config->max_queued_bytes = v.get_uint32();
 
     else if ( v.is("max_segments") )
-        config->max_queued_segs = v.get_long();
+        config->max_queued_segs = v.get_uint32();
 
     else if ( v.is("max_window") )
-        config->max_window = v.get_long();
+        config->max_window = v.get_uint32();
 
     else if ( v.is("max_pdu") )
-        config->paf_max = v.get_long();
+        config->paf_max = v.get_uint16();
+
+    else if ( v.is("no_ack") )
+        config->no_ack = v.get_bool();
 
     else if ( v.is("policy") )
-        config->policy = static_cast< StreamPolicy >( v.get_long() + 1 );
+        config->policy = static_cast< StreamPolicy >( v.get_uint8() );
 
     else if ( v.is("overlap_limit") )
-        config->overlap_limit = v.get_long();
+        config->overlap_limit = v.get_uint32();
 
     else if ( v.is("session_timeout") )
-        config->session_timeout = v.get_long();
+        config->session_timeout = v.get_uint32();
 
     else if ( v.is("reassemble_async") )
     {
@@ -323,7 +305,7 @@ bool StreamTcpModule::set(const char*, Value& v, SnortConfig*)
     }
     else if ( v.is("require_3whs") )
     {
-        config->hs_timeout = v.get_long();
+        config->hs_timeout = v.get_int32();
     }
     else if ( v.is("show_rebuilt_packets") )
     {
@@ -331,6 +313,13 @@ bool StreamTcpModule::set(const char*, Value& v, SnortConfig*)
             config->flags |= STREAM_CONFIG_SHOW_PACKETS;
         else
             config->flags &= ~STREAM_CONFIG_SHOW_PACKETS;
+    }
+    else if ( v.is("track_only") )
+    {
+        if ( v.get_bool() )
+            config->flags |= STREAM_CONFIG_NO_REASSEMBLY;
+        else
+            config->flags &= ~STREAM_CONFIG_NO_REASSEMBLY;
     }
     else
         return false;
@@ -353,8 +342,10 @@ bool StreamTcpModule::begin(const char* fqn, int, SnortConfig*)
     return true;
 }
 
-bool StreamTcpModule::end(const char*, int, SnortConfig*)
+bool StreamTcpModule::end(const char*, int, SnortConfig* sc)
 {
+    if ( config->hs_timeout >= 0 )
+        sc->set_run_flags(RUN_FLAG__TRACK_ON_SYN);
     return true;
 }
 

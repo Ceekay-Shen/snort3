@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2012-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -25,11 +25,14 @@
 // This provides a wrapper to start/stop file service
 
 #include "file_api/file_policy.h"
+#include "main/snort_config.h"
 #include "main/snort_types.h"
 
 class FileEnforcer;
 class FileCache;
 
+namespace snort
+{
 class SO_PUBLIC FileService
 {
 public:
@@ -38,6 +41,9 @@ public:
 
     // Called after permission is dropped
     static void post_init();
+
+    // Called during reload
+    static void verify_reload(SnortConfig*);
 
     // This must be called when snort exits
     static void close();
@@ -54,18 +60,15 @@ public:
     static bool is_file_service_enabled();
     static int64_t get_max_file_depth();
 
-    static FileEnforcer* get_file_enforcer() { return file_enforcer; }
     static FileCache* get_file_cache() { return file_cache; }
 
 private:
-    static void start_file_processing();
     static bool file_type_id_enabled;
     static bool file_signature_enabled;
     static bool file_capture_enabled;
     static bool file_processing_initiated;
-    static FileEnforcer* file_enforcer;
     static FileCache* file_cache;
 };
-
+} // namespace snort
 #endif
 

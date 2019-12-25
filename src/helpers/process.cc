@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -24,7 +24,7 @@
 
 #include <fcntl.h>
 
-#if defined(HAVE_MALLINFO) || defined(HAVE_MALLOC_TRIM)
+#if defined(HAVE_MALLOC_TRIM)
 #include <malloc.h>
 #endif
 
@@ -33,7 +33,7 @@
 
 #include "log/messages.h"
 #include "main.h"
-#include "main/snort.h"
+#include "main/oops_handler.h"
 #include "main/snort_config.h"
 #include "utils/stats.h"
 #include "utils/util.h"
@@ -41,6 +41,7 @@
 #include "markup.h"
 #include "ring.h"
 
+using namespace snort;
 using namespace std;
 
 #ifndef SIGNAL_SNORT_RELOAD
@@ -158,7 +159,7 @@ static void oops_handler(int signal)
 {
     // FIXIT-L what should we capture if this is the main thread?
     if ( !is_main_thread )
-        Snort::capture_packet();
+        OopsHandler::handle_crash();
 
     add_signal(signal, SIG_DFL, false);
     raise(signal);
@@ -375,26 +376,3 @@ void trim_heap()
     malloc_trim(0);
 #endif
 }
-
-void log_malloc_info()
-{
-#ifdef HAVE_MALLINFO
-    struct mallinfo mi = mallinfo();
-
-    LogLabel("heap usage");
-    LogCount("total non-mmapped bytes", mi.arena);
-    LogCount("bytes in mapped regions", mi.hblkhd);
-    LogCount("total allocated space", mi.uordblks);
-    LogCount("total free space", mi.fordblks);
-    LogCount("topmost releasable block", mi.keepcost);
-
-#ifdef DEBUG
-    LogCount("free chunks", mi.ordblks);
-    LogCount("free fastbin blocks", mi.smblks);
-    LogCount("mapped regions", mi.hblks);
-    LogCount("max total alloc space", mi.usmblks);
-    LogCount("free bytes in fastbins", mi.fsmblks);
-#endif
-#endif
-}
-

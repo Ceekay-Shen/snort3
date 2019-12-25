@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -23,12 +23,20 @@
 
 #include "ip_session.h"
 
+#include "framework/data_bus.h"
+#include "memory/memory_cap.h"
 #include "profiler/profiler_defs.h"
 #include "protocols/packet.h"
 
 #include "ip_defrag.h"
 #include "ip_ha.h"
 #include "stream_ip.h"
+
+#ifdef UNIT_TEST
+#include "catch/snort_catch.h"
+#endif
+
+using namespace snort;
 
 const PegInfo ip_pegs[] =
 {
@@ -49,7 +57,6 @@ const PegInfo ip_pegs[] =
     { CountType::SUM, "trackers_completed", "datagram trackers completed" },
     { CountType::SUM, "nodes_inserted", "fragments added to tracker" },
     { CountType::SUM, "nodes_deleted", "fragments deleted from tracker" },
-    { CountType::NOW, "memory_used", "current memory usage in bytes" },
     { CountType::SUM, "reassembled_bytes", "total reassembled bytes" },
     { CountType::SUM, "fragmented_bytes", "total fragmented bytes" },
     { CountType::END, nullptr, nullptr }
@@ -78,7 +85,7 @@ static void IpSessionCleanup(Flow* lws, FragTracker* tracker)
 // private packet processing methods
 //-------------------------------------------------------------------------
 
-static inline void UpdateSession(Packet* p, Flow* lws)
+static inline void update_session(Packet* p, Flow* lws)
 {
     lws->markup_packet_flags(p);
 
@@ -86,35 +93,34 @@ static inline void UpdateSession(Packet* p, Flow* lws)
     {
         if ( p->is_from_client() )
         {
-            DebugMessage(DEBUG_STREAM_STATE,
-                "Stream: Updating on packet from client\n");
-
             lws->ssn_state.session_flags |= SSNFLAG_SEEN_CLIENT;
         }
         else
         {
-            DebugMessage(DEBUG_STREAM_STATE,
-                "Stream: Updating on packet from server\n");
-
             lws->ssn_state.session_flags |= SSNFLAG_SEEN_SERVER;
         }
 
         if ( (lws->ssn_state.session_flags & SSNFLAG_SEEN_CLIENT) &&
             (lws->ssn_state.session_flags & SSNFLAG_SEEN_SERVER) )
         {
-            DebugMessage(DEBUG_STREAM_STATE,
-                "Stream: session established!\n");
-
             lws->ssn_state.session_flags |= SSNFLAG_ESTABLISHED;
-
             lws->set_ttl(p, false);
+
+            if ( p->type() == PktType::ICMP and p->ptrs.icmph)
+            {
+                DataBus::publish(STREAM_ICMP_BIDIRECTIONAL_EVENT, p);
+            }
+            else
+            {
+                DataBus::publish(STREAM_IP_BIDIRECTIONAL_EVENT, p);
+            }
         }
     }
 
     // Reset the session timeout.
+    if ( lws->ssn_server )
     {
-        StreamIpConfig* pc = get_ip_cfg(lws->ssn_server);
-        lws->set_expire(p, pc->session_timeout);
+        lws->set_expire(p, lws->default_session_timeout);
     }
 }
 
@@ -123,8 +129,10 @@ static inline void UpdateSession(Packet* p, Flow* lws)
 //-------------------------------------------------------------------------
 
 IpSession::IpSession(Flow* flow) : Session(flow)
-{
-}
+{ memory::MemoryCap::update_allocations(sizeof(*this)); }
+
+IpSession::~IpSession()
+{ memory::MemoryCap::update_deallocations(sizeof(*this)); }
 
 void IpSession::clear()
 {
@@ -136,15 +144,16 @@ void IpSession::clear()
     }
 
     IpSessionCleanup(flow, &tracker);
-    IpHAManager::process_deletion(flow);
+    IpHAManager::process_deletion(*flow);
 }
 
 bool IpSession::setup(Packet* p)
 {
-    DebugMessage(DEBUG_STREAM, "Stream IP session created!\n");
-
     SESSION_STATS_ADD(ip_stats);
     memset(&tracker, 0, sizeof(tracker));
+
+    StreamIpConfig* pc = get_ip_cfg(flow->ssn_server);
+    flow->set_default_session_timeout(pc->session_timeout, false);
 
     if ( p->ptrs.decode_flags & DECODE_FRAG )
     {
@@ -155,7 +164,6 @@ bool IpSession::setup(Packet* p)
     if ( Stream::expected_flow(flow, p) )
     {
         ip_stats.sessions--; // Incremented in SESSION_STATS_ADD
-        MODULE_PROFILE_END(ip_perf_stats);
         return false;
     }
 #endif
@@ -175,10 +183,10 @@ int IpSession::process(Packet* p)
         if ( Stream::expected_flow(flow, p) )
             return 0;
 #endif
-        IpHAManager::process_deletion(flow);
+        IpHAManager::process_deletion(*flow);
     }
 
-    if ( Stream::blocked_flow(flow, p) || Stream::ignored_flow(flow, p) )
+    if ( Stream::blocked_flow(p) || Stream::ignored_flow(flow, p) )
         return 0;
 
     if ( p->ptrs.decode_flags & DECODE_FRAG )
@@ -187,7 +195,7 @@ int IpSession::process(Packet* p)
         d->process(p, &tracker);
     }
 
-    UpdateSession(p, flow);
+    update_session(p, flow);
 
     return 0;
 }
@@ -229,3 +237,47 @@ bool IpSession::check_alerted(Packet* p, uint32_t gid, uint32_t sid)
     return false;
 }
 
+#ifdef UNIT_TEST
+
+// dummy
+class StreamIp : public Inspector
+{
+public:
+    StreamIp(StreamIpConfig*);
+    ~StreamIp() override;
+
+    bool configure(SnortConfig*) override;
+    void show(SnortConfig*) override;
+    NORETURN_ASSERT void eval(Packet*) override;
+    StreamIpConfig* config;
+    Defrag* defrag;
+};
+
+TEST_CASE("IP Session", "[ip_session]")
+{
+    Flow lws;
+    Packet p(false);
+    DAQ_PktHdr_t dh = {};
+    p.pkth = &dh;
+
+    SECTION("update_session without inspector")
+    {
+        lws.ssn_server = nullptr;
+
+        update_session(&p, &lws);
+        CHECK(lws.expire_time == 0);
+    }
+
+    SECTION("update_session with inspector")
+    {
+        StreamIpConfig* sic = new StreamIpConfig;
+        sic->session_timeout = 360;
+        lws.set_default_session_timeout(sic->session_timeout, true);
+        StreamIp si(sic);
+        lws.ssn_server = &si;
+
+        update_session(&p, &lws);
+        CHECK(lws.expire_time == 360);
+    }
+}
+#endif

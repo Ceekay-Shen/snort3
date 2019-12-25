@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2004-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -55,6 +55,8 @@
 
 #include "ft_main.h"
 #include "ftpp_return_codes.h"
+
+using namespace snort;
 
 unsigned FtpFlowData::inspector_id = 0;
 unsigned TelnetFlowData::inspector_id = 0;
@@ -517,8 +519,8 @@ int FTPsessionInspection(
  */
 int SetSiInput(FTPP_SI_INPUT* SiInput, Packet* p)
 {
-    SiInput->sip.set(*p->ptrs.ip_api.get_src());
-    SiInput->dip.set(*p->ptrs.ip_api.get_dst());
+    SiInput->sip = *p->ptrs.ip_api.get_src();
+    SiInput->dip = *p->ptrs.ip_api.get_dst();
     SiInput->sport = p->ptrs.sp;
     SiInput->dport = p->ptrs.dp;
 

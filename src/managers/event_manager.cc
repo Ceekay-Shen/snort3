@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -32,6 +32,7 @@
 
 #include "module_manager.h"
 
+using namespace snort;
 using namespace std;
 
 struct Output
@@ -50,7 +51,6 @@ typedef list<Output*> OutputList;
 static OutputList s_outputs;
 
 typedef list<Logger*> EHList;
-static EHList s_handlers;
 
 struct OutputSet
 {
@@ -70,7 +70,7 @@ void EventManager::add_plugin(const LogApi* api)
 {
     // can't assert - alert_sf_socket operates differently
     //assert(api->flags & (OUTPUT_TYPE_FLAG__ALERT | OUTPUT_TYPE_FLAG__LOG));
-    s_outputs.push_back(new Output(api));
+    s_outputs.emplace_back(new Output(api));
 }
 
 void EventManager::release_plugins()
@@ -144,7 +144,7 @@ void EventManager::add_output(OutputSet** ofn, Logger* eh)
     if ( !*ofn )
         *ofn = new OutputSet;
 
-    (*ofn)->outputs.push_back(eh);
+    (*ofn)->outputs.emplace_back(eh);
 }
 
 void EventManager::copy_outputs(OutputSet* dst, OutputSet* src)
@@ -173,7 +173,7 @@ void EventManager::instantiate(
     assert(p->handler);
 
     p->handler->set_api(p->api);
-    s_loggers.outputs.push_back(p->handler);
+    s_loggers.outputs.emplace_back(p->handler);
 }
 
 // command line outputs
@@ -198,7 +198,7 @@ void EventManager::instantiate(
     if ( p->handler )
     {
         // configured by conf
-        s_loggers.outputs.push_back(p->handler);
+        s_loggers.outputs.emplace_back(p->handler);
         return;
     }
     Module* mod = ModuleManager::get_default_module(name, sc);

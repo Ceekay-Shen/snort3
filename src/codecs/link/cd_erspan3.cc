@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -23,6 +23,8 @@
 
 #include "codecs/codec_module.h"
 #include "framework/codec.h"
+
+using namespace snort;
 
 #define CD_ERSPAN3_NAME "erspan3"
 #define CD_ERSPAN3_HELP "support for encapsulated remote switched port analyzer - type 3"
@@ -70,7 +72,7 @@ struct ERSpanType3Hdr
 } // anonymous namespace
 
 void Erspan3Codec::get_protocol_ids(std::vector<ProtocolId>& v)
-{ v.push_back(ProtocolId::ETHERTYPE_ERSPAN_TYPE3); }
+{ v.emplace_back(ProtocolId::ETHERTYPE_ERSPAN_TYPE3); }
 
 bool Erspan3Codec::decode(const RawData& raw, CodecData& codec, DecodeData&)
 {

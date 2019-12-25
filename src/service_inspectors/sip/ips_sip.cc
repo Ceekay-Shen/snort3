@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2011-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -34,6 +34,8 @@
 #include "protocols/packet.h"
 
 #include "sip.h"
+
+using namespace snort;
 
 enum SipIdx
 {
@@ -98,9 +100,9 @@ private:
 
 IpsOption::EvalStatus SipIpsOption::eval(Cursor& c, Packet* p)
 {
-    Profile profile(sip_ps[idx]);
+    RuleProfile profile(sip_ps[idx]);
 
-    if ((!p->is_tcp() && !p->is_udp()) || !p->flow || !p->dsize)
+    if ((!p->has_tcp_data() && !p->is_udp()) || !p->flow || !p->dsize)
         return NO_MATCH;
 
     // FIXIT-P cache id at parse time for runtime use

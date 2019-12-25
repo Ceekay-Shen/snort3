@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2011-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -36,6 +36,8 @@
 #include "protocols/packet.h"
 
 #include "sip.h"
+
+using namespace snort;
 
 //-------------------------------------------------------------------------
 // sip_method
@@ -101,7 +103,7 @@ bool SipMethodOption::operator==(const IpsOption& ips) const
 
 IpsOption::EvalStatus SipMethodOption::eval(Cursor&, Packet* p)
 {
-    Profile profile(sipMethodRuleOptionPerfStats);
+    RuleProfile profile(sipMethodRuleOptionPerfStats);
 
     if ( !p->flow )
         return NO_MATCH;
@@ -119,8 +121,8 @@ IpsOption::EvalStatus SipMethodOption::eval(Cursor&, Packet* p)
         if ( !ropts->method_data )
             return NO_MATCH;
 
-        //FIXIT-P This should really be evaluated once per request instead of once
-        //per rule option evaluation.
+        // FIXIT-P This should really be evaluated once per request instead of once
+        // per rule option evaluation.
         std::string method(ropts->method_data, ropts->method_len);
         std::transform(method.begin(), method.end(), method.begin(), ::toupper);
 

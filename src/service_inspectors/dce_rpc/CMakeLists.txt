@@ -4,8 +4,8 @@ set( FILE_LIST
     dce_co.h 
     dce_common.cc 
     dce_common.h 
-    dce_http_common.cc
-    dce_http_common.h 
+    dce_context_data.cc 
+    dce_context_data.h
     dce_http_proxy.cc
     dce_http_proxy_module.cc 
     dce_http_proxy_module.h 
@@ -57,9 +57,21 @@ set( FILE_LIST
 
 if (STATIC_INSPECTORS)
 
-    add_library(dce_rpc STATIC ${FILE_LIST})
+    add_library(dce_rpc OBJECT ${FILE_LIST})
 
 else (STATIC_INSPECTORS)
     add_dynamic_module(dce_rpc inspectors ${FILE_LIST})
 
 endif (STATIC_INSPECTORS)
+
+add_catch_test( dce_http_proxy_splitter_test
+    NO_TEST_SOURCE
+    SOURCES
+        dce_http_proxy_splitter.cc
+)
+
+add_catch_test( dce_http_server_splitter_test
+    NO_TEST_SOURCE
+    SOURCES
+        dce_http_server_splitter.cc
+)

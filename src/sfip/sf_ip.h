@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 1998-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -30,6 +30,10 @@
 #include "main/snort_types.h"
 #include "sfip/sf_returns.h"
 
+namespace snort
+{
+using SfIpString = char[INET6_ADDRSTRLEN];
+
 struct SfCidr;
 
 struct SO_PUBLIC SfIp
@@ -44,10 +48,12 @@ struct SO_PUBLIC SfIp
      * Modifiers
      */
     void clear();
-    void set(const SfIp& src);
     SfIpRet set(const char* src, uint16_t* srcBits = nullptr);
     /* Sets to a raw source IP (4 or 16 bytes, according to family) */
     SfIpRet set(const void* src, int fam);
+    /* Sets to a raw source IP, source must be a 128 bit IPv6 (detects IPv4 mapped IPv6)
+     * This is specifically for conversion of Flow_Stats_t ipv4 mapped ipv6 addresses */
+    SfIpRet set(const void* src);
     /* Converts string IP format to an array of values. Also checks IP address format. */
     SfIpRet pton(const int fam, const char* ip);
 
@@ -75,6 +81,7 @@ struct SO_PUBLIC SfIp
     bool fast_gt6(const SfIp& ip2) const;
     bool fast_eq6(const SfIp& ip2) const;
     bool fast_equals_raw(const SfIp& ip2) const;
+    bool operator==(const SfIp& ip2) const;
 
     /*
      * Miscellaneous
@@ -85,7 +92,7 @@ struct SO_PUBLIC SfIp
     bool is_private() const;
 
     const char* ntop(char* buf, int bufsize) const;
-    const char* ntoa() const;
+    const char* ntop(SfIpString) const;
 
     void obfuscate(SfCidr* ob);
 
@@ -113,17 +120,6 @@ inline void SfIp::clear()
 {
     family = 0;
     ip32[0] = ip32[1] = ip32[2] = ip32[3] = 0;
-}
-
-inline void SfIp::set(const SfIp& src)
-{
-    /* This is a simple structure, so is this really better than
-     *this = src?. */
-    family = src.family;
-    ip32[0] = src.ip32[0];
-    ip32[1] = src.ip32[1];
-    ip32[2] = src.ip32[2];
-    ip32[3] = src.ip32[3];
 }
 
 inline uint16_t SfIp::get_family() const
@@ -246,6 +242,10 @@ inline bool SfIp::_is_equals(const SfIp& rhs) const
     return false;
 }
 
+// FIXIT-L: when comparing ip4 vs ip6 we have !(ip4 < ip6) and !(ip6 < ip4).
+// This may be OK in some cases, but will not work e.g. on a binary tree
+// (stl::map) with SfIp as keys, whose implementation relies only on "<".
+// This affects SfIp::less_than() and SfIp::greater_than().
 inline bool SfIp::_is_lesser(const SfIp& rhs) const
 {
     if (is_ip4())
@@ -453,20 +453,23 @@ inline bool SfIp::fast_equals_raw(const SfIp& ip2) const
     return false;
 }
 
+inline bool SfIp::operator==(const SfIp& ip2) const
+{
+    return fast_equals_raw(ip2);
+}
+
 /* End of member function definitions */
 
 SO_PUBLIC const char* sfip_ntop(const SfIp* ip, char* buf, int bufsize);
 
 inline std::ostream& operator<<(std::ostream& os, const SfIp* addr)
 {
-    char str[INET6_ADDRSTRLEN];
-    sfip_ntop(addr, str, sizeof(str));
-    os << str;
-    return os;
+    SfIpString str;
+    return os << addr->ntop(str);
 }
 
-// FIXIT-L X This should be in utils_net if anywhere, but that makes it way harder to link into unit tests
+// FIXIT-L X This should be in utils_net if anywhere, but that makes it way
+// harder to link into unit tests
 SO_PUBLIC const char* snort_inet_ntop(int family, const void* ip_raw, char* buf, int bufsize);
-
+} // namespace snort
 #endif
-

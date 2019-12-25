@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 1998-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -23,6 +23,8 @@
 
 #include "sfip/sf_ip.h"
 
+namespace snort
+{
 /*
  * NOTE: As much as I'd love to make this a subclass of SfIp, member layout
  * is undefined for POD inheritance.
@@ -30,6 +32,11 @@
 
 struct SO_PUBLIC SfCidr
 {
+    /*
+     * Constructors
+     */
+    SfCidr() = default;
+
     /*
      * Modifiers (incl. convenience ones that delegate to addr)
      */
@@ -55,7 +62,7 @@ struct SO_PUBLIC SfCidr
     bool fast_cont6(const SfIp& ip) const;
     SfIpRet contains(const SfIp* ip) const;
 
-    const char* ntoa() const;
+    const char* ntop(SfIpString) const;
     SfIpRet compare(const SfCidr&) const;
 
 private:
@@ -72,13 +79,13 @@ inline void SfCidr::clear()
 
 inline void SfCidr::set(const SfCidr& src)
 {
-    addr.set(src.addr);
+    addr = src.addr;
     bits = src.bits;
 }
 
 inline void SfCidr::set(const SfIp& src)
 {
-    addr.set(src);
+    addr = src;
     bits = 128;
 }
 
@@ -159,9 +166,9 @@ inline bool SfCidr::fast_cont6(const SfIp& ip) const
     return ntohl(addr.get_ip6_ptr()[i]) == needle;
 }
 
-inline const char* SfCidr::ntoa() const
+inline const char* SfCidr::ntop(SfIpString ip_str) const
 {
-    return addr.ntoa();
+    return addr.ntop(ip_str);
 }
 
 inline SfIpRet SfCidr::compare(const SfCidr& cidr2) const
@@ -174,5 +181,5 @@ inline SfIpRet SfCidr::compare(const SfCidr& cidr2) const
     }
     return ret;
 }
-
+}
 #endif

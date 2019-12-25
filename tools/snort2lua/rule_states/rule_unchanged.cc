@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -34,7 +34,7 @@ namespace rules
  *  Examples are below the line marked 'FINISHED TEMPLATES'.
  */
 
-template<const std::string* rule_name, bool has_suboptions>
+template<const std::string* rule_name, bool has_suboptions, bool sticky>
 class UnchangedRuleOption : public ConversionState
 {
 public:
@@ -52,14 +52,17 @@ public:
             rule_api.add_option(*rule_name);
         }
 
+        if (sticky)
+            rule_api.reset_sticky();
+
         return set_next_rule_state(stream);
     }
 };
 
-template<const std::string* rule_name,  bool has_suboptions = true>
+template<const std::string* rule_name,  bool has_suboptions = true, bool sticky = false>
 static ConversionState* unchanged_rule_ctor(Converter& c)
 {
-    return new UnchangedRuleOption<rule_name, has_suboptions>(c);
+    return new UnchangedRuleOption<rule_name, has_suboptions, sticky>(c);
 }
 
 /****************************************
@@ -78,32 +81,6 @@ static const ConvertMap rule_msg =
 };
 
 const ConvertMap* msg_map = &rule_msg;
-
-/************************************
- **********  G I D ******************
- ************************************/
-
-static const std::string gid = "gid";
-static const ConvertMap rule_gid =
-{
-    gid,
-    unchanged_rule_ctor<& gid>,
-};
-
-const ConvertMap* gid_map = &rule_gid;
-
-/************************************
- **********  S I D  *****************
- ************************************/
-
-static const std::string sid = "sid";
-static const ConvertMap rule_sid =
-{
-    sid,
-    unchanged_rule_ctor<& sid>,
-};
-
-const ConvertMap* sid_map = &rule_sid;
 
 /************************************
  **********  R E V  *****************
@@ -464,7 +441,7 @@ static const std::string gtp_info = "gtp_info";
 static const ConvertMap rule_gtp_info =
 {
     gtp_info,
-    unchanged_rule_ctor<& gtp_info>,
+    unchanged_rule_ctor<& gtp_info, true, true>,
 };
 
 const ConvertMap* gtp_info_map = &rule_gtp_info;
@@ -503,7 +480,7 @@ static const std::string modbus_data = "modbus_data";
 static const ConvertMap rule_modbus_data =
 {
     modbus_data,
-    unchanged_rule_ctor<& modbus_data, false>,
+    unchanged_rule_ctor<& modbus_data, false, true>,
 };
 
 const ConvertMap* modbus_data_map = &rule_modbus_data;
@@ -542,7 +519,7 @@ static const std::string pkt_data = "pkt_data";
 static const ConvertMap rule_pkt_data =
 {
     pkt_data,
-    unchanged_rule_ctor<& pkt_data, false>,
+    unchanged_rule_ctor<& pkt_data, false, true>,
 };
 
 const ConvertMap* pkt_data_map = &rule_pkt_data;
@@ -568,7 +545,7 @@ static const std::string base64_data = "base64_data";
 static const ConvertMap rule_base64_data =
 {
     base64_data,
-    unchanged_rule_ctor<& base64_data, false>,
+    unchanged_rule_ctor<& base64_data, false, true>,
 };
 
 const ConvertMap* base64_data_map = &rule_base64_data;
@@ -620,7 +597,7 @@ static const std::string sip_body = "sip_body";
 static const ConvertMap rule_sip_body =
 {
     sip_body,
-    unchanged_rule_ctor<& sip_body, false>,
+    unchanged_rule_ctor<& sip_body, false, true>,
 };
 
 const ConvertMap* sip_body_map = &rule_sip_body;
@@ -633,7 +610,7 @@ static const std::string sip_header = "sip_header";
 static const ConvertMap rule_sip_header =
 {
     sip_header,
-    unchanged_rule_ctor<& sip_header, false>,
+    unchanged_rule_ctor<& sip_header, false, true>,
 };
 
 const ConvertMap* sip_header_map = &rule_sip_header;
@@ -685,7 +662,7 @@ static const std::string dnp3_data = "dnp3_data";
 static const ConvertMap rule_dnp3_data =
 {
     dnp3_data,
-    unchanged_rule_ctor<& dnp3_data, false>,
+    unchanged_rule_ctor<& dnp3_data, false, true>,
 };
 
 const ConvertMap* dnp3_data_map = &rule_dnp3_data;
@@ -711,7 +688,7 @@ static const std::string dce_stub_data = "dce_stub_data";
 static const ConvertMap rule_dce_stub_data =
 {
     dce_stub_data,
-    unchanged_rule_ctor<& dce_stub_data, false>,
+    unchanged_rule_ctor<& dce_stub_data, false, true>,
 };
 
 const ConvertMap* dce_stub_data_map = &rule_dce_stub_data;

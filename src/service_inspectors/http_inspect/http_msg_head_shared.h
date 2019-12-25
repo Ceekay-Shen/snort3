@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -22,10 +22,12 @@
 
 #include <bitset>
 
-#include "http_str_to_code.h"
+#include "http_common.h"
+#include "http_enum.h"
+#include "http_field.h"
 #include "http_header_normalizer.h"
 #include "http_msg_section.h"
-#include "http_field.h"
+#include "http_str_to_code.h"
 
 //-------------------------------------------------------------------------
 // HttpMsgHeadShared class
@@ -52,7 +54,7 @@ public:
 
 protected:
     HttpMsgHeadShared(const uint8_t* buffer, const uint16_t buf_size,
-        HttpFlowData* session_data_, HttpEnums::SourceId source_id_, bool buf_owner, Flow* flow_,
+        HttpFlowData* session_data_, HttpCommon::SourceId source_id_, bool buf_owner, snort::Flow* flow_,
         const HttpParaList* params_)
         : HttpMsgSection(buffer, buf_size, session_data_, source_id_, buf_owner, flow_, params_)
         { }
@@ -86,7 +88,7 @@ private:
     static const HeaderNormalizer* const header_norms[];
 
     // All of these are indexed by the relative position of the header field in the message
-    static const int MAX_HEADERS = 200;  // I'm an arbitrary number. FIXIT-L
+    static const int MAX_HEADERS = 200;  // I'm an arbitrary number. FIXIT-RC
     static const int MAX_HEADER_LENGTH = 4096; // Based on max cookie size of some browsers
 
     void parse_header_block();
@@ -95,28 +97,28 @@ private:
     void create_norm_head_list();
     void derive_header_name_id(int index);
 
-    std::bitset<MAX> headers_present = 0;
-    int32_t num_headers = HttpEnums::STAT_NOT_COMPUTE;
+    Field classic_raw_header;    // raw headers with cookies spliced out
+    Field classic_norm_header;   // URI normalization applied
+    Field classic_norm_cookie;   // URI normalization applied to concatenated cookie values
     Field* header_line = nullptr;
     Field* header_name = nullptr;
     HttpEnums::HeaderId* header_name_id = nullptr;
     Field* header_value = nullptr;
 
-    Field classic_raw_header;    // raw headers with cookies spliced out
-    Field classic_norm_header;   // URI normalization applied
-    Field classic_norm_cookie;   // URI normalization applied to concatenated cookie values
-
     struct NormalizedHeader
     {
         NormalizedHeader(HttpEnums::HeaderId id_) : id(id_) {}
-        const HttpEnums::HeaderId id;
-        int count;
+
         Field norm;
         NormalizedHeader* next;
+        int32_t count;
+        const HttpEnums::HeaderId id;
     };
-
-    NormalizedHeader* norm_heads = nullptr;
     NormalizedHeader* get_header_node(HttpEnums::HeaderId k) const;
+    NormalizedHeader* norm_heads = nullptr;
+
+    int32_t num_headers = HttpCommon::STAT_NOT_COMPUTE;
+    std::bitset<MAX> headers_present = 0;
 };
 
 #endif

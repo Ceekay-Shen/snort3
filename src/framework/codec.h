@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -31,10 +31,10 @@
 #include "utils/cpp_macros.h"
 
 struct TextLog;
-struct _daq_pkthdr;
-struct Packet;
-struct Layer;
-class Flow;
+struct _daq_msg;
+
+namespace snort
+{
 enum CodecSid : uint32_t;
 
 namespace ip
@@ -54,6 +54,9 @@ namespace icmp
 struct ICMPHdr;
 }
 
+class Flow;
+struct Layer;
+
 // Used by root codecs to add their DLT to their HELP string
 #define ADD_DLT(help, x) help " (DLT " STRINGIFY_MX(x) ")"
 
@@ -62,11 +65,12 @@ constexpr uint8_t MAX_TTL = 255;
 
 struct RawData
 {
-    const _daq_pkthdr* pkth;
+    const struct _daq_msg* daq_msg;
     const uint8_t* data;
     uint32_t len;
 
-    RawData(const _daq_pkthdr*, const uint8_t*);
+    RawData(const struct _daq_msg* daq_msg, const uint8_t* data, uint32_t len) :
+        daq_msg(daq_msg), data(data), len(len) { }
 };
 
 /*  Decode Flags */
@@ -122,7 +126,7 @@ struct CodecData
     /* Reset before each decode of packet begins */
 
     /*  Codec specific fields.  These fields are only relevant to codecs. */
-    uint16_t proto_bits;    /* protocols contained within this packet
+    uint32_t proto_bits;    /* protocols contained within this packet
                                  -- will be propogated to Snort++ Packet struct*/
     uint16_t codec_flags;   /* flags used while decoding */
     uint8_t ip_layer_cnt;
@@ -131,9 +135,10 @@ struct CodecData
     uint8_t ip6_extension_count; /* initialized in cd_ipv6.cc */
     uint8_t curr_ip6_extension;  /* initialized in cd_ipv6.cc */
     IpProtocol ip6_csum_proto;      /* initialized in cd_ipv6.cc.  Used for IPv6 checksums */
+    bool tunnel_bypass;
 
     CodecData(ProtocolId init_prot) : next_prot_id(init_prot), lyr_len(0),
-        invalid_bytes(0), proto_bits(0), codec_flags(0), ip_layer_cnt(0)
+        invalid_bytes(0), proto_bits(0), codec_flags(0), ip_layer_cnt(0), tunnel_bypass(false)
     { }
 
     bool inline is_cooked() const
@@ -364,7 +369,7 @@ private:
 //-------------------------------------------------------------------------
 
 // this is the current version of the api
-#define CDAPI_VERSION ((BASE_API_VERSION << 16) | 0)
+#define CDAPI_VERSION ((BASE_API_VERSION << 16) | 1)
 
 typedef Codec* (* CdNewFunc)(Module*);
 typedef void (* CdDelFunc)(Codec*);
@@ -385,6 +390,6 @@ struct CodecApi
     CdNewFunc ctor;   // get eval optional instance data
     CdDelFunc dtor;   // clean up instance data
 };
-
+}
 #endif /* FRAMEWORK_CODEC_H */
 

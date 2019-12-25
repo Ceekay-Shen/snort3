@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2003-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -37,16 +37,18 @@
 
 #include "hash/ghash.h"
 #include "hash/xhash.h"
+#include "main/thread.h"
 #include "sfip/sf_ipvar.h"
 #include "utils/dyn_array.h"
 #include "utils/sflsq.h"
 #include "utils/util.h"
 
+using namespace snort;
+
 //  Debug Printing
 //#define THD_DEBUG
 
-// This disables adding and testing of Threshold objects
-//#define CRIPPLE
+THREAD_LOCAL EventFilterStats event_filter_stats;
 
 XHash* sfthd_new_hash(unsigned nbytes, size_t key, size_t data)
 {
@@ -119,7 +121,6 @@ THD_STRUCT* sfthd_new(unsigned lbytes, unsigned gbytes)
     /* Create the THD struct */
     thd = (THD_STRUCT*)snort_calloc(sizeof(THD_STRUCT));
 
-#ifndef CRIPPLE
     /* Create hash table for all of the local IP Nodes */
     thd->ip_nodes = sfthd_local_new(lbytes);
     if ( !thd->ip_nodes )
@@ -145,7 +146,6 @@ THD_STRUCT* sfthd_new(unsigned lbytes, unsigned gbytes)
         snort_free(thd);
         return nullptr;
     }
-#endif
 
     return thd;
 }
@@ -235,13 +235,11 @@ void sfthd_free(THD_STRUCT* thd)
     if (thd == nullptr)
         return;
 
-#ifndef CRIPPLE
     if (thd->ip_nodes != nullptr)
         xhash_delete(thd->ip_nodes);
 
     if (thd->ip_gnodes != nullptr)
         xhash_delete(thd->ip_gnodes);
-#endif
 
     snort_free(thd);
 }
@@ -305,10 +303,6 @@ static int sfthd_create_threshold_local(
 
     if ( config->gen_id >= THD_MAX_GENID )
         return -1;
-
-#ifdef CRIPPLE
-    return 0;
-#endif
 
     /* Check for an existing 'gen_id' entry, if none found create one. */
     if (thd_objs->sfthd_array[config->gen_id] == nullptr)
@@ -655,12 +649,10 @@ static char* printIP(unsigned u, char* buf, unsigned len)
 int sfthd_test_rule(XHash* rule_hash, THD_NODE* sfthd_node,
     const SfIp* sip, const SfIp* dip, long curtime)
 {
-    int status;
-
     if ((rule_hash == nullptr) || (sfthd_node == nullptr))
         return 0;
 
-    status = sfthd_test_local(rule_hash, sfthd_node, sip, dip, curtime);
+    int status = sfthd_test_local(rule_hash, sfthd_node, sip, dip, curtime);
 
     return (status < -1) ? 1 : status;
 }
@@ -678,7 +670,6 @@ static inline int sfthd_test_suppress(
 #endif
         /* Don't log, and stop looking( event's to this address
          * for this gen_id+sig_id) */
-        sfthd_node->filtered++;
         return -1;
     }
     return 1; /* Keep looking for other suppressors */
@@ -727,7 +718,6 @@ static inline int sfthd_test_non_suppress(
 
         /* Don't Log yet, don't keep looking:
          * already logged our limit, don't log this sid  */
-        sfthd_node->filtered++;
         return -2;
     }
     if ( sfthd_node->type == THD_TYPE_LIMIT )
@@ -757,7 +747,6 @@ static inline int sfthd_test_non_suppress(
 
         /* Don't Log yet, don't keep looking:
          * already logged our limit, don't log this sid  */
-        sfthd_node->filtered++;
         return -2;
     }
     else if ( sfthd_node->type == THD_TYPE_THRESHOLD )
@@ -779,7 +768,6 @@ static inline int sfthd_test_non_suppress(
             sfthd_ip_node->tstart= curtime;
             return 0; /* Log it, stop looking */
         }
-        sfthd_node->filtered++;
         return -2; /* don't log yet */
     }
     else if ( sfthd_node->type == THD_TYPE_BOTH )
@@ -796,7 +784,6 @@ static inline int sfthd_test_non_suppress(
 
             /* Don't Log yet, keep looking:
              * only log after we reach count, which must be > '1' */
-            sfthd_node->filtered++;
             return -2;
         }
         else
@@ -807,7 +794,6 @@ static inline int sfthd_test_non_suppress(
                 {
                     /* don't log it, stop looking:
                      * log once per time interval - than block it */
-                    sfthd_node->filtered++;
                     return -2;
                 }
                 /* Log it, stop looking:
@@ -818,7 +804,6 @@ static inline int sfthd_test_non_suppress(
             {
                 /* don't log it, stop looking:
                  * we must see at least count events 1st */
-                sfthd_node->filtered++;
                 return -2;
             }
         }
@@ -858,7 +843,6 @@ int sfthd_test_local(
 {
     THD_IP_NODE_KEY key;
     THD_IP_NODE data,* sfthd_ip_node;
-    int status=0;
     const SfIp* ip;
 
     PolicyId policy_id = get_network_policy()->policy_id;
@@ -920,7 +904,7 @@ int sfthd_test_local(
     /*
      * Check for any Permanent sig_id objects for this gen_id  or add this one ...
      */
-    status = xhash_add(local_hash, (void*)&key, &data);
+    int status = xhash_add(local_hash, (void*)&key, &data);
     if (status == XHASH_INTABLE)
     {
         /* Already in the table */
@@ -928,6 +912,11 @@ int sfthd_test_local(
 
         /* Increment the event count */
         sfthd_ip_node->count++;
+    }
+    else if (status == XHASH_NOMEM)
+    {
+        event_filter_stats.xhash_nomem_peg_local++;
+        return 1;
     }
     else if (status != XHASH_OK)
     {
@@ -957,7 +946,6 @@ static inline int sfthd_test_global(
     THD_IP_GNODE_KEY key;
     THD_IP_NODE data;
     THD_IP_NODE* sfthd_ip_node;
-    int status=0;
     const SfIp* ip;
 
     PolicyId policy_id = get_network_policy()->policy_id;
@@ -1014,7 +1002,7 @@ static inline int sfthd_test_global(
     data.tstart = data.tlast = curtime; /* Event time */
 
     /* Check for any Permanent sig_id objects for this gen_id  or add this one ...  */
-    status = xhash_add(global_hash, (void*)&key, &data);
+    int status = xhash_add(global_hash, (void*)&key, &data);
     if (status == XHASH_INTABLE)
     {
         /* Already in the table */
@@ -1022,6 +1010,11 @@ static inline int sfthd_test_global(
 
         /* Increment the event count */
         sfthd_ip_node->count++;
+    }
+    else if (status == XHASH_NOMEM)
+    {
+        event_filter_stats.xhash_nomem_peg_global++;
+        return 1;
     }
     else if (status != XHASH_OK)
     {
@@ -1072,16 +1065,11 @@ int sfthd_test_threshold(
 #ifdef THD_DEBUG
     int cnt;
 #endif
-    int status=0;
 
     PolicyId policy_id = get_network_policy()->policy_id;
 
     if ((thd_objs == nullptr) || (thd == nullptr))
         return 0;
-
-#ifdef CRIPPLE
-    return 0;
-#endif
 
 #ifdef THD_DEBUG
     printf("sfthd_test_threshold...\n"); fflush(stdout);
@@ -1154,7 +1142,7 @@ int sfthd_test_threshold(
         /*
          *   Test SUPPRESSION and THRESHOLDING
          */
-        status = sfthd_test_local(thd->ip_nodes, sfthd_node, sip, dip, curtime);
+        int status = sfthd_test_local(thd->ip_nodes, sfthd_node, sip, dip, curtime);
 
         if ( status < 0 ) /* -1 == Don't log and stop looking */
         {
@@ -1195,8 +1183,7 @@ global_test:
 
     if ( g_thd_node )
     {
-        status = sfthd_test_global(
-            thd->ip_gnodes, g_thd_node, sig_id, sip, dip, curtime);
+        int status = sfthd_test_global(thd->ip_gnodes, g_thd_node, sig_id, sip, dip, curtime);
 
         if ( status < 0 ) /* -1 == Don't log and stop looking */
         {
@@ -1302,4 +1289,3 @@ int sfthd_show_objects(ThresholdObjects* thd_objs)
 }
 
 #endif // THD_DEBUG
-

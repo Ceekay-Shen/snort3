@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2017-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2017-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -41,12 +41,13 @@ public:
 
     void block();
     void unblock();
-    bool send_queued_response();
+    void send_queued_response();
     bool is_blocked() const { return blocked; }
 
     void configure() const;
     int shell_execute(int& current_fd, Request*& current_request);
     bool show_prompt() const;
+
 private:
     int fd;
     bool blocked = false;

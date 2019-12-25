@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -167,16 +167,17 @@ struct dnp3_session_data_t
     dnp3_reassembly_data_t server_rdata;
 };
 
-class Dnp3FlowData : public FlowData
+class Dnp3FlowData : public snort::FlowData
 {
 public:
     Dnp3FlowData();
     ~Dnp3FlowData() override;
 
     static void init()
-    {
-        inspector_id = FlowData::create_flow_data_id();
-    }
+    { inspector_id = snort::FlowData::create_flow_data_id(); }
+
+    size_t size_of() override
+    { return sizeof(*this); }
 
 public:
     static unsigned inspector_id;
@@ -184,7 +185,7 @@ public:
 };
 
 extern THREAD_LOCAL Dnp3Stats dnp3_stats;
-extern THREAD_LOCAL ProfileStats dnp3_perf_stats;
+extern THREAD_LOCAL snort::ProfileStats dnp3_perf_stats;
 
 #endif
 

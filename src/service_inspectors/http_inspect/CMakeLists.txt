@@ -46,6 +46,8 @@ set (FILE_LIST
     http_test_input.h
     http_flow_data.cc
     http_flow_data.h
+    http_context_data.cc
+    http_context_data.h
     http_transaction.cc
     http_transaction.h
     http_test_manager.cc
@@ -59,14 +61,13 @@ set (FILE_LIST
     http_stream_splitter.h
     http_cutter.cc
     http_cutter.h
-    http_infractions.h
-    http_event_gen.h
+    http_event.h
     http_js_norm.cc
     http_js_norm.h
 )
 
 #if (STATIC_INSPECTORS)
-    add_library(http_inspect STATIC ${FILE_LIST})
+    add_library(http_inspect OBJECT ${FILE_LIST})
 
 #else(STATIC_INSPECTORS)
     #add_dynamic_module(http_inspect inspectors ${FILE_LIST})

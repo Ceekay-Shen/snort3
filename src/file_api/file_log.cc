@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -32,6 +32,8 @@
 #include "file_flows.h"
 #include "file_lib.h"
 
+using namespace snort;
+
 static const char* s_name = "file_log";
 static const char* f_name = "file.log";
 static const char* s_help = "log file event to file.log";
@@ -48,6 +50,9 @@ struct FileLogStats
 };
 
 static THREAD_LOCAL FileLogStats fl_stats;
+
+static const std::string VerdictName[] =
+{"Unknown", "Log", "Stop", "Block", "Reset", "Pending", "Stop Capture", "INVALID"};
 
 static const PegInfo fl_pegs[] =
 {
@@ -78,7 +83,7 @@ static void dl_tterm()
 class LogHandler : public DataHandler
 {
 public:
-    LogHandler(FileLogConfig& conf)
+    LogHandler(const FileLogConfig& conf) : DataHandler(s_name)
     { config = conf; }
 
     void handle(DataEvent&, Flow*) override;
@@ -92,7 +97,7 @@ void LogHandler::log_file_name(TextLog* log, FileContext* file)
 {
     std::string& name = file->get_file_name();
 
-    if (name.length() <= 0)
+    if ( name.empty() )
         return;
 
     size_t fname_len = name.length();
@@ -156,8 +161,9 @@ void LogHandler::handle(DataEvent&, Flow* f)
         TextLog_Print(tlog, " ");
     }
 
-    TextLog_Print(tlog, " %s:%d -> ", f->client_ip.ntoa(), f->client_port);
-    TextLog_Print(tlog, "%s:%d, ", f->server_ip.ntoa(), f->server_port);
+    SfIpString ip_str;
+    TextLog_Print(tlog, " %s:%d -> ", f->client_ip.ntop(ip_str), f->client_port);
+    TextLog_Print(tlog, "%s:%d, ", f->server_ip.ntop(ip_str), f->server_port);
 
     FileFlows* files = FileFlows::get_file_flows(f);
 
@@ -198,7 +204,7 @@ void LogHandler::handle(DataEvent&, Flow* f)
 class FileLog : public Inspector
 {
 public:
-    FileLog(FileLogConfig& conf) { config = conf; }
+    FileLog(const FileLogConfig& conf) { config = conf; }
 
     void show(SnortConfig*) override;
     void eval(Packet*) override { }
@@ -306,7 +312,7 @@ static const InspectApi fl_api
         mod_dtor
     },
     IT_PASSIVE,
-    (uint16_t)PktType::NONE,
+    PROTO_BIT__NONE,
     nullptr, // buffers
     nullptr, // service
     nullptr, // pinit

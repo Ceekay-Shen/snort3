@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2004-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -27,6 +27,11 @@
 #include <cstdint>
 
 #include "search_common.h"
+
+namespace snort
+{
+struct SnortConfig;
+}
 
 #define MAX_ALPHABET_SIZE 256
 
@@ -141,7 +146,7 @@ int acsmAddPattern2(
     ACSM_STRUCT2* p, const uint8_t* pat, unsigned n,
     bool nocase, bool negative, void* id);
 
-int acsmCompile2(struct SnortConfig*, ACSM_STRUCT2*);
+int acsmCompile2(snort::SnortConfig*, ACSM_STRUCT2*);
 
 int acsm_search_nfa(
     ACSM_STRUCT2*, const uint8_t* T, int n, MpseMatch, void* context, int* current_state);

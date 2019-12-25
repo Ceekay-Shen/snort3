@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -34,11 +34,11 @@
 #include "main/policy.h"
 #include "main/snort_config.h"
 #include "managers/module_manager.h"
+#include "parser/parse_conf.h"
 #include "parser/parser.h"
 
+using namespace snort;
 using namespace std;
-
-#define required "require('snort_config'); "
 
 //-------------------------------------------------------------------------
 // helper functions
@@ -71,22 +71,34 @@ static int get_line_number(lua_State* L)
 
 #endif
 
-static void load_config(lua_State* L, const char* file)
+static bool load_config(lua_State* L, const char* file, const char* tweaks, bool is_fatal)
 {
     Lua::ManageStack ms(L);
-
     if ( luaL_loadfile(L, file) )
-        FatalError("can't load %s: %s\n", file, lua_tostring(L, -1));
+    {
+        if (is_fatal)
+            FatalError("can't load %s: %s\n", file, lua_tostring(L, -1));
+        else
+            ParseError("can't load %s: %s\n", file, lua_tostring(L, -1));
+        return false;
+    }
+    if ( tweaks and *tweaks )
+    {
+        lua_pushstring(L, tweaks);
+        lua_setglobal(L, "tweaks");
+    }
 
     if ( lua_pcall(L, 0, 0, 0) )
         FatalError("can't init %s: %s\n", file, lua_tostring(L, -1));
+
+    return true;
 }
 
-static void load_overrides(lua_State* L, string& s)
+static void load_string(lua_State* L, const char* s)
 {
     Lua::ManageStack ms(L);
 
-    if ( luaL_loadstring(L, s.c_str()) )
+    if ( luaL_loadstring(L, s) )
     {
         const char* err = lua_tostring(L, -1);
         if ( strstr(err, "near '#'") )
@@ -105,33 +117,35 @@ static void run_config(lua_State* L, const char* t)
     lua_getglobal(L, "snort_config");
     lua_getglobal(L, t);
 
-    if ( !lua_isfunction(L, -2) )
-        FatalError("%s\n", "snort_config is required");
+    assert(lua_isfunction(L, -2));
 
-    else if ( lua_pcall(L, 1, 1, 0) )
+    if ( lua_pcall(L, 1, 1, 0) )
     {
         const char* err = lua_tostring(L, -1);
         FatalError("%s\n", err);
     }
 }
 
-static void config_lua(
-    lua_State* L, const char* file, string& s)
+static bool config_lua(
+    lua_State* L, const char* file, string& s, const char* tweaks, bool is_fatal)
 {
     if ( file && *file )
-        load_config(L, file);
+        if (!load_config(L, file, tweaks, is_fatal))
+            return false;
 
     if ( !s.empty() )
-        load_overrides(L, s);
+        load_string(L, s.c_str());
 
     run_config(L, "_G");
+
+    return true;
 }
 
 //-------------------------------------------------------------------------
 // public methods
 //-------------------------------------------------------------------------
 
-Shell::Shell(const char* s)
+Shell::Shell(const char* s, bool load_defaults)
 {
     // FIXIT-M should wrap in Lua::State
     lua = luaL_newstate();
@@ -142,13 +156,16 @@ Shell::Shell(const char* s)
     lua_atpanic(lua, Shell::panic);
     luaL_openlibs(lua);
 
-    char pwd[PATH_MAX];
-    parse_from = getcwd(pwd, sizeof(pwd));
-
     if ( s )
-        set_file(s);
+        file = s;
+
+    parse_from = get_parse_file();
 
     loaded = false;
+    load_string(lua, ModuleManager::get_lua_bootstrap());
+
+    if ( load_defaults )
+        load_string(lua, ModuleManager::get_lua_coreinit());
 }
 
 Shell::~Shell()
@@ -158,22 +175,11 @@ Shell::~Shell()
 
 void Shell::set_file(const char* s)
 {
-    assert(file.empty());
-
-    if ( s && s[0] != '/' && parsing_follows_files )
-    {
-        file += parse_from;
-        file += '/';
-    }
-
-    file += s;
+    file = s;
 }
 
 void Shell::set_overrides(const char* s)
 {
-    if ( overrides.empty() )
-        overrides = required;
-
     overrides += s;
 }
 
@@ -182,31 +188,54 @@ void Shell::set_overrides(Shell* sh)
     overrides += sh->overrides;
 }
 
-void Shell::configure(SnortConfig* sc)
+bool Shell::configure(SnortConfig* sc, bool is_fatal, bool is_root)
 {
     assert(file.size());
     ModuleManager::set_config(sc);
 
     //set_*_policy can set to null. this is used
     //to tell which pieces to pick from sub policy
-    auto pt = sc->policy_map->shell_map.find(this);
-    if ( pt == sc->policy_map->shell_map.end() )
+    auto pt = sc->policy_map->get_policies(this);
+    if ( pt.get() == nullptr )
         set_default_policy(sc);
     else
     {
-        set_inspection_policy(pt->second->inspection);
-        set_ips_policy(pt->second->ips);
-        set_network_policy(pt->second->network);
+        set_inspection_policy(pt->inspection);
+        set_ips_policy(pt->ips);
+        set_network_policy(pt->network);
     }
 
-    const char* base_name = push_relative_path(file.c_str());
-    config_lua(lua, base_name, overrides);
+    std::string path = parse_from;
+    const char* code;
+
+    if ( !is_root )
+        code = get_config_file(file.c_str(), path);
+    else
+    {
+        code = "W";
+        path = file;
+    }
+
+    if ( !code )
+    {
+        if ( is_fatal )
+            FatalError("can't find %s\n", file.c_str());
+        else
+            ParseError("can't find %s\n", file.c_str());
+        return false;
+    }
+
+    push_parse_location(code, path.c_str(), file.c_str(), 0);
+
+    if ( !config_lua(lua, path.c_str(), overrides, sc->tweaks.c_str(), is_fatal) )
+        return false;
 
     set_default_policy(sc);
     ModuleManager::set_config(nullptr);
     loaded = true;
 
-    pop_relative_path();
+    pop_parse_location();
+    return true;
 }
 
 void Shell::install(const char* name, const luaL_Reg* reg)

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -22,8 +22,6 @@
 #include "config.h"
 #endif
 
-#include "ips_sd_pattern.h"
-
 #include <cctype>
 
 #include <hs_compile.h>
@@ -42,6 +40,8 @@
 
 #include "sd_credit_card.h"
 
+using namespace snort;
+
 #define s_name "sd_pattern"
 #define s_help "rule option for detecting sensitive data"
 
@@ -53,10 +53,8 @@
 // and then clone to thread specific after all rules are loaded.  s_scratch is
 // a prototype that is large enough for all uses.
 
-// FIXIT-L Determine if it's worthwhile to use a single scratch space for both
-// "regex" and "sd_pattern" keywords.
-// FIXIT-L See ips_regex.cc for more information.
 static hs_scratch_t* s_scratch = nullptr;
+static unsigned scratch_index;
 
 struct SdStats
 {
@@ -122,13 +120,13 @@ public:
     uint32_t hash() const override;
     bool operator==(const IpsOption&) const override;
 
-    PatternMatchData* get_pattern(int, RuleDirection) override
+    PatternMatchData* get_pattern(SnortProtocolId, RuleDirection) override
     { return &config.pmd; }
 
     EvalStatus eval(Cursor&, Packet* p) override;
 
 private:
-    unsigned SdSearch(Cursor&, Packet*);
+    unsigned SdSearch(const Cursor&, Packet*);
     SdPatternConfig config;
 };
 
@@ -245,19 +243,19 @@ static int hs_match(unsigned int /*id*/, unsigned long long from,
     return 0;
 }
 
-unsigned SdPatternOption::SdSearch(Cursor& c, Packet* p)
+unsigned SdPatternOption::SdSearch(const Cursor& c, Packet* p)
 {
     const uint8_t* const start = c.buffer();
     const uint8_t* buf = c.start();
     unsigned int buflen = c.length();
 
-    SnortState* ss = SnortConfig::get_conf()->state + get_instance_id();
-    assert(ss->sdpattern_scratch);
+    std::vector<void *> ss = SnortConfig::get_conf()->state[get_instance_id()];
+    assert(ss[scratch_index]);
 
     hsContext ctx(config, p, start, buf, buflen);
 
     hs_error_t stat = hs_scan(config.db, (const char*)buf, buflen, 0,
-        (hs_scratch_t*)ss->sdpattern_scratch, hs_match, (void*)&ctx);
+        (hs_scratch_t*)ss[scratch_index], hs_match, (void*)&ctx);
 
     if ( stat == HS_SCAN_TERMINATED )
         ++s_stats.terminated;
@@ -267,7 +265,7 @@ unsigned SdPatternOption::SdSearch(Cursor& c, Packet* p)
 
 IpsOption::EvalStatus SdPatternOption::eval(Cursor& c, Packet* p)
 {
-    Profile profile(sd_pattern_perf_stats);
+    RuleProfile profile(sd_pattern_perf_stats);
 
     unsigned matches = SdSearch(c, p);
 
@@ -292,7 +290,7 @@ static const Parameter s_params[] =
     { "~pattern", Parameter::PT_STRING, nullptr, nullptr,
       "The pattern to search for" },
 
-    { "threshold", Parameter::PT_INT, "1", nullptr,
+    { "threshold", Parameter::PT_INT, "1:max32", "1",
       "number of matches before alerting" },
 
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
@@ -301,7 +299,11 @@ static const Parameter s_params[] =
 class SdPatternModule : public Module
 {
 public:
-    SdPatternModule() : Module(s_name, s_help, s_params) { }
+    SdPatternModule() : Module(s_name, s_help, s_params)
+    {
+        scratch_index = SnortConfig::request_scratch(
+            SdPatternModule::scratch_setup, SdPatternModule::scratch_cleanup);
+    }
 
     bool begin(const char*, int, SnortConfig*) override;
     bool set(const char*, Value& v, SnortConfig*) override;
@@ -324,6 +326,9 @@ public:
 
 private:
     SdPatternConfig config;
+
+    static void scratch_setup(SnortConfig*);
+    static void scratch_cleanup(SnortConfig*);
 };
 
 bool SdPatternModule::begin(const char*, int, SnortConfig*)
@@ -332,7 +337,7 @@ bool SdPatternModule::begin(const char*, int, SnortConfig*)
     return true;
 }
 
-bool SdPatternModule::set(const char*, Value& v, SnortConfig* sc)
+bool SdPatternModule::set(const char*, Value& v, SnortConfig*)
 {
     if ( v.is("~pattern") )
     {
@@ -342,28 +347,29 @@ bool SdPatternModule::set(const char*, Value& v, SnortConfig* sc)
         config.pii.erase(config.pii.length()-1, 1);
     }
     else if ( v.is("threshold") )
-        config.threshold = v.get_long();
+        config.threshold = v.get_uint32();
     else
         return false;
 
     // Check if built-in pattern should be used.
+    IpsPolicy* p = get_ips_policy();
     if (config.pii == "credit_card")
     {
         config.pii = SD_CREDIT_PATTERN_ALL;
         config.validate = SdLuhnAlgorithm;
-        config.obfuscate_pii = sc->obfuscate_pii;
+        config.obfuscate_pii = p->obfuscate_pii;
         config.forced_boundary = true;
     }
     else if (config.pii == "us_social")
     {
         config.pii = SD_SOCIAL_PATTERN;
-        config.obfuscate_pii = sc->obfuscate_pii;
+        config.obfuscate_pii = p->obfuscate_pii;
         config.forced_boundary = true;
     }
     else if (config.pii == "us_social_nodashes")
     {
         config.pii = SD_SOCIAL_NODASHES_PATTERN;
-        config.obfuscate_pii = sc->obfuscate_pii;
+        config.obfuscate_pii = p->obfuscate_pii;
         config.forced_boundary = true;
     }
 
@@ -395,29 +401,29 @@ bool SdPatternModule::end(const char*, int, SnortConfig*)
 // public methods
 //-------------------------------------------------------------------------
 
-void sdpattern_setup(SnortConfig* sc)
+void SdPatternModule::scratch_setup(SnortConfig* sc)
 {
     for ( unsigned i = 0; i < sc->num_slots; ++i )
     {
-        SnortState* ss = sc->state + i;
+        std::vector<void *>& ss = sc->state[i];
 
         if ( s_scratch )
-            hs_clone_scratch(s_scratch, (hs_scratch_t**)&ss->sdpattern_scratch);
+            hs_clone_scratch(s_scratch, (hs_scratch_t**)&ss[scratch_index]);
         else
-            ss->sdpattern_scratch = nullptr;
+            ss[scratch_index] = nullptr;
     }
 }
 
-void sdpattern_cleanup(SnortConfig* sc)
+void SdPatternModule::scratch_cleanup(SnortConfig* sc)
 {
     for ( unsigned i = 0; i < sc->num_slots; ++i )
     {
-        SnortState* ss = sc->state + i;
+        std::vector<void *>& ss = sc->state[i];
 
-        if ( ss->sdpattern_scratch )
+        if ( ss[scratch_index] )
         {
-            hs_free_scratch((hs_scratch_t*)ss->sdpattern_scratch);
-            ss->sdpattern_scratch = nullptr;
+            hs_free_scratch((hs_scratch_t*)ss[scratch_index]);
+            ss[scratch_index] = nullptr;
         }
     }
 }
@@ -483,4 +489,3 @@ const BaseApi* ips_sd_pattern[] =
     &sd_pattern_api.base,
     nullptr
 };
-

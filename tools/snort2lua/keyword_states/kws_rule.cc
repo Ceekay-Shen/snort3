@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -83,6 +83,10 @@ template<const std::string* name, const std::string* old>
 static ConversionState* conv_rule_ctor(Converter& c)
 {
     c.get_rule_api().add_hdr_data(*name);
+
+    if (*old == "sdrop")
+        c.get_rule_api().set_rule_old_action(*old);
+
     c.get_rule_api().add_comment(
         "The '" + *old + "' ruletype is no longer supported, using " + *name);
     return new RuleHeader(c);
@@ -98,6 +102,7 @@ static ConversionState* drop_rule_ctor(Converter& c)
 }
 
 static const std::string alert = "alert";
+static const std::string c_alert = "# alert";
 static const std::string block = "block";
 static const std::string log = "log";
 static const std::string pass = "pass";
@@ -111,6 +116,7 @@ static const std::string activate = "activate";
 static const std::string dynamic = "dynamic";
 
 static const ConvertMap alert_api = { alert, rule_ctor<& alert>};
+static const ConvertMap c_alert_api = { c_alert, rule_ctor<& c_alert>};
 static const ConvertMap block_api = { block, rule_ctor<& block>};
 static const ConvertMap log_api = { log, rule_ctor<& log>};
 static const ConvertMap pass_api = { pass, rule_ctor<& pass>};
@@ -124,6 +130,7 @@ static const ConvertMap activate_api = { activate, dep_rule_ctor<& activate>};
 static const ConvertMap dynamic_api = { dynamic, dep_rule_ctor<& dynamic>};
 
 const ConvertMap* alert_map = &alert_api;
+const ConvertMap* c_alert_map = &c_alert_api;
 const ConvertMap* block_map = &block_api;
 const ConvertMap* log_map = &log_api;
 const ConvertMap* pass_map = &pass_api;

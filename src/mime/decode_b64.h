@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -32,7 +32,7 @@ public:
     ~B64Decode() override;
 
     // Main function to decode file data
-    DecodeResult decode_data(const uint8_t* start, const uint8_t* end) override;
+    DecodeResult decode_data(const uint8_t* start, const uint8_t* end, uint8_t* decode_buf) override;
 
     void reset_decode_state() override;
 
@@ -40,12 +40,14 @@ private:
     class DecodeBuffer* buffer = nullptr;
 };
 
+namespace snort
+{
 // FIXIT-L inbuf should probably be const uint8_t*
 SO_PUBLIC int sf_base64decode(
     uint8_t* inbuf, uint32_t inbuf_size,
     uint8_t* outbuf, uint32_t outbuf_size,
     uint32_t* bytes_written
     );
-
+}
 #endif
 

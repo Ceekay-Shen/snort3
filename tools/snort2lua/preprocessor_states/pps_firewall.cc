@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2017-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2017-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -40,6 +40,10 @@ namespace preprocessors
     {
         bool retval = true;
 
+        // identity
+        bool identity_table = false;
+        std::streampos pos = data_stream.tellg();
+
         table_api.open_table("firewall");
 
         std::string keyword;
@@ -56,8 +60,7 @@ namespace preprocessors
             else if (keyword == "url_rule_path")
                 tmpval = parse_string_option("url_rule_path", data_stream);
             else if (keyword == "file_rule_path")
-                // FIXIT-L This is currently just not implemented, not actually deleted
-                tmpval = parse_deleted_option("file_rule_path", data_stream);
+                tmpval = parse_string_option("file_rule_path", data_stream);
             else if (keyword == "whitelist")
                 tmpval = parse_string_option("whitelist_path", data_stream);
             else if (keyword == "blacklist")
@@ -67,7 +70,22 @@ namespace preprocessors
             else if (keyword == "fw_log_time")
                 tmpval = parse_int_option("fw_roll_log_interval", data_stream, false);
             else if (keyword == "fw_log_size")
-                tmpval = parse_int_option("max_log_file_size", data_stream, false);
+            {
+                int val;
+
+                if (data_stream >> val)
+                {
+                    // fw_log_size was in megabytes, max_log_file_size is in bytes
+                    val = val * 1024 * 1024;
+                    table_api.add_option("max_log_file_size", val);
+                    tmpval = true;
+                }
+                else
+                {
+                    table_api.add_comment("snort.conf missing argument for: " + keyword + " <int>");
+                    tmpval = false;
+                }
+            }
             else if (keyword == "fw_log_dns")
                 tmpval = table_api.add_option("dns_log_enabled", true);
             else if (keyword == "fw_log_url")
@@ -95,9 +113,9 @@ namespace preprocessors
             else if (keyword == "fw_urlc_memcap")
                 tmpval = parse_int_option("url_cache_memcap", data_stream, false);
             else if (keyword == "fw_usrq_memcap")
-                tmpval = parse_int_option("user_queue_memcap", data_stream, false);
+                tmpval = parse_deleted_option("user_queue_memcap", data_stream);
             else if (keyword == "fw_usrc_memcap")
-                tmpval = parse_int_option("user_cache_memcap", data_stream, false);
+                tmpval = parse_deleted_option("user_cache_memcap", data_stream);
             else if (keyword == "fw_malwq_memcap")
                 tmpval = parse_int_option("malware_queue_memcap", data_stream, false);
             else if (keyword == "fw_malwc_memcap")
@@ -145,13 +163,13 @@ namespace preprocessors
             else if (keyword == "debug_future_date")
                 tmpval = table_api.add_option("future_date_debug_enabled", true);
             else if (keyword == "identity_rule_path")
-                tmpval = parse_string_option("identity_rule_path", data_stream);
+                identity_table = tmpval = parse_deleted_option("identity_rule_path", data_stream);
             else if (keyword == "interface_ip_map_path")
-                tmpval = parse_string_option("intf_ip_map_path", data_stream);
+                tmpval = parse_deleted_option("intf_ip_map_path", data_stream);
             else if (keyword == "daqif_path")
-                tmpval = parse_string_option("daq_intf_path", data_stream);
+                tmpval = parse_deleted_option("daq_intf_path", data_stream);
             else if (keyword == "running_config_network_path")
-                tmpval = parse_string_option("running_network_config_path", data_stream);
+                tmpval = parse_deleted_option("running_network_config_path", data_stream);
             else
                 tmpval = false;
 
@@ -161,6 +179,48 @@ namespace preprocessors
                 retval = false;
             }
         }
+        table_api.close_table();
+
+        // identity, reading data_stream again
+        if ( identity_table )
+        {
+            data_stream.clear();
+            data_stream.seekg(pos);
+
+            table_api.open_top_level_table("identity");
+            while (data_stream >> keyword)
+            {
+                bool tmpval = true;
+
+                if (keyword == "fw_usrc_memcap")
+                    tmpval = parse_int_option("user_cache_memcap", data_stream, false);
+                else if (keyword == "identity_rule_path")
+                    tmpval = parse_string_option("identity_rule_path", data_stream);
+                else if (keyword == "interface_ip_map_path")
+                    tmpval = parse_string_option("intf_ip_map_path", data_stream);
+                else if (keyword == "daqif_path")
+                    tmpval = parse_string_option("daq_intf_path", data_stream);
+                else if (keyword == "running_config_network_path")
+                    tmpval = parse_string_option("running_network_config_path", data_stream);
+
+                if (!tmpval)
+                {
+                    data_api.failed_conversion(data_stream, keyword);
+                    retval = false;
+                }
+            }
+#ifdef REG_TEST
+            table_api.add_option("regtest", true);
+            table_api.add_option("user_snapshot_path", "./");
+#endif
+            table_api.close_table();
+        }
+
+        // Auto enable for firewall
+        table_api.open_top_level_table("reject");
+        table_api.add_option("reset", "both");
+        table_api.add_option("control", "forward");
+        table_api.close_table();
 
         return retval;
     }
@@ -182,4 +242,3 @@ namespace preprocessors
 
     const ConvertMap* firewall_map = &firewall_api;
 } // namespace preprocessors
-

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2013-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -37,12 +37,18 @@ typedef unsigned char uuid_t[16];
 
 #include "framework/data_bus.h"
 
+namespace snort
+{
+struct GHash;
+struct SnortConfig;
+}
+
 struct PortTable;
 struct vartable_t;
 struct sfip_var_t;
 
 typedef unsigned int PolicyId;
-typedef struct GHash PortVarTable;
+typedef struct snort::GHash PortVarTable;
 
 enum PolicyMode
 {
@@ -106,6 +112,7 @@ public:
     ~InspectionPolicy();
 
     void configure();
+    void clone_dbus(snort::SnortConfig*, const char*);
 
 public:
     PolicyId policy_id;
@@ -114,7 +121,7 @@ public:
     uuid_t uuid{};
 
     struct FrameworkPolicy* framework_policy;
-    DataBus dbus;
+    snort::DataBus dbus;
     bool cloned;
 
 private:
@@ -125,10 +132,11 @@ private:
 // detection stuff
 //-------------------------------------------------------------------------
 
-// this is the ips policy post ac-split
 struct IpsPolicy
 {
 public:
+    enum Enable : uint8_t { DISABLED, ENABLED, INHERIT_ENABLE };
+
     IpsPolicy(PolicyId = 0);
     ~IpsPolicy();
 
@@ -140,8 +148,11 @@ public:
     PolicyMode policy_mode = POLICY_MODE__MAX;
     bool enable_builtin_rules;
 
+    std::string includer;
     std::string include;
+
     std::string rules;
+    std::string states;
 
     uint32_t var_id;
 
@@ -151,6 +162,10 @@ public:
     /* The portobjects in these are attached to rtns and used during runtime */
     PortVarTable* portVarTable;     /* named entries, uses a hash table */
     PortTable* nonamePortVarTable;  /* un-named entries */
+
+    Enable default_rule_state = INHERIT_ENABLE;
+
+    bool obfuscate_pii;
 };
 
 //-------------------------------------------------------------------------
@@ -179,6 +194,7 @@ public:
     unsigned add_ips_shell(Shell*);
     unsigned add_network_shell(Shell*);
     std::shared_ptr<PolicyTuple> add_shell(Shell*);
+    std::shared_ptr<PolicyTuple> get_policies(Shell* sh);
     void clone(PolicyMap *old_map);
 
     Shell* get_shell(unsigned i = 0)
@@ -190,54 +206,94 @@ public:
     void set_user_ips(IpsPolicy* p)
     { user_ips[p->user_policy_id] = p; }
 
-    IpsPolicy* get_user_ips(unsigned user_id)
-    { return user_ips[user_id]; }
+    void set_user_network(NetworkPolicy* p)
+    { user_network[p->user_policy_id] = p; }
 
-public:  // FIXIT-M make impl private
+    IpsPolicy* get_user_ips(unsigned user_id)
+    {
+        auto it = user_ips.find(user_id);
+        return it == user_ips.end() ? nullptr : it->second;
+    }
+
+    NetworkPolicy* get_user_network(unsigned user_id)
+    {
+        auto it = user_network.find(user_id);
+        return it == user_network.end() ? nullptr : it->second;
+    }
+
+    InspectionPolicy* get_inspection_policy(unsigned i = 0)
+    { return i < inspection_policy.size() ? inspection_policy[i] : nullptr; }
+
+    IpsPolicy* get_ips_policy(unsigned i = 0)
+    { return i < ips_policy.size() ? ips_policy[i] : nullptr; }
+
+    IpsPolicy* get_empty_ips()
+    { return empty_ips_policy; }
+
+    NetworkPolicy* get_network_policy(unsigned i = 0)
+    { return i < network_policy.size() ? network_policy[i] : nullptr; }
+
+    unsigned inspection_policy_count()
+    { return inspection_policy.size(); }
+
+    unsigned ips_policy_count()
+    { return ips_policy.size(); }
+
+    unsigned network_policy_count()
+    { return network_policy.size(); }
+
+    void set_cloned(bool state)
+    { cloned = state; }
+
+private:
     std::vector<Shell*> shells;
     std::vector<InspectionPolicy*> inspection_policy;
     std::vector<IpsPolicy*> ips_policy;
     std::vector<NetworkPolicy*> network_policy;
+    IpsPolicy* empty_ips_policy;
     std::unordered_map<Shell*, std::shared_ptr<PolicyTuple>> shell_map;
+    std::unordered_map<unsigned, InspectionPolicy*> user_inspection;
+    std::unordered_map<unsigned, IpsPolicy*> user_ips;
+    std::unordered_map<unsigned, NetworkPolicy*> user_network;
 
     bool cloned = false;
 
-private:
-    std::unordered_map<unsigned, InspectionPolicy*> user_inspection;
-    std::unordered_map<unsigned, IpsPolicy*> user_ips;
 };
 
 //-------------------------------------------------------------------------
 // navigator stuff
 //-------------------------------------------------------------------------
 
-struct SnortConfig;
 
 // FIXIT-L may be inlined at some point; on lockdown for now
 // FIXIT-L SO_PUBLIC required because SnortConfig::inline_mode(), etc. uses the function
+namespace snort
+{
 SO_PUBLIC NetworkPolicy* get_network_policy();
 SO_PUBLIC InspectionPolicy* get_inspection_policy();
 SO_PUBLIC IpsPolicy* get_ips_policy();
+SO_PUBLIC InspectionPolicy* get_default_inspection_policy(snort::SnortConfig*);
+SO_PUBLIC void set_ips_policy(IpsPolicy* p);
+SO_PUBLIC void set_network_policy(NetworkPolicy* p);
+SO_PUBLIC IpsPolicy* get_user_ips_policy(snort::SnortConfig* sc, unsigned policy_id);
+SO_PUBLIC IpsPolicy* get_empty_ips_policy(snort::SnortConfig* sc);
+SO_PUBLIC NetworkPolicy* get_user_network_policy(snort::SnortConfig* sc, unsigned policy_id);
+}
 
-SO_PUBLIC InspectionPolicy* get_default_inspection_policy(SnortConfig*);
-
-void set_network_policy(NetworkPolicy*);
-void set_network_policy(SnortConfig*, unsigned = 0);
+void set_network_policy(snort::SnortConfig*, unsigned = 0);
 
 void set_inspection_policy(InspectionPolicy*);
-void set_inspection_policy(SnortConfig*, unsigned = 0);
+void set_inspection_policy(snort::SnortConfig*, unsigned = 0);
 
-void set_ips_policy(IpsPolicy*);
-SO_PUBLIC void set_user_ips_policy(unsigned policy_id);
-void set_ips_policy(SnortConfig*, unsigned = 0);
+void set_ips_policy(snort::SnortConfig*, unsigned = 0);
 
-void set_policies(SnortConfig*, Shell*);
+void set_policies(snort::SnortConfig*, Shell*);
 void set_default_policy();
-void set_default_policy(SnortConfig*);
+void set_default_policy(snort::SnortConfig*);
 
+bool default_inspection_policy();
 bool only_inspection_policy();
 bool only_ips_policy();
 bool only_network_policy();
 
 #endif
-

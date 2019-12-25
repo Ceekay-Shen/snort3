@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -30,7 +30,7 @@
 #include <vector>
 
 #ifdef UNIT_TEST
-#include "catch/catch.hpp"
+#include "catch/snort_catch.h"
 #endif
 
 struct rule_number_t
@@ -65,7 +65,7 @@ int RuleIndexMapAdd(rule_index_map_t* rim, unsigned gid, unsigned sid)
 
     rule_number_t rn(gid, sid);
     int index = rim->map.size();
-    rim->map.push_back(rn);
+    rim->map.emplace_back(rn);
 
     //printf("RuleIndexMapping: index=%d gid=%u sid=%u\n",index,gid,sid);
     return index;

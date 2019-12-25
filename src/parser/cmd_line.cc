@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -32,6 +32,7 @@
 
 #include "arg_list.h"
 
+using namespace snort;
 using namespace std;
 
 //-------------------------------------------------------------------------
@@ -79,16 +80,6 @@ static bool set_arg(
 
     case Parameter::PT_INT:
     case Parameter::PT_PORT:
-    {
-        char* end = nullptr;
-        long n = strtol(val, &end, 0);
-
-        if ( !*end )
-            v.set(n);
-        else
-            ok = false;
-        break;
-    }
     case Parameter::PT_REAL:
     {
         char* end = nullptr;

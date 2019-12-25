@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -34,6 +34,8 @@
 #include "utils/util_cstring.h"
 
 #include "treenodes.h"
+
+using namespace snort;
 
 /********************** Reference System Implementation ***********************/
 
@@ -100,7 +102,7 @@ void AddReference(
 /************************ Class/Priority Implementation ***********************/
 
 void AddClassification(
-    SnortConfig* sc, const char* type, const char* name, int priority)
+    SnortConfig* sc, const char* type, const char* name, unsigned priority)
 {
     int max_id = 0;
     ClassType* current = sc->classifications;
@@ -175,13 +177,12 @@ void OtnFree(void* data)
     {
         OptFpList* tmp = opt_func;
         opt_func = opt_func->next;
-        snort_free(tmp);
+        snort_free(tmp); // FIXIT-L use c++ operators for all of this
     }
 
     if ( otn->sigInfo.message )
     {
-        if (!otn->generated)
-            snort_free(otn->sigInfo.message);
+        snort_free(otn->sigInfo.message);
     }
     for (unsigned svc_idx = 0; svc_idx < otn->sigInfo.num_services; svc_idx++)
     {
@@ -207,27 +208,14 @@ void OtnFree(void* data)
     if ( otn->soid )
         snort_free(otn->soid);
 
-    /* RTN was generated on the fly.  Don't necessarily know which policy
-     * at this point so go through all RTNs and delete them */
-    if (otn->generated)
-    {
-        for (int i = 0; i < otn->proto_node_num; i++)
-        {
-            RuleTreeNode* rtn = deleteRtnFromOtn(otn, i);
-
-            if ( rtn )
-                snort_free(rtn);
-        }
-    }
-
     if (otn->proto_nodes)
         snort_free(otn->proto_nodes);
 
     if (otn->detection_filter)
         snort_free(otn->detection_filter);
 
-    snort_free(otn->state);
-    snort_free(otn);
+    delete[] otn->state;
+    delete otn;
 }
 
 GHash* OtnLookupNew()

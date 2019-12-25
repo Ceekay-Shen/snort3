@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -27,6 +27,8 @@
 #include "framework/range.h"
 #include "hash/hashfcn.h"
 #include "profiler/profiler.h"
+
+using namespace snort;
 
 #define s_name "bufferlen"
 
@@ -80,7 +82,7 @@ bool LenOption::operator==(const IpsOption& ips) const
 
 IpsOption::EvalStatus LenOption::eval(Cursor& c, Packet*)
 {
-    Profile profile(lenCheckPerfStats);
+    RuleProfile profile(lenCheckPerfStats);
 
     if ( config.eval(c.length()) )
         return MATCH;

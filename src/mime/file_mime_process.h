@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -23,13 +23,15 @@
 
 // Provides list of MIME processing functions. Encoded file data will be decoded
 // and file name will be extracted from MIME header
-
+#include <string>
 #include "file_api/file_api.h"
 #include "mime/file_mime_config.h"
 #include "mime/file_mime_decode.h"
 #include "mime/file_mime_log.h"
 #include "mime/file_mime_paf.h"
 
+namespace snort
+{
 /* state flags */
 #define MIME_FLAG_FOLDING                    0x00000001
 #define MIME_FLAG_IN_CONTENT_TYPE            0x00000002
@@ -62,7 +64,7 @@ public:
     static void init();
     static void exit();
 
-    const uint8_t* process_mime_data(Flow*, const uint8_t *data, int data_size,
+    const uint8_t* process_mime_data(Packet*, const uint8_t *data, int data_size,
         bool upload, FilePosition);
 
     int get_data_state();
@@ -81,21 +83,24 @@ private:
     MailLogConfig* log_config = nullptr;
     MailLogState* log_state = nullptr;
     MimeStats* mime_stats = nullptr;
+    std::string filename;
 
     // SMTP, IMAP, POP might have different implementation for this
-    virtual int handle_header_line(const uint8_t*, const uint8_t*, int) { return 0; }
-    virtual int normalize_data(const uint8_t*, const uint8_t*) { return 0; }
+    virtual int handle_header_line(const uint8_t*, const uint8_t*, int, Packet*) { return 0; }
+    virtual int normalize_data(const uint8_t*, const uint8_t*, Packet*) { return 0; }
     virtual void decode_alert() { }
+    virtual void decompress_alert() { }
     virtual void reset_state(Flow*) { }
     virtual bool is_end_of_data(Flow*) { return false; }
 
     void reset_mime_state();
     void setup_decode(const char* data, int size, bool cnt_xf);
-    const uint8_t* process_mime_header(const uint8_t* ptr, const uint8_t* data_end_marker);
+    const uint8_t* process_mime_header(Packet*, const uint8_t* ptr, const uint8_t* data_end_marker);
     const uint8_t* process_mime_body(const uint8_t* ptr, const uint8_t* data_end,bool is_data_end);
-    const uint8_t* process_mime_data_paf(Flow*, const uint8_t* start, const uint8_t* end,
+    const uint8_t* process_mime_data_paf(Packet*, const uint8_t* start, const uint8_t* end,
         bool upload, FilePosition);
+    int extract_file_name(const char*& start, int length, bool* disp_cont);
 };
-
+}
 #endif
 

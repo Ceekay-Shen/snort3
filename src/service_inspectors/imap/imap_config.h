@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -25,8 +25,8 @@
 
 struct IMAP_PROTO_CONF
 {
-    DecodeConfig decode_conf;
-    MailLogConfig log_config;
+    snort::DecodeConfig decode_conf;
+    snort::MailLogConfig log_config;
 };
 
 struct ImapStats
@@ -35,7 +35,7 @@ struct ImapStats
     PegCount sessions;
     PegCount concurrent_sessions;
     PegCount max_concurrent_sessions;
-    MimeStats mime_stats;
+    snort::MimeStats mime_stats;
 };
 
 extern const PegInfo imap_peg_names[];

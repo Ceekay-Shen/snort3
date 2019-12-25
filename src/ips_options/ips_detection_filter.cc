@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 // Copyright (C) 1998-2002 Martin Roesch <roesch@sourcefire.com>
 //
@@ -32,6 +32,8 @@
 #include "framework/module.h"
 #include "main/snort_config.h"
 
+using namespace snort;
+
 #define s_name "detection_filter"
 
 //-------------------------------------------------------------------------
@@ -43,10 +45,10 @@ static const Parameter s_params[] =
     { "track", Parameter::PT_ENUM, "by_src | by_dst", nullptr,
       "track hits by source or destination IP address" },
 
-    { "count", Parameter::PT_INT, "1:", nullptr,
+    { "count", Parameter::PT_INT, "1:max32", nullptr,
       "hits in interval before allowing the rule to fire" },
 
-    { "seconds", Parameter::PT_INT, "1:", nullptr,
+    { "seconds", Parameter::PT_INT, "1:max32", nullptr,
       "length of interval to count hits" },
 
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
@@ -81,13 +83,13 @@ bool DetectionFilterModule::begin(const char*, int, SnortConfig* sc)
 bool DetectionFilterModule::set(const char*, Value& v, SnortConfig*)
 {
     if ( v.is("track") )
-        thdx.tracking = v.get_long() ? THD_TRK_DST : THD_TRK_SRC;
+        thdx.tracking = v.get_uint8() ? THD_TRK_DST : THD_TRK_SRC;
 
     else if ( v.is("count") )
-        thdx.count = v.get_long();
+        thdx.count = v.get_uint32();
 
     else if ( v.is("seconds") )
-        thdx.seconds = v.get_long();
+        thdx.seconds = v.get_uint32();
 
     else
         return false;

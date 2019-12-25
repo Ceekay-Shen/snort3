@@ -1,11 +1,10 @@
 # Snort++
 
-The Snort++ project has been hard at work for a while now and we have
-released the fourth alpha of the next generation Snort IPS (Intrusion
-Prevention System).  This file will show you what Snort++ has to offer and
-guide you through the steps from download to demo.  If you are unfamiliar
-with Snort you should take a look at the Snort documentation first. We will
-cover the following topics:
+Snort 3 is the next generation Snort IPS (Intrusion Prevention System).
+This file will show you what Snort++ has to offer and guide you through the
+steps from download to demo.  If you are unfamiliar with Snort you should
+take a look at the Snort documentation first. We will cover the following
+topics:
 
 ---
 
@@ -25,8 +24,7 @@ below:
 
     Project = Snort++
     Binary = snort
-    Version = 3.0.0-a4 build 235
-    Base = 2.9.8 build 383
+    Version = 3.0.0 (Build 250) from 2.9.11
 
 Here are some key features of Snort++:
 
@@ -53,8 +51,8 @@ Additional features on the roadmap include:
 If you already build Snort, you may have everything you need.  If not, grab
 the latest:
 
-* autotools or cmake to build from source
-* daq from http://www.snort.org for packet IO
+* cmake to build from source
+* daq from https://github.com/snort3/libdaq for packet IO
 * dnet from https://github.com/dugsong/libdnet.git for network utility functions
 * g++ >= 4.8 or other C++11 compiler
 * hwloc from https://www.open-mpi.org/projects/hwloc/ for CPU affinity management
@@ -70,18 +68,17 @@ Additional packages provide optional features.  Check the manual for more.
 
 # DOWNLOAD
 
-There are two source tarballs, one for autotools and one for cmake:
+There is a source tarball available in the Downloads section on snort.org:
 
-    snort-3.0.0-a3-auto.tar.gz
-    snort-3.0.0-a3-cmake.tar.gz
+    snort-3.0.0-a3.tar.gz
 
 You can also get the code with:
 
-    git clone git://github.com/snortadmin/snort3.git
+    git clone git://github.com/snort3/snort3.git
 
-There are separate extras packages for autotools and cmake that provide
-additional features and demonstrate how to build plugins.  The source for
-extras is in git repo as well.
+There are separate extras packages for cmake that provide additional
+features and demonstrate how to build plugins. The source for extras
+is in snort3_extra.git repo.
 
 # BUILD SNORT
 
@@ -102,48 +99,33 @@ Follow these steps:
     cd snort-3.0.0*
     ```
     
-1.  Setup install path:
+2.  Setup install path:
 
     ```shell
     export my_path=/path/to/snorty
     ```
 
-1.  Compile and install:
+3.  Compile and install:
 
-  * To build with autotools, simply do the usual from the top level directory:
-
-    ```shell 
-    ./configure --prefix=$my_path
-    make -j 8 install
-    ```
-    
   * To build with cmake and make, run configure_cmake.sh.  It will automatically create and populate a new subdirectory named 'build'.
 
     ```shell
     ./configure_cmake.sh --prefix=$my_path
     cd build
-    make -j 8 install
+    make -j $(nproc) install
     ```
 
 **_Note_**:
 
-  * If you are using autotools with a github clone, first do autoreconf -isvf.
   * If you can do src/snort -V you built successfully.
   * If you are familiar with cmake, you can run cmake/ccmake instead of configure_cmake.sh.
   * cmake --help will list any available generators, such as Xcode.  Feel free to use one, however help with those will be provided separately.
 
 # RUN SNORT
 
-First set up the environment:
+Here are some examples.
 
-```shell
-export LUA_PATH=$my_path/include/snort/lua/\?.lua\;\;
-export SNORT_LUA_PATH=$my_path/etc/snort
-```
-
-Then give it a go:
-
-* Snort++ provides lots of help from the command line.  Here are some examples:
+* Snort++ provides lots of help from the command line, including:
 
     ```shell
     $my_path/bin/snort --help

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -24,6 +24,8 @@
 #include "codecs/codec_module.h"
 #include "framework/codec.h"
 #include "main/snort_config.h"
+
+using namespace snort;
 
 #define CD_DSTOPTS_NAME "ipv6_dst_opts"
 #define CD_DSTOPTS_HELP "support for ipv6 destination options"
@@ -86,7 +88,7 @@ bool Ipv6DSTOptsCodec::decode(const RawData& raw, CodecData& codec, DecodeData&)
 }
 
 void Ipv6DSTOptsCodec::get_protocol_ids(std::vector<ProtocolId>& v)
-{ v.push_back(ProtocolId::DSTOPTS); }
+{ v.emplace_back(ProtocolId::DSTOPTS); }
 
 //-------------------------------------------------------------------------
 // api

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -25,6 +25,8 @@
 
 #include "framework/codec.h"
 #include "lua/lua_arg.h"
+
+using namespace snort;
 
 static void set_fields(lua_State* L, int tindex, CodecData& self)
 {
@@ -65,7 +67,6 @@ static const luaL_Reg methods[] =
             Lua::Args args(L);
 
             auto& self = CodecDataIface.create(L, ProtocolId::ETHERTYPE_NOT_SET);
-            memset(&self, 0, sizeof(self));
 
             if ( args[1].is_table() )
                 args[1].check_table(set_fields, self);

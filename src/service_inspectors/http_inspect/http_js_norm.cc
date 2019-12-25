@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -26,7 +26,10 @@
 #include "utils/util_jsnorm.h"
 #include "utils/safec.h"
 
+#include "http_enum.h"
+
 using namespace HttpEnums;
+using namespace snort;
 
 HttpJsNorm::HttpJsNorm(int max_javascript_whitespaces_, const HttpParaList::UriParam& uri_param_) :
     max_javascript_whitespaces(max_javascript_whitespaces_), uri_param(uri_param_),
@@ -144,6 +147,7 @@ void HttpJsNorm::normalize(const Field& input, Field& output, HttpInfractions* i
             JSNormalizeDecode(js_start, (uint16_t)(end-js_start), (char*)buffer+index,
                 (uint16_t)(input.length() - index), &ptr, &bytes_copied, &js,
                 uri_param.iis_unicode ? uri_param.unicode_map : nullptr);
+
             index += bytes_copied;
         }
         else

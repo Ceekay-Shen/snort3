@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -28,6 +28,8 @@
 
 #include "main/snort_config.h"
 
+using namespace snort;
+
 //-------------------------------------------------------------------------
 // static base members
 //-------------------------------------------------------------------------
@@ -41,10 +43,8 @@ void FlushBucket::set(unsigned sz)
 
     if ( sz )
         s_flush_bucket = new ConstFlushBucket(sz);
-
     else if ( SnortConfig::static_hash() )
         s_flush_bucket = new StaticFlushBucket;
-
     else
         s_flush_bucket = new RandomFlushBucket;
 
@@ -68,7 +68,7 @@ uint16_t FlushBucket::get_size()
 
 void VarFlushBucket::set_next(uint16_t pt)
 {
-    flush_points.push_back(pt);
+    flush_points.emplace_back(pt);
 }
 
 uint16_t VarFlushBucket::get_next()

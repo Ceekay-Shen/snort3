@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -25,7 +25,11 @@
 
 #include "target_based/sftarget_reader.h"
 
+#include "analyzer.h"
+#include "snort.h"
 #include "snort_config.h"
+
+using namespace snort;
 
 bool Swapper::reload_in_progress = false;
 
@@ -47,6 +51,15 @@ Swapper::Swapper(SnortConfig* sold, SnortConfig* snew)
     new_attribs = nullptr;
 }
 
+Swapper::Swapper(SnortConfig* sold, SnortConfig* snew, tTargetBasedConfig* told, tTargetBasedConfig* tnew)
+{
+    old_conf = sold;
+    new_conf = snew;
+
+    old_attribs = told;
+    new_attribs = tnew;
+}
+
 Swapper::Swapper(tTargetBasedConfig* told, tTargetBasedConfig* tnew)
 {
     old_conf = nullptr;
@@ -65,10 +78,16 @@ Swapper::~Swapper()
         SFAT_Free(old_attribs);
 }
 
-void Swapper::apply()
+void Swapper::apply(Analyzer& analyzer)
 {
     if ( new_conf )
+    {
+        const bool reload = (SnortConfig::get_conf() != nullptr);
         SnortConfig::set_conf(new_conf);
+        // FIXIT-M Determine whether we really want to do this before or after the set_conf
+        if (reload)
+            analyzer.reinit(new_conf);
+    }
 
     if ( new_attribs )
         SFAT_SetConfig(new_attribs);

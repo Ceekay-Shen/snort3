@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -27,6 +27,8 @@
 
 #include "port_object.h"
 #include "port_table.h"
+
+using namespace snort;
 
 #define DEFAULT_LARGE_RULE_GROUP 9
 
@@ -70,7 +72,7 @@ RulePortTables* PortTablesNew()
     RulePortTables* rpt = new RulePortTables;
 
     if ( !(rpt->svc_any = PortObjectNew()) )
-        ParseAbort("ParseRulesFile udp any-any PortObjectNew() failed");
+        ParseAbort("udp any-any PortObjectNew() failed");
 
     PortObjectAddPortAny(rpt->svc_any);
 

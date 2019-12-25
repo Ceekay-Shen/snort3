@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -25,6 +25,8 @@
 #include "framework/codec.h"
 #include "protocols/eth.h"
 
+using namespace snort;
+
 namespace
 {
 #define CD_TRANSBRIDGE_NAME "trans_bridge"
@@ -41,7 +43,7 @@ public:
 } // anonymous namespace
 
 void TransbridgeCodec::get_protocol_ids(std::vector<ProtocolId>& v)
-{ v.push_back(ProtocolId::ETHERTYPE_TRANS_ETHER_BRIDGING); }
+{ v.emplace_back(ProtocolId::ETHERTYPE_TRANS_ETHER_BRIDGING); }
 
 bool TransbridgeCodec::decode(const RawData& raw, CodecData& codec, DecodeData&)
 {

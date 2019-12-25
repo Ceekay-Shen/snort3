@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -27,9 +27,15 @@
 #include <cstdint>
 #include <cstdio>
 
-struct SnortConfig;
-struct OptTreeNode;
+#include "target_based/snort_protocols.h"
+
+namespace snort
+{
 struct GHash;
+struct SnortConfig;
+}
+
+struct OptTreeNode;
 
 /* this contains a list of the URLs for various reference systems */
 struct ReferenceSystemNode
@@ -39,9 +45,8 @@ struct ReferenceSystemNode
     ReferenceSystemNode* next;
 };
 
-ReferenceSystemNode* ReferenceSystemAdd(SnortConfig*, const char*, const char* = nullptr);
+ReferenceSystemNode* ReferenceSystemAdd(snort::SnortConfig*, const char*, const char* = nullptr);
 
-/* XXX: update to point to the ReferenceURLNode in the referenceURL list */
 struct ReferenceNode
 {
     char* id;
@@ -49,28 +54,28 @@ struct ReferenceNode
     ReferenceNode* next;
 };
 
-void AddReference(SnortConfig*, ReferenceNode**, const char*, const char*);
+void AddReference(snort::SnortConfig*, ReferenceNode**, const char*, const char*);
 
 /* struct for rule classification */
 struct ClassType
 {
     // FIXIT-L type and name are backwards (name -> text, type -> name)
-    char* type;      /* classification type */
-    int id;          /* classification id */
-    char* name;      /* "pretty" classification name */
-    int priority;    /* priority */
+    char* type;
+    int id;
+    char* name;  // "pretty" name
+    unsigned priority;
     ClassType* next;
 };
 
 /* NOTE:  These methods can only be used during parse time */
-void AddClassification(SnortConfig*, const char* type, const char* name, int priority);
+void AddClassification(snort::SnortConfig*, const char* type, const char* name, unsigned priority);
 
-ClassType* ClassTypeLookupByType(SnortConfig*, const char*);
+ClassType* ClassTypeLookupByType(snort::SnortConfig*, const char*);
 
 struct SignatureServiceInfo
 {
     char* service;
-    int16_t service_ordinal;
+    SnortProtocolId snort_protocol_id;
 };
 
 struct OtnKey
@@ -84,28 +89,28 @@ enum Target
 
 struct SigInfo
 {
-    char* message;
-    ClassType* class_type;
-    ReferenceNode* refs;
-    SignatureServiceInfo* services;
+    char* message = nullptr;
+    ClassType* class_type = nullptr;
+    ReferenceNode* refs = nullptr;
+    SignatureServiceInfo* services = nullptr;
 
-    uint32_t gid;
-    uint32_t sid;
-    uint32_t rev;
+    uint32_t gid = 0;
+    uint32_t sid = 0;
+    uint32_t rev = 0;
 
-    uint32_t class_id;
-    uint32_t priority;
-    uint32_t num_services;
+    uint32_t class_id = 0;
+    uint32_t priority = 0;
+    uint32_t num_services = 0;
 
-    bool text_rule;
-    Target target;
+    bool builtin = false;
+    Target target = TARGET_NONE;
 };
 
-GHash* OtnLookupNew();
-void OtnLookupAdd(GHash*, OptTreeNode*);
-OptTreeNode* OtnLookup(GHash*, uint32_t gid, uint32_t sid);
-void OtnLookupFree(GHash*);
-void OtnRemove(GHash*, OptTreeNode*);
+snort::GHash* OtnLookupNew();
+void OtnLookupAdd(snort::GHash*, OptTreeNode*);
+OptTreeNode* OtnLookup(snort::GHash*, uint32_t gid, uint32_t sid);
+void OtnLookupFree(snort::GHash*);
+void OtnRemove(snort::GHash*, OptTreeNode*);
 
 void OtnDeleteData(void* data);
 void OtnFree(void* data);

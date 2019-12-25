@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -33,6 +33,8 @@
 
 #include "gtp.h"
 #include "gtp_inspect.h"
+
+using namespace snort;
 
 static const char* s_name = "gtp_info";
 
@@ -97,7 +99,7 @@ bool GtpInfoOption::operator==(const IpsOption& ips) const
 
 IpsOption::EvalStatus GtpInfoOption::eval(Cursor& c, Packet* p)
 {
-    Profile profile(gtp_info_prof);
+    RuleProfile profile(gtp_info_prof);
 
     if ( !p or !p->flow )
         return NO_MATCH;
@@ -107,7 +109,7 @@ IpsOption::EvalStatus GtpInfoOption::eval(Cursor& c, Packet* p)
     if ( !gfd or !gfd->ropts.gtp_infoElements )
         return NO_MATCH;
 
-    GTP_Roptions& ropts = gfd->ropts;
+    const GTP_Roptions& ropts = gfd->ropts;
 
     // match the status code
     uint8_t ieType = types[ropts.gtp_version];

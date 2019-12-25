@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -25,7 +25,10 @@
 // Email headers and emails are also stored in the log buffer
 
 #include <cstdint>
+#include "main/snort_types.h"
 
+namespace snort
+{
 enum EmailUserType
 {
     EMAIL_SENDER,
@@ -43,15 +46,14 @@ struct MailLogConfig
 
 class Flow;
 
-class MailLogState
+class SO_PUBLIC MailLogState
 {
 public:
     MailLogState(MailLogConfig* conf);
     ~MailLogState();
 
     /* accumulate MIME attachment filenames. The filenames are appended by commas */
-    int log_file_name(const uint8_t* start, int length, bool* disp_cont);
-    void set_file_name_from_log(Flow*);
+    int log_file_name(const uint8_t* start, int length);
 
     int log_email_hdrs(const uint8_t* start, int length);
     int log_email_id (const uint8_t* start, int length, EmailUserType);
@@ -66,7 +68,6 @@ public:
     bool is_email_to_present();
 
 private:
-    int extract_file_name(const char** start, int length, bool* disp_cont);
     int log_flags = 0;
     uint8_t* buf = nullptr;
     unsigned char* emailHdrs;
@@ -80,6 +81,7 @@ private:
     uint16_t file_logged;
     uint16_t file_current;
 };
+}
 
 #endif
 

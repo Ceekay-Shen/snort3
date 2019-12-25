@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2012-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -26,9 +26,11 @@
 // Currently, it provides three sets of APIs: file processing, MIME processing,
 // and configurations.
 
-#include <string>
+#include <bitset>
 #include <cstring>
+#include <string>
 
+#include "main/snort_config.h"
 #include "main/snort_types.h"
 
 #define     ENABLE_FILE_TYPE_IDENTIFICATION      0x1
@@ -58,9 +60,6 @@ enum FileVerdict
     FILE_VERDICT_STOP_CAPTURE,
     FILE_VERDICT_MAX
 };
-
-const std::string VerdictName[] =
-{"Unknown", "Log", "Stop", "Block", "Reset", "Pending", "Stop Capture", "INVALID"};
 
 enum FilePosition
 {
@@ -113,30 +112,36 @@ struct FileState
     FileSigState sig_state;
 };
 
+namespace snort
+{
+#define FILE_ID_MAX          1024
+typedef std::bitset<FILE_ID_MAX> FileTypeBitSet;
+
 class FileContext;
-struct FileCaptureInfo;
-class Flow;
 class FileInfo;
+class Flow;
+struct Packet;
 
 class SO_PUBLIC FilePolicyBase
 {
 public:
 
     FilePolicyBase() = default;
+    virtual ~FilePolicyBase() = default;
+
     // This is called when a new flow is queried for the first time
     // Check & update what file policy is enabled on this flow/file
-    virtual void policy_check(Flow*, FileInfo* ) { }
+    virtual void policy_check(Flow*, FileInfo*) { }
 
     // This is called after file type is known
-    virtual FileVerdict type_lookup(Flow*, FileInfo*)
+    virtual FileVerdict type_lookup(Packet*, FileInfo*)
     { return FILE_VERDICT_UNKNOWN; }
 
     // This is called after file signature is complete
-    virtual FileVerdict signature_lookup(Flow*, FileInfo*)
+    virtual FileVerdict signature_lookup(Packet*, FileInfo*)
     { return FILE_VERDICT_UNKNOWN; }
 
     virtual void log_file_action(Flow*, FileInfo*, FileAction) { }
-
 };
 
 inline void initFilePosition(FilePosition* position, uint64_t processed_size)
@@ -184,8 +189,10 @@ inline FileCharEncoding get_character_encoding(const char* file_name, size_t len
     return encoding;
 }
 
-SO_PUBLIC uint64_t get_file_processed_size(class Flow* flow);
-FilePosition get_file_position(struct Packet* pkt);
-
+SO_PUBLIC uint64_t get_file_processed_size(Flow* flow);
+SO_PUBLIC FilePosition get_file_position(Packet* pkt);
+SO_PUBLIC void get_magic_rule_ids_from_type(const std::string& type,
+    const std::string& version, FileTypeBitSet& ids_set, SnortConfig*);
+}
 #endif
 

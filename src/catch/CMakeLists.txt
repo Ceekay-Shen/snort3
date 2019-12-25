@@ -1,12 +1,24 @@
 
 if ( ENABLE_UNIT_TESTS )
 
-add_library(catch_tests STATIC
-    catch.hpp
-    unit_test.cc
-    unit_test.h
-)
+    set (CATCH_INCLUDES
+        catch.hpp
+        snort_catch.h
+    )
 
-target_link_libraries(catch_tests)
+    install (FILES ${CATCH_INCLUDES}
+        DESTINATION "${INCLUDE_INSTALL_PATH}/catch"
+    )
+
+    add_library(catch_tests OBJECT
+        ${CATCH_INCLUDES}
+        unit_test.cc
+        unit_test.h
+    )
+
+    add_library(catch_main OBJECT
+        EXCLUDE_FROM_ALL
+        catch_main.cc
+    )
 
 endif()

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -23,15 +23,16 @@
 #endif
 
 #include "ftp_module.h"
-
+#include "ftpp_return_codes.h"
+#include "ftp_cmd_lookup.h"
+#include "ftp_parse.h"
 #include "log/messages.h"
-
+#include "utils/util.h"
+#include "ft_main.h"
 #include "ftpp_si.h"
 
+using namespace snort;
 using namespace std;
-
-#define FTP_CLIENT "ftp_client"
-#define FTP_SERVER "ftp_server"
 
 #define ftp_client_help \
     "FTP client configuration module for use with ftp_server"
@@ -46,13 +47,13 @@ using namespace std;
 static const Parameter client_bounce_params[] =
 {
     { "address", Parameter::PT_ADDR, nullptr, "1.0.0.0/32",
-      "allowed ip address in CIDR format" },
+      "allowed IP address in CIDR format" },
 
     // FIXIT-L port and last_port should be replaced with a port list
-    { "port", Parameter::PT_PORT, "1:", "20",
+    { "port", Parameter::PT_PORT, nullptr, "20",
       "allowed port" },
 
-    { "last_port", Parameter::PT_PORT, "0:", nullptr,
+    { "last_port", Parameter::PT_PORT, nullptr, nullptr,
       "optional allowed range from port to last_port inclusive" },
 
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
@@ -69,17 +70,17 @@ static const Parameter ftp_client_params[] =
     { "ignore_telnet_erase_cmds", Parameter::PT_BOOL, nullptr, "false",
       "ignore erase character and erase line commands when normalizing" },
 
-    { "max_resp_len", Parameter::PT_INT, "-1:", "-1",
-      "maximum ftp response accepted by client" },
+    { "max_resp_len", Parameter::PT_INT, "0:max32", "4294967295",
+      "maximum FTP response accepted by client" },
 
     { "telnet_cmds", Parameter::PT_BOOL, nullptr, "false",
-      "detect telnet escape sequences on ftp control channel" },
+      "detect Telnet escape sequences on FTP control channel" },
 
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
 };
 
 FtpClientModule::FtpClientModule() :
-    Module(FTP_CLIENT, ftp_client_help, ftp_client_params)
+    Module(FTP_CLIENT_NAME, ftp_client_help, ftp_client_params)
 {
     conf = nullptr;
 }
@@ -108,13 +109,13 @@ bool FtpClientModule::set(const char*, Value& v, SnortConfig*)
         conf->ignore_telnet_erase_cmds = v.get_bool();
 
     else if ( v.is("last_port") )
-        last_port = v.get_long();
+        last_port = v.get_uint16();
 
     else if ( v.is("max_resp_len") )
-        conf->max_resp_len = v.get_long();
+        conf->max_resp_len = v.get_uint32();
 
     else if ( v.is("port") )
-        port = v.get_long();
+        port = v.get_uint16();
 
     else if ( v.is("telnet_cmds") )
         conf->telnet_cmds = v.get_bool();
@@ -125,7 +126,7 @@ bool FtpClientModule::set(const char*, Value& v, SnortConfig*)
     return true;
 }
 
-BounceTo::BounceTo(string& a, Port l, Port h)
+BounceTo::BounceTo(const string& a, Port l, Port h)
 {
     address = a;
     low = l;
@@ -182,7 +183,7 @@ bool FtpClientModule::end(const char* fqn, int idx, SnortConfig*)
             ParseError("bad ftp_client.bounce_to [%d]", idx);
             return false;
         }
-        bounce_to.push_back(new BounceTo(address, port, last_port));
+        bounce_to.emplace_back(new BounceTo(address, port, last_port));
     }
     return true;
 }
@@ -191,14 +192,14 @@ bool FtpClientModule::end(const char* fqn, int idx, SnortConfig*)
 // server stuff
 //-------------------------------------------------------------------------
 
-FtpCmd::FtpCmd(std::string& key, uint32_t flg, int num)
+FtpCmd::FtpCmd(const std::string& key, uint32_t flg, int num)
 {
     name = key;
     flags = flg;
     number = num;
 }
 
-FtpCmd::FtpCmd(std::string& key, std::string& fmt, int num)
+FtpCmd::FtpCmd(const std::string& key, const std::string& fmt, int num)
 {
     name = key;
     format = fmt;
@@ -244,7 +245,7 @@ static const Parameter ftp_server_validity_params[] =
     { "format", Parameter::PT_STRING, nullptr, nullptr,
       "format specification" },
 
-    { "length", Parameter::PT_INT, "0:", "0",
+    { "length", Parameter::PT_INT, "0:max32", "0",
       "specify non-default maximum for command" },
 
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
@@ -255,7 +256,7 @@ static const Parameter ftp_directory_params[] =
     { "dir_cmd", Parameter::PT_STRING, nullptr, nullptr,
       "directory command" },
 
-    { "rsp_code", Parameter::PT_INT, "200:", "200",
+    { "rsp_code", Parameter::PT_INT, "200:max32", "200",
       "expected successful response code for command" },
 
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
@@ -296,17 +297,17 @@ static const Parameter ftp_server_params[] =
     { "cmd_validity", Parameter::PT_LIST, ftp_server_validity_params, nullptr,
       "specify command formats" },
 
-    { "def_max_param_len", Parameter::PT_INT, "1:", "100",
+    { "def_max_param_len", Parameter::PT_INT, "1:max32", "100",
       "default maximum length of commands handled by server; 0 is unlimited" },
 
     { "encrypted_traffic", Parameter::PT_BOOL, nullptr, "false",
-      "check for encrypted telnet and ftp" },
+      "check for encrypted Telnet and FTP" },
 
     { "ftp_cmds", Parameter::PT_STRING, nullptr, nullptr,
       "specify additional commands supported by server beyond RFC 959" },
 
     { "ignore_data_chan", Parameter::PT_BOOL, nullptr, "false",
-      "do not inspect ftp data channels" },
+      "do not inspect FTP data channels" },
 
     { "ignore_telnet_erase_cmds", Parameter::PT_BOOL, nullptr, "false",
       "ignore erase character and erase line commands when normalizing" },
@@ -315,7 +316,7 @@ static const Parameter ftp_server_params[] =
       "print command configurations on start up" },
 
     { "telnet_cmds", Parameter::PT_BOOL, nullptr, "false",
-      "detect telnet escape sequences of ftp control channel" },
+      "detect Telnet escape sequences of FTP control channel" },
 
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
 };
@@ -340,8 +341,8 @@ static const RuleMap ftp_server_rules[] =
 static const PegInfo ftp_pegs[] =
 {
     { CountType::SUM, "total_packets", "total packets" },
-    { CountType::NOW, "concurrent_sessions", "total concurrent ftp sessions" },
-    { CountType::MAX, "max_concurrent_sessions", "maximum concurrent ftp sessions" },
+    { CountType::NOW, "concurrent_sessions", "total concurrent FTP sessions" },
+    { CountType::MAX, "max_concurrent_sessions", "maximum concurrent FTP sessions" },
 
     { CountType::END, nullptr, nullptr }
 };
@@ -349,7 +350,7 @@ static const PegInfo ftp_pegs[] =
 //-------------------------------------------------------------------------
 
 FtpServerModule::FtpServerModule() :
-    Module(FTP_SERVER, ftp_server_help, ftp_server_params)
+    Module(FTP_SERVER_NAME, ftp_server_help, ftp_server_params)
 {
     conf = nullptr;
 }
@@ -376,7 +377,7 @@ void FtpServerModule::add_commands(
     v.set_first_token();
 
     while ( v.get_next_token(tok) )
-        cmds.push_back(new FtpCmd(tok, flags, num));
+        cmds.emplace_back(new FtpCmd(tok, flags, num));
 }
 
 const FtpCmd* FtpServerModule::get_cmd(unsigned idx)
@@ -420,7 +421,7 @@ bool FtpServerModule::set(const char*, Value& v, SnortConfig*)
         add_commands(v, CMD_XFER);
 
     else if ( v.is("def_max_param_len") )
-        conf->def_max_param_len = v.get_long();
+        conf->def_max_param_len = v.get_uint32();
 
     else if ( v.is("dir_cmd") )
         names = v.get_string();
@@ -450,7 +451,7 @@ bool FtpServerModule::set(const char*, Value& v, SnortConfig*)
         conf->ignore_telnet_erase_cmds = v.get_bool();
 
     else if ( v.is("length") )
-        number = v.get_long();
+        number = v.get_uint32();
 
     else if ( v.is("login_cmds") )
         add_commands(v, CMD_LOGIN);
@@ -459,7 +460,7 @@ bool FtpServerModule::set(const char*, Value& v, SnortConfig*)
         conf->print_commands = v.get_bool();
 
     else if ( v.is("rsp_code") )
-        number = v.get_long();
+        number = v.get_uint32();
 
     else if ( v.is("telnet_cmds") )
         conf->telnet_cmds = v.get_bool();
@@ -472,7 +473,108 @@ bool FtpServerModule::set(const char*, Value& v, SnortConfig*)
 
 //-------------------------------------------------------------------------
 
-bool FtpServerModule::begin(const char*, int, SnortConfig*)
+// Recursively sets nodes that allow strings to nodes that check
+// for a string format attack within the FTP parameter validation tree
+
+static void ResetStringFormat(FTP_PARAM_FMT* Fmt)
+{
+    int i;
+    if (!Fmt)
+        return;
+
+    if (Fmt->type == e_unrestricted)
+        Fmt->type = e_strformat;
+
+    ResetStringFormat(Fmt->optional_fmt);
+    for (i=0; i<Fmt->numChoices; i++)
+    {
+        ResetStringFormat(Fmt->choices[i]);
+    }
+    ResetStringFormat(Fmt->next_param_fmt);
+}
+
+static int ProcessFTPDataChanCmdsList(
+    FTP_SERVER_PROTO_CONF* ServerConf, const FtpCmd* fc)
+{
+    const char* cmd = fc->name.c_str();
+    int iRet = 0;
+
+    FTP_CMD_CONF* FTPCmd =
+        ftp_cmd_lookup_find(ServerConf->cmd_lookup, cmd, strlen(cmd), &iRet);
+
+    if (FTPCmd == nullptr)
+    {
+        /* Add it to the list */
+        // note that struct includes 1 byte for null, so just add len
+        FTPCmd = (FTP_CMD_CONF*)snort_calloc(sizeof(FTP_CMD_CONF)+strlen(cmd));
+        strncpy(FTPCmd->cmd_name, cmd, strlen(cmd) + 1);
+
+        // FIXIT-L make sure pulled from server conf when used if not overridden
+        //FTPCmd->max_param_len = ServerConf->def_max_param_len;
+
+        ftp_cmd_lookup_add(ServerConf->cmd_lookup, cmd,
+            strlen(cmd), FTPCmd);
+        iRet = 0;
+    }
+    if ( fc->flags & CMD_DIR )
+        FTPCmd->dir_response = fc->number;
+
+    if ( fc->flags & CMD_LEN )
+    {
+        FTPCmd->max_param_len = fc->number;
+        FTPCmd->max_param_len_overridden = 1;
+    }
+    if ( fc->flags & CMD_DATA )
+        FTPCmd->data_chan_cmd = true;
+
+    if ( fc->flags & CMD_REST )
+        FTPCmd->data_rest_cmd = true;
+
+    if ( fc->flags & CMD_XFER )
+        FTPCmd->data_xfer_cmd = true;
+
+    if ( fc->flags & CMD_PUT )
+        FTPCmd->file_put_cmd = true;
+
+    if ( fc->flags & CMD_GET )
+        FTPCmd->file_get_cmd = true;
+
+    if ( fc->flags & CMD_CHECK )
+    {
+        FTP_PARAM_FMT* Fmt = FTPCmd->param_format;
+        if (Fmt)
+        {
+            ResetStringFormat(Fmt);
+        }
+        else
+        {
+            Fmt = (FTP_PARAM_FMT*)snort_calloc(sizeof(FTP_PARAM_FMT));
+            Fmt->type = e_head;
+            FTPCmd->param_format = Fmt;
+
+            Fmt = (FTP_PARAM_FMT*)snort_calloc(sizeof(FTP_PARAM_FMT));
+            Fmt->type = e_strformat;
+            FTPCmd->param_format->next_param_fmt = Fmt;
+            Fmt->prev_param_fmt = FTPCmd->param_format;
+        }
+        FTPCmd->check_validity = true;
+    }
+    if ( fc->flags & CMD_VALID && !fc->format.empty())
+    {
+        char err[1024];
+        iRet = ProcessFTPCmdValidity(
+            ServerConf, cmd, fc->format.c_str(), err, sizeof(err));
+    }
+    if ( fc->flags & CMD_ENCR )
+        FTPCmd->encr_cmd = true;
+
+    if ( fc->flags & CMD_LOGIN )
+        FTPCmd->login_cmd = true;
+
+    return iRet;
+}
+
+bool FtpServerModule::begin(const char* fqn, int, SnortConfig*)
 {
     names.clear();
     format.clear();
@@ -481,16 +583,31 @@ bool FtpServerModule::begin(const char*, int, SnortConfig*)
     if ( !conf )
         conf = new FTP_SERVER_PROTO_CONF;
 
+    if ( !strcmp(fqn, "ftp_server") )
+    {
+        for ( auto cmd : cmds )
+             delete cmd;
+
+        cmds.clear();
+    }
     return true;
 }
 
 bool FtpServerModule::end(const char* fqn, int idx, SnortConfig*)
 {
-    if ( !idx )
+
+    if ( !idx && !strcmp(fqn, "ftp_server") )
+    {
+        for( auto cmd : cmds)
+        {
+            if ( FTPP_SUCCESS !=  ProcessFTPDataChanCmdsList(conf, cmd) )
+                return false;
+        }
         return true;
+    }
 
     if ( !strcmp(fqn, "ftp_server.cmd_validity") )
-        cmds.push_back(new FtpCmd(names, format, number));
+        cmds.emplace_back(new FtpCmd(names, format, number));
 
     else if ( !strcmp(fqn, "ftp_server.directory_cmds") )
     {

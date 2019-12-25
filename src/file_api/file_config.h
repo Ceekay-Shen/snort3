@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2012-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -23,7 +23,7 @@
 #define FILE_CONFIG_H
 
 // This provides the basic configuration for file processing
-
+#include "main/snort_config.h"
 #include "file_api/file_identifier.h"
 #include "file_api/file_policy.h"
 
@@ -37,6 +37,7 @@
 #define DEFAULT_FILE_CAPTURE_MIN_SIZE       0           // 0
 #define DEFAULT_FILE_CAPTURE_BLOCK_SIZE     32768       // 32 KiB
 #define DEFAULT_MAX_FILES_CACHED            65536
+#define DEFAULT_MAX_FILES_PER_FLOW          32
 
 #define FILE_ID_NAME "file_id"
 #define FILE_ID_HELP "configure file identification"
@@ -45,6 +46,8 @@ class FileConfig
 {
 public:
     FileMagicRule* get_rule_from_id(uint32_t);
+    void get_magic_rule_ids_from_type(const std::string&, const std::string&,
+        snort::FileTypeBitSet&);
     void process_file_rule(FileMagicRule&);
     void process_file_policy_rule(FileRule&);
     bool process_file_magic(FileMagicData&);
@@ -63,6 +66,7 @@ public:
     int64_t capture_block_size = DEFAULT_FILE_CAPTURE_BLOCK_SIZE;
     int64_t file_depth =  0;
     int64_t max_files_cached = DEFAULT_MAX_FILES_CACHED;
+    uint64_t max_files_per_flow = DEFAULT_MAX_FILES_PER_FLOW;
 
     int64_t show_data_depth = DEFAULT_FILE_SHOW_DATA_DEPTH;
     bool trace_type = false;
@@ -76,6 +80,6 @@ private:
 };
 
 std::string file_type_name(uint32_t id);
-FileConfig* get_file_config();
+FileConfig* get_file_config(snort::SnortConfig* sc = nullptr);
 #endif
 

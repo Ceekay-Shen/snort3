@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -73,6 +73,18 @@ public:
     inline static bool get_bind_wizard()
     { return bind_wizard; }
 
+    inline static void set_bind_port(bool val)
+    { bind_port = val; }
+
+    inline static bool get_bind_port()
+    { return bind_port; }
+
+    static void unset_convert_max_session()
+    { convert_max_session = false; }
+
+    static bool do_convert_max_session()
+    { return convert_max_session; }
+
     Binder& make_binder(Binder&);
     Binder& make_binder();
     Binder& make_pending_binder(int ips_policy_id);
@@ -89,8 +101,9 @@ public:
     void set_state(ConversionState* c, bool delete_old = true);
     // reset the current parsing state
     void reset_state();
-    // parse an include file.  Use this function to ensure all set options are properly
-    int parse_file(const std::string& file, bool reset = true);
+    // parse an include file.  Use this function to ensure all options are set properly.
+    int parse_file(const std::string& in_file, const std::string* out_file = nullptr,
+        bool reset = true);
 
     bool failed_conversions() const
     { return data_api.failed_conversions() || rule_api.failed_conversions(); }
@@ -110,6 +123,12 @@ public:
     inline RuleApi& get_rule_api()
     { return rule_api; }
 
+    bool added_ftp_data() const
+    { return ftp_data_is_added; }
+
+    void set_added_ftp_data()
+    { ftp_data_is_added = true; }
+
 private:
     static std::string ips_pattern;
     static bool parse_includes;
@@ -117,6 +136,10 @@ private:
     static bool convert_conf_mult_files;
     static bool empty_args;
     static bool bind_wizard;
+    static bool bind_port;
+    static bool convert_max_session;
+
+    bool ftp_data_is_added = false;
 
     DataApi data_api;
 
@@ -145,4 +168,3 @@ private:
 };
 
 #endif
-

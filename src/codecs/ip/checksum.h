@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -91,7 +91,17 @@ inline uint16_t cksum_add(const uint16_t* buf, std::size_t len, uint32_t cksum)
 {
     const uint16_t* sp = buf;
 
-    if (len > 1 )
+    // if pointer is 16 bit aligned calculate checksum in tight loop...
+    // gcc 5.4 -O3 generates unaligned quadword instructions that crash; fixed in gcc 8.0.1
+    if ( !( reinterpret_cast<std::uintptr_t>(sp) & 0x01 ) )
+    {
+        while ( len > 1 )
+        {
+            cksum += *sp++;
+            len -= 2;
+        }
+    }
+    else if ( len > 1 )
     {
         std::size_t sn = ((len / 2) & 0xF);  // == len/2 % 16
         std::size_t n = (((len / 2) + 15) / 16);   // ceiling of (len / 2) / 16
@@ -134,7 +144,7 @@ inline uint16_t cksum_add(const uint16_t* buf, std::size_t len, uint32_t cksum)
         }
         sp += sn;
 
-        /* XXX - unroll loop using Duff's device. */
+        /* unroll loop using Duff's device. */
         while (--n > 0)
         {
             cksum += sp[0];
@@ -157,8 +167,9 @@ inline uint16_t cksum_add(const uint16_t* buf, std::size_t len, uint32_t cksum)
         }
     }
 
-    if (len & 1)
-        cksum += (*(const unsigned char*)sp);
+    // if len is odd, sum in the last byte...
+    if ( len & 0x01 )
+        cksum += *((const uint8_t*) sp);
 
     cksum  = (cksum >> 16) + (cksum & 0x0000ffff);
     cksum += (cksum >> 16);

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -29,35 +29,56 @@
 #include "log/messages.h"
 #include "main/snort_config.h"
 
+#include "active.h"
+#include "sfdaq.h"
 #include "sfdaq_config.h"
+#include "trough.h"
+
+using namespace snort;
 
 #define sfdaq_help "configure packet acquisition interface"
 
-static const Parameter string_list_param[] =
+/*
+ * Module Configuration
+ */
+
+static const Parameter daqvar_list_param[] =
 {
-    { "str", Parameter::PT_STRING, nullptr, nullptr, "string parameter" },
+    { "variable", Parameter::PT_STRING, nullptr, nullptr, "DAQ module variable (foo[=bar])" },
 
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
 };
 
-static const Parameter instance_params[] =
+static const Parameter daq_module_param[] = 
 {
-    { "id", Parameter::PT_INT, "0:", nullptr, "instance ID (required)" },
-    { "input_spec", Parameter::PT_STRING, nullptr, nullptr, "input specification" },
-    { "variables", Parameter::PT_LIST, string_list_param, nullptr, "DAQ variables" },
+    { "name", Parameter::PT_STRING, nullptr, nullptr, "DAQ module name (required)" },
+    { "mode", Parameter::PT_ENUM, "passive | inline | read-file", "passive", "DAQ module mode" },
+    { "variables", Parameter::PT_LIST, daqvar_list_param, nullptr, "DAQ module variables" },
+
+    { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
+};
+
+static const Parameter path_list_param[] =
+{
+    { "path", Parameter::PT_STRING, nullptr, nullptr, "directory path" },
+
+    { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
+};
+
+static const Parameter input_list_param[] =
+{
+    { "input", Parameter::PT_STRING, nullptr, nullptr, "input source" },
 
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
 };
 
 static const Parameter s_params[] =
 {
-    { "module_dirs", Parameter::PT_LIST, string_list_param, nullptr, "directories to search for DAQ modules" },
-    { "input_spec", Parameter::PT_STRING, nullptr, nullptr, "input specification" },
-    { "module", Parameter::PT_STRING, nullptr, nullptr, "DAQ module to use" },
-    { "variables", Parameter::PT_LIST, string_list_param, nullptr, "DAQ variables" },
-    { "instances", Parameter::PT_LIST, instance_params, nullptr, "DAQ instance overrides" },
-    { "snaplen", Parameter::PT_INT, "0:65535", nullptr, "set snap length (same as -s)" },
-    { "no_promisc", Parameter::PT_BOOL, nullptr, "false", "whether to put DAQ device into promiscuous mode" },
+    { "module_dirs", Parameter::PT_LIST, path_list_param, nullptr, "directories to search for dynamic DAQ modules" },
+    { "inputs", Parameter::PT_LIST, input_list_param, nullptr, "input sources" },
+    { "snaplen", Parameter::PT_INT, "0:65535", "1518", "set snap length (same as -s)" },
+    { "batch_size", Parameter::PT_INT, "1:", "64", "set receive batch size (same as --daq-batch-size)" },
+    { "modules", Parameter::PT_LIST, daq_module_param, nullptr, "DAQ modules to use" },
 
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
 };
@@ -65,65 +86,53 @@ static const Parameter s_params[] =
 SFDAQModule::SFDAQModule() : Module("daq", sfdaq_help, s_params)
 {
     config = nullptr;
-    instance_config = nullptr;
+    module_config = nullptr;
 }
-
 
 bool SFDAQModule::begin(const char* fqn, int idx, SnortConfig*)
 {
     if (!strcmp(fqn, "daq"))
         config = new SFDAQConfig();
-
-    else if (!strcmp(fqn, "daq.instances"))
+    else if (!strcmp(fqn, "daq.modules"))
     {
         if (idx == 0)
             return true;
 
-        assert(!instance_config);
-        instance_config = new SFDAQInstanceConfig();
-
-        instance_id = -1;
+        module_config = new SFDAQModuleConfig();
     }
+
     return true;
 }
 
-bool SFDAQModule::set(const char* fqn, Value& v, SnortConfig* sc)
+bool SFDAQModule::set(const char* fqn, Value& v, SnortConfig*)
 {
     if (!strcmp(fqn, "daq.module_dirs"))
     {
         config->add_module_dir(v.get_string());
     }
-    else if (!strcmp(fqn, "daq.module"))
+    else if (!strcmp(fqn, "daq.inputs"))
     {
-        config->set_module_name(v.get_string());
-    }
-    else if (!strcmp(fqn, "daq.input_spec"))
-    {
-        config->set_input_spec(v.get_string());
-    }
-    else if (!strcmp(fqn, "daq.variables"))
-    {
-        config->set_variable(v.get_string());
+        config->add_input(v.get_string());
     }
     else if (!strcmp(fqn, "daq.snaplen"))
     {
-        config->set_mru_size(v.get_long());
+        config->set_mru_size(v.get_uint16());
     }
-    else if (!strcmp(fqn, "daq.no_promisc"))
+    else if (!strcmp(fqn, "daq.batch_size"))
     {
-        v.update_mask(sc->run_flags, RUN_FLAG__NO_PROMISCUOUS);
+        config->set_batch_size(v.get_long());
     }
-    else if (!strcmp(fqn, "daq.instances.id"))
+    else if (!strcmp(fqn, "daq.modules.name"))
     {
-        instance_id = v.get_long();
+        module_config->name = v.get_string();
     }
-    else if (!strcmp(fqn, "daq.instances.input_spec"))
+    else if (!strcmp(fqn, "daq.modules.mode"))
     {
-        instance_config->set_input_spec(v.get_string());
+        module_config->mode = (SFDAQModuleConfig::SFDAQMode) (v.get_long() + 1);
     }
-    else if (!strcmp(fqn, "daq.instances.variables"))
+    else if (!strcmp(fqn, "daq.modules.variables"))
     {
-        instance_config->set_variable(v.get_string());
+        module_config->set_variable(v.get_string());
     }
 
     return true;
@@ -131,20 +140,20 @@ bool SFDAQModule::set(const char* fqn, Value& v, SnortConfig* sc)
 
 bool SFDAQModule::end(const char* fqn, int idx, SnortConfig* sc)
 {
-    if (!strcmp(fqn, "daq.instances"))
+    if (!strcmp(fqn, "daq.modules"))
     {
         if (idx == 0)
             return true;
 
-        if (instance_id < 0 or config->instances[instance_id])
+        if (module_config->name.empty())
         {
-            ParseError("%s - duplicate or no DAQ instance ID specified", fqn);
-            delete instance_config;
-            instance_config = nullptr;
+            ParseError("%s - No module name specified!", fqn);
+            delete module_config;
+            module_config = nullptr;
             return false;
         }
-        config->instances[instance_id] = instance_config;
-        instance_config = nullptr;
+        config->module_configs.push_back(module_config);
+        module_config = nullptr;
     }
     else if (!strcmp(fqn, "daq"))
     {
@@ -158,6 +167,44 @@ bool SFDAQModule::end(const char* fqn, int idx, SnortConfig* sc)
     return true;
 }
 
+const PegInfo daq_names[] =
+{
+    { CountType::MAX, "pcaps", "total files and interfaces processed" },
+    { CountType::SUM, "received", "total packets received from DAQ" },
+    { CountType::SUM, "analyzed", "total packets analyzed from DAQ" },
+    { CountType::SUM, "dropped", "packets dropped" },
+    { CountType::SUM, "filtered", "packets filtered out" },
+    { CountType::SUM, "outstanding", "packets unprocessed" },
+    { CountType::SUM, "injected", "active responses or replacements" },
+    { CountType::SUM, "allow", "total allow verdicts" },
+    { CountType::SUM, "block", "total block verdicts" },
+    { CountType::SUM, "replace", "total replace verdicts" },
+    { CountType::SUM, "whitelist", "total whitelist verdicts" },
+    { CountType::SUM, "blacklist", "total blacklist verdicts" },
+    { CountType::SUM, "ignore", "total ignore verdicts" },
+    { CountType::SUM, "retry", "total retry verdicts" },
+
+    // FIXIT-L these are not exactly DAQ counts - but they are related
+    { CountType::SUM, "internal_blacklist",
+        "packets blacklisted internally due to lack of DAQ support" },
+    { CountType::SUM, "internal_whitelist",
+        "packets whitelisted internally due to lack of DAQ support" },
+    { CountType::SUM, "skipped", "packets skipped at startup" },
+    { CountType::SUM, "idle", "attempts to acquire from DAQ without available packets" },
+    { CountType::SUM, "rx_bytes", "total bytes received" },
+    { CountType::SUM, "expected_flows", "expected flows created in DAQ" },
+    { CountType::SUM, "retries_queued", "messages queued for retry" },
+    { CountType::SUM, "retries_dropped", "messages dropped when overrunning the retry queue" },
+    { CountType::SUM, "retries_processed", "messages processed from the retry queue" },
+    { CountType::SUM, "retries_discarded", "messages discarded when purging the retry queue" },
+    { CountType::SUM, "sof_messages", "start of flow messages received from DAQ" },
+    { CountType::SUM, "eof_messages", "end of flow messages received from DAQ" },
+    { CountType::SUM, "other_messages", "messages received from DAQ with unrecognized message type" },
+    { CountType::END, nullptr, nullptr }
+};
+
+THREAD_LOCAL DAQStats daq_stats;
+
 const PegInfo* SFDAQModule::get_pegs() const
 {
     return daq_names;
@@ -165,9 +212,61 @@ const PegInfo* SFDAQModule::get_pegs() const
 
 PegCount* SFDAQModule::get_counts() const
 {
-    static THREAD_LOCAL DAQStats ds;
+    return (PegCount*) &daq_stats;
+}
 
-    get_daq_stats(ds);
-    return (PegCount*) &ds;
+static DAQ_Stats_t operator-(const DAQ_Stats_t& left, const DAQ_Stats_t& right)
+{
+    DAQ_Stats_t ret;
+
+    ret.hw_packets_received = left.hw_packets_received - right.hw_packets_received;
+    ret.hw_packets_dropped = left.hw_packets_dropped - right.hw_packets_dropped;
+    ret.packets_received = left.packets_received - right.packets_received;
+    ret.packets_filtered = left.packets_filtered - right.packets_filtered;
+    ret.packets_injected = left.packets_injected - right.packets_injected;
+
+    for ( unsigned i = 0; i < MAX_DAQ_VERDICT; i++ )
+        ret.verdicts[i] = left.verdicts[i] - right.verdicts[i];
+
+    return ret;
+}
+
+void SFDAQModule::prep_counts()
+{
+    static THREAD_LOCAL DAQ_Stats_t sfdaq_stats;
+    static THREAD_LOCAL bool did_init = false;
+
+    if ( !did_init )
+    {
+        memset(&sfdaq_stats, 0, sizeof(DAQ_Stats_t));
+        did_init = true;
+    }
+
+    if ( SFDAQ::get_local_instance() == nullptr )
+        return;
+
+    DAQ_Stats_t new_sfdaq_stats = *SFDAQ::get_stats();
+
+    // must subtract explicitly; can't zero; daq stats are cumulative ...
+    DAQ_Stats_t sfdaq_stats_delta = new_sfdaq_stats - sfdaq_stats;
+
+    uint64_t pkts_out = new_sfdaq_stats.hw_packets_received -
+                        new_sfdaq_stats.packets_filtered -
+                        new_sfdaq_stats.packets_received;
+
+    daq_stats.pcaps = Trough::get_file_count();
+    daq_stats.received = sfdaq_stats_delta.hw_packets_received;
+    daq_stats.analyzed = sfdaq_stats_delta.packets_received;
+    daq_stats.dropped = sfdaq_stats_delta.hw_packets_dropped;
+    daq_stats.filtered =  sfdaq_stats_delta.packets_filtered;
+    daq_stats.outstanding =  pkts_out;
+    daq_stats.injected =  sfdaq_stats_delta.packets_injected;
+
+    for ( unsigned i = 0; i < MAX_DAQ_VERDICT; i++ )
+        daq_stats.verdicts[i] = sfdaq_stats_delta.verdicts[i];
+
+    sfdaq_stats = new_sfdaq_stats;
+    for ( unsigned i = 0; i < MAX_DAQ_VERDICT; i++ )
+        sfdaq_stats.verdicts[i] = new_sfdaq_stats.verdicts[i];
 }
 

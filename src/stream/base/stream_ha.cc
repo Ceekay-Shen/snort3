@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -25,11 +25,11 @@
 
 #include <unordered_map>
 
-#include "binder/binder.h"
 #include "flow/flow_key.h"
-#include "main/snort_debug.h"
 #include "managers/inspector_manager.h"
 #include "stream/stream.h"
+
+using namespace snort;
 
 // HA Session flags helper macros
 #define HA_IGNORED_SESSION_FLAGS \
@@ -60,25 +60,25 @@ static void protocol_deactivate_session(Flow* flow)
         protocol_ha->deactivate_session(flow);
 }
 
-static Flow* protocol_create_session(FlowKey* key)
+static Flow* protocol_create_session(const FlowKey* key)
 {
     ProtocolHA* protocol_ha = get_protocol_ha(key->pkt_type);
     return protocol_ha ?  protocol_ha->create_session(key) : nullptr;
 }
 
-static bool is_client_lower(Flow* flow)
+static bool is_client_lower(const Flow& flow)
 {
-    if (flow->client_ip.fast_lt6(flow->server_ip))
+    if (flow.client_ip.fast_lt6(flow.server_ip))
         return true;
 
-    if (flow->server_ip.fast_lt6(flow->client_ip))
+    if (flow.server_ip.fast_lt6(flow.client_ip))
         return false;
 
-    switch (flow->key->pkt_type)
+    switch (flow.key->pkt_type)
     {
         case PktType::TCP:
         case PktType::UDP:
-            if (flow->client_port < flow->server_port)
+            if (flow.client_port < flow.server_port)
                 return true;
             break;
         default:
@@ -87,20 +87,14 @@ static bool is_client_lower(Flow* flow)
     return false;
 }
 
-bool StreamHAClient::consume(Flow*& flow, FlowKey* key, HAMessage* msg)
+bool StreamHAClient::consume(Flow*& flow, const FlowKey* key, HAMessage& msg, uint8_t size)
 {
-    DebugMessage(DEBUG_HA,"StreamHAClient::consume()\n");
-
     assert(key);
-    assert(msg);
 
-    // Is the message long enough to have our content?
-    if ( ((unsigned)(msg->content_length()) - (unsigned)(msg->cursor - msg->content())) <
-        sizeof(SessionHAContent) )
+    if (size != sizeof(SessionHAContent))
         return false;
 
-    SessionHAContent* hac = (SessionHAContent*)msg->cursor;
-    msg->cursor += sizeof(SessionHAContent);
+    SessionHAContent* hac = (SessionHAContent*) msg.cursor;
 
     // If flow is missing, we need to create a new one.
     if ( flow == nullptr )
@@ -108,9 +102,10 @@ bool StreamHAClient::consume(Flow*& flow, FlowKey* key, HAMessage* msg)
         // A nullptr indicates that the protocol has no handler
         if ( (flow = protocol_create_session(key)) == nullptr )
             return false;
-        Inspector* b = InspectorManager::get_binder();
-        if ( b != nullptr )
-            b->exec(BinderSpace::ExecOperation::EVAL_STANDBY_FLOW,(void*)flow);
+
+        BareDataEvent event;
+        DataBus::publish(STREAM_HA_NEW_FLOW_EVENT, event, flow);
+
         flow->ha_state->clear(FlowHAState::NEW);
         int family = (hac->flags & SessionHAContent::FLAG_IP6) ? AF_INET6 : AF_INET;
         if ( hac->flags & SessionHAContent::FLAG_LOW )
@@ -138,34 +133,30 @@ bool StreamHAClient::consume(Flow*& flow, FlowKey* key, HAMessage* msg)
         flow->ha_state->add(FlowHAState::STANDBY);
     }
 
+    msg.advance_cursor(sizeof(SessionHAContent));
+
     return true;
 }
 
-bool StreamHAClient::produce(Flow* flow, HAMessage* msg)
+bool StreamHAClient::produce(Flow& flow, HAMessage& msg)
 {
-    DebugMessage(DEBUG_HA,"StreamHAClient::produce()\n");
-    assert(flow);
-    assert(msg);
-
-    // Check for buffer overflows
-    if ( (int)(msg->cursor - msg->content()) <= (int)(msg->content_length() -
-        sizeof(SessionHAContent)) )
-    {
-        SessionHAContent* hac = (SessionHAContent*)msg->cursor;
-
-        memcpy(&(hac->ssn_state),&(flow->ssn_state),sizeof(LwState));
-        hac->flow_state = flow->flow_state;
-        hac->flags = 0;
-        msg->cursor += sizeof(SessionHAContent);
-
-        if ( !is_client_lower(flow) )
-            hac->flags |= SessionHAContent::FLAG_LOW;
-
-        hac->flags |= SessionHAContent::FLAG_IP6;
-        return true;
-    }
-    else
+    if (!msg.fits(sizeof(SessionHAContent)))
         return false;
+
+    SessionHAContent* hac = (SessionHAContent*) msg.cursor;
+
+    hac->ssn_state = flow.ssn_state;
+    hac->ssn_state.session_flags &= ~HA_IGNORED_SESSION_FLAGS;
+
+    hac->flow_state = flow.flow_state;
+    hac->flags = 0;
+    if (!is_client_lower(flow))
+        hac->flags |= SessionHAContent::FLAG_LOW;
+    hac->flags |= SessionHAContent::FLAG_IP6;
+
+    msg.advance_cursor(sizeof(SessionHAContent));
+
+    return true;
 }
 
 static void update_flags(Flow* flow)
@@ -209,7 +200,7 @@ static void update_flags(Flow* flow)
         }
 
         if( ( old_state->ipprotocol != cur_state->ipprotocol ) ||
-            ( old_state->application_protocol != cur_state->application_protocol ) ||
+            ( old_state->snort_protocol_id != cur_state->snort_protocol_id ) ||
             ( old_state->direction != cur_state->direction ) )
         {
             flow->ha_state->add(FlowHAState::MODIFIED);
@@ -227,8 +218,6 @@ static void update_flags(Flow* flow)
 
 bool StreamHAClient::is_update_required(Flow* flow)
 {
-    DebugMessage(DEBUG_HA,"StreamHAClient::update_required()\n");
-
     assert(flow);
     assert(flow->ha_state);
 
@@ -245,24 +234,16 @@ bool StreamHAClient::is_update_required(Flow* flow)
         and that we're not overrunning the synchronization threshold. */
     if ( flow->ha_state->sync_interval_elapsed() )
         return true;
-    else
-        return flow->ha_state->check_any(FlowHAState::CRITICAL);
-}
 
-bool StreamHAClient::is_delete_required(Flow*)
-{
-    DebugMessage(DEBUG_HA,"StreamHAClient::update_required()\n");
-    return true;
+    return flow->ha_state->check_any(FlowHAState::CRITICAL);
 }
 
 ProtocolHA::ProtocolHA(PktType protocol)
 {
-    DebugFormat(DEBUG_HA,"ProtocolHA::ProtocolHA(): protocol: %d\n",(int)protocol);
-
     if ( proto_map == nullptr )
         proto_map = new ProtocolMap;
 
-    proto_map->insert(std::make_pair((int)protocol, this));
+    proto_map->emplace((int)protocol, this);
 }
 
 ProtocolHA::~ProtocolHA()
@@ -284,7 +265,7 @@ ProtocolHA::~ProtocolHA()
     }
 }
 
-void ProtocolHA::process_deletion(Flow* flow)
+void ProtocolHA::process_deletion(Flow& flow)
 {
     HighAvailabilityManager::process_deletion(flow);
 }

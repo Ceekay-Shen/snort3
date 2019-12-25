@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -35,13 +35,16 @@ struct GTP_Roptions
     GTP_IEData* gtp_infoElements;
 };
 
-class GtpFlowData : public FlowData
+class GtpFlowData : public snort::FlowData
 {
 public:
     GtpFlowData();
     ~GtpFlowData() override;
 
     static void init();
+
+    size_t size_of() override
+    { return sizeof(*this); }
 
 public:
     static unsigned inspector_id;

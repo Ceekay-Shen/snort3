@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2013-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -25,7 +25,6 @@
 
 #include "log/messages.h"
 #include "main/snort_config.h"
-#include "main/snort_debug.h"
 #include "sfip/sf_ipvar.h"
 #include "utils/util.h"
 #include "utils/util_cstring.h"
@@ -33,8 +32,10 @@
 #include "parse_ports.h"
 
 #ifdef UNIT_TEST
-#include "catch/catch.hpp"
+#include "catch/snort_catch.h"
 #endif
+
+using namespace snort;
 
 //-------------------------------------------------------------------------
 // var node stuff
@@ -510,16 +511,12 @@ VarEntry* VarDefine(
     /* Check if this is a variable that stores an IP */
     else if (*value == '$')
     {
-        sfip_var_t* var;
-        if ((var = sfvt_lookup_var(ip_vartable, value)) != nullptr)
+        if ( sfvt_lookup_var(ip_vartable, value) )
         {
             sfvt_define(ip_vartable, name, value);
             return nullptr;
         }
     }
-
-    DebugFormat(DEBUG_PORTLISTS,
-        "VarDefine: name=%s value=%s\n",name,value);
 
     /* Check to see if this variable is just being aliased */
     if (var_table != nullptr)
@@ -545,9 +542,6 @@ VarEntry* VarDefine(
     {
         ParseAbort("could not expand var('%s').", name);
     }
-
-    DebugFormat(DEBUG_PORTLISTS,
-        "VarDefine: name=%s value=%s (expanded)\n",name,value);
 
     DisallowCrossTableDuplicateVars(sc, name, VAR_TYPE__DEFAULT);
 
@@ -599,7 +593,7 @@ VarEntry* VarDefine(
     else
         p->id = var_id;
 
-#ifdef XXXXXXX
+#if 0
     vlen = strlen(value);
     LogMessage("Var '%s' defined, value len = %d chars", p->name, vlen);
 
@@ -659,7 +653,6 @@ const char* VarSearch(SnortConfig* sc, const char* name)
     if ((ipvar = sfvt_lookup_var(ip_vartable, name)) != nullptr)
         return ExpandVars(sc, ipvar->value);
 
-    /* XXX Return a string value */
     if (PortVarTableFind(portVarTable, name))
         return name;
 
@@ -678,24 +671,8 @@ const char* VarSearch(SnortConfig* sc, const char* name)
     return nullptr;
 }
 
-/****************************************************************************
- *
- * Function: ExpandVars()
- *
- * Purpose: expand all variables in a string
- *
- * Arguments:
- *  SnortConfig *
- *      The snort config that has the vartables.
- *  char *
- *      The name of the variable.
- *
- * Returns:
- *  char *
- *      The expanded string.  Note that the string is returned in a
- *      static variable and most likely needs to be string dup'ed.
- *
- ***************************************************************************/
+ // The expanded string.  Note that the string is returned in a
+ // static variable and most likely needs to be string dup'ed.
 const char* ExpandVars(SnortConfig* sc, const char* string)
 {
     static char estring[ 65536 ];  // FIXIT-L convert this foo to a std::string
@@ -710,7 +687,6 @@ const char* ExpandVars(SnortConfig* sc, const char* string)
 
     int i = 0, j = 0;
     int l_string = strlen(string);
-    DebugFormat(DEBUG_CONFIGRULES, "ExpandVars, Before: %s\n", string);
 
     while (i < l_string && j < (int)sizeof(estring) - 1)
     {
@@ -825,7 +801,6 @@ const char* ExpandVars(SnortConfig* sc, const char* string)
         }
     }
 
-    DebugFormat(DEBUG_CONFIGRULES, "ExpandVars, After: %s\n", estring);
 
     return estring;
 }
@@ -835,7 +810,6 @@ void AddVarToTable(SnortConfig* sc, const char* name, const char* value)
     //TODO: snort.cfg and rules should use PortVar instead ...this allows compatibility for now.
     if (strstr(name, "_PORT") || strstr(name, "PORT_"))
     {
-        DebugMessage(DEBUG_CONFIGRULES,"PortVar\n");
         PortVarDefine(sc, name, value);
     }
     else

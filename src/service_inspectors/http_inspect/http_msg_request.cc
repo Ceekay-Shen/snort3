@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -24,8 +24,12 @@
 #include "http_msg_request.h"
 
 #include "http_api.h"
+#include "http_common.h"
+#include "http_enum.h"
 
+using namespace HttpCommon;
 using namespace HttpEnums;
+using namespace snort;
 
 HttpMsgRequest::HttpMsgRequest(const uint8_t* buffer, const uint16_t buf_size,
     HttpFlowData* session_data_, SourceId source_id_, bool buf_owner, Flow* flow_,
@@ -33,6 +37,7 @@ HttpMsgRequest::HttpMsgRequest(const uint8_t* buffer, const uint16_t buf_size,
     HttpMsgStart(buffer, buf_size, session_data_, source_id_, buf_owner, flow_, params_)
 {
     transaction->set_request(this);
+    get_related_sections();
 }
 
 void HttpMsgRequest::parse_start_line()
@@ -123,6 +128,8 @@ bool HttpMsgRequest::http_name_nocase_ok(const uint8_t* start)
 
 bool HttpMsgRequest::handle_zero_nine()
 {
+    // FIXIT-M The following test seems too permissive about what constitutes HTTP/0.9. Consider
+    // not accepting "URIs" with internal whitespace or nonprinting characters.
     // 0.9 request line is supposed to be "GET <URI>\r\n"
     if ((start_line.length() >= 3) &&
         !memcmp(start_line.start(), "GET", 3) &&
@@ -245,8 +252,10 @@ void HttpMsgRequest::update_flow()
     {
         session_data->half_reset(source_id);
         session_data->type_expected[source_id] = SEC_ABORT;
+        return;
     }
-    else if (*transaction->get_infractions(source_id) & INF_ZERO_NINE_REQ)
+
+    if (*transaction->get_infractions(source_id) & INF_ZERO_NINE_REQ)
     {
         session_data->half_reset(source_id);
         // There can only be one 0.9 response per connection because it ends the S2C connection. Do
@@ -258,14 +267,12 @@ void HttpMsgRequest::update_flow()
             // line and headers.
             session_data->zero_nine_expected = trans_num;
         }
+        return;
     }
-    else
-    {
-        session_data->type_expected[source_id] = SEC_HEADER;
-        session_data->version_id[source_id] = version_id;
-        session_data->method_id = method_id;
-    }
-    session_data->section_type[source_id] = SEC__NOT_COMPUTE;
+
+    session_data->type_expected[source_id] = SEC_HEADER;
+    session_data->version_id[source_id] = version_id;
+    session_data->method_id = method_id;
 }
 
 #ifdef REG_TEST

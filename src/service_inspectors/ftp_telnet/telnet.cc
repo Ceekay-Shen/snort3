@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2004-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -23,6 +23,7 @@
 
 #include "telnet.h"
 
+#include "detection/detection_engine.h"
 #include "log/messages.h"
 #include "profiler/profiler.h"
 #include "protocols/packet.h"
@@ -34,6 +35,8 @@
 #include "ftpp_ui_config.h"
 #include "pp_telnet.h"
 #include "telnet_module.h"
+
+using namespace snort;
 
 THREAD_LOCAL ProfileStats telnetPerfStats;
 THREAD_LOCAL TelnetStats tnstats;
@@ -77,19 +80,16 @@ static int SnortTelnet(TELNET_PROTO_CONF* telnet_config, TELNET_SESSION* Telnets
 
     if ( telnet_config->normalize )
     {
-        int ret = normalize_telnet(Telnetsession, p, iInspectMode,
-            FTPP_APPLY_TNC_ERASE_CMDS);
+        DataBuffer& buf = DetectionEngine::get_alt_buffer(p);
+        int ret = normalize_telnet(Telnetsession, p, buf, iInspectMode,
+            FTPP_APPLY_TNC_ERASE_CMDS, false);
 
         if ( ret == FTPP_SUCCESS || ret == FTPP_NORMALIZED )
-        {
-            ProfileExclude exclude(telnetPerfStats);
             do_detection(p);
-        }
     }
 
     else
     {
-        ProfileExclude exclude(telnetPerfStats);
         do_detection(p);
     }
 
@@ -313,7 +313,7 @@ const InspectApi tn_api =
         mod_dtor
     },
     IT_SERVICE,
-    (uint16_t)PktType::PDU,
+    PROTO_BIT__PDU,
     nullptr, // buffers
     "telnet",
     tn_init,

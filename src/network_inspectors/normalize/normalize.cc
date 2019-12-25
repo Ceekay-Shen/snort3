@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2010-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -31,6 +31,8 @@
 #include "utils/util_cstring.h"
 
 #include "norm_module.h"
+
+using namespace snort;
 
 THREAD_LOCAL ProfileStats norm_perf_stats;
 static THREAD_LOCAL uint32_t t_flags = 0;
@@ -242,7 +244,7 @@ void Normalizer::eval(Packet* p)
 {
     Profile profile(norm_perf_stats);
 
-    if ( !p->is_rebuilt() && !Active::packet_was_dropped() )
+    if ( !p->is_rebuilt() && !p->active->packet_was_dropped() )
         Norm_Packet(&config, p);
 }
 
@@ -291,7 +293,7 @@ static const InspectApi no_api =
         mod_dtor
     },
     IT_PACKET,
-    (uint16_t)PktType::ANY_IP,
+    PROTO_BIT__ANY_IP,
     nullptr, // buffers
     nullptr, // service
     nullptr, // pinit

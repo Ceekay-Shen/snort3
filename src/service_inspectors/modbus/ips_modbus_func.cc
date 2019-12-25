@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2011-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -30,6 +30,8 @@
 #include "profiler/profiler.h"
 
 #include "modbus.h"
+
+using namespace snort;
 
 static const char* s_name = "modbus_func";
 
@@ -123,7 +125,7 @@ bool ModbusFuncOption::operator==(const IpsOption& ips) const
 
 IpsOption::EvalStatus ModbusFuncOption::eval(Cursor&, Packet* p)
 {
-    Profile profile(modbus_func_prof);
+    RuleProfile profile(modbus_func_prof);
 
     if ( !p->flow )
         return NO_MATCH;

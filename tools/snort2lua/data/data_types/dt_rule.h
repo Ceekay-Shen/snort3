@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -36,25 +36,35 @@ public:
     bool add_hdr_data(const std::string& data);
     void add_option(const std::string& keyword);
     void add_option(const std::string& keyword, const std::string& data);
+    std::string get_option(const std::string& keyword);
+    void update_option(const std::string& keyword, const std::string& val);
     void add_suboption(const std::string& keyword);
     void add_suboption(const std::string& keyword, const std::string& val);
+    void reset_sticky(void);
     void set_curr_options_buffer(const std::string& buffer, bool add_option);
     void update_rule_action(const std::string&);
+    void set_rule_old_action(const std::string&);
+    std::string& get_rule_old_action();
 
     void add_comment(const std::string& comment);
     void bad_rule();
     void make_comment();
+    void set_old_http_rule();
+    bool is_old_http_rule() { return old_http_rule; }
+    void resolve_pcre_buffer_options();
 
     friend std::ostream& operator<<(std::ostream&, const Rule&);
 
 private:
     std::vector<std::string> comments;
+    std::string old_action;
     std::array<std::string, 7> hdr_data;
     std::vector<RuleOption*> options;
     std::string sticky_buffer;
     std::size_t num_hdr_data;
     bool is_bad_rule;
     bool is_comment;
+    bool old_http_rule;
 };
 
 #endif

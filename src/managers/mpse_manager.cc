@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -33,6 +33,7 @@
 
 #include "module_manager.h"
 
+using namespace snort;
 using namespace std;
 
 typedef list<const MpseApi*> EngineList;
@@ -44,7 +45,7 @@ static EngineList s_engines;
 
 void MpseManager::add_plugin(const MpseApi* api)
 {
-    s_engines.push_back(api);
+    s_engines.emplace_back(api);
 }
 
 void MpseManager::release_plugins()
@@ -81,7 +82,7 @@ const MpseApi* MpseManager::get_search_api(const char* name)
 {
     const MpseApi* api = ::get_api(name);
 
-    if ( api )
+    if ( api and api->init )
         api->init();
 
     return api;
@@ -98,8 +99,10 @@ Mpse* MpseManager::get_search_engine(
 
 Mpse* MpseManager::get_search_engine(const char* type)
 {
-    if ( !type and SnortConfig::get_conf()->fast_pattern_config )
-        type = SnortConfig::get_conf()->fast_pattern_config->get_search_method();
+    SnortConfig* sc = SnortConfig::get_conf();
+
+    if ( !type and sc->fast_pattern_config )
+        type = sc->fast_pattern_config->get_search_method();
 
     if ( !type )
         type = "ac_bnfa";
@@ -113,7 +116,7 @@ Mpse* MpseManager::get_search_engine(const char* type)
     Mpse* eng = api->ctor(nullptr, mod, nullptr);
     eng->set_api(api);
 
-    if ( SnortConfig::get_conf()->fast_pattern_config and SnortConfig::get_conf()->fast_pattern_config->get_search_opt() )
+    if ( sc->fast_pattern_config and sc->fast_pattern_config->get_search_opt() )
         eng->set_opt(1);
 
     return eng;
@@ -131,6 +134,7 @@ void MpseManager::delete_search_engine(Mpse* eng)
 void MpseManager::print_mpse_summary(const MpseApi* api)
 {
     assert(api);
+    if ( api->print )
     api->print();
 }
 
@@ -168,10 +172,28 @@ bool MpseManager::search_engine_trim(const MpseApi* api)
     return (api->flags & MPSE_TRIM) != 0;
 }
 
+bool MpseManager::is_async_capable(const MpseApi* api)
+{
+    assert(api);
+    return (api->flags & MPSE_ASYNC) != 0;
+}
+
 bool MpseManager::is_regex_capable(const MpseApi* api)
 {
     assert(api);
     return (api->flags & MPSE_REGEX) != 0;
+}
+
+bool MpseManager::is_poll_capable(const MpseApi* api)
+{
+    assert(api);
+    return (api->poll);
+}
+
+bool MpseManager::parallel_compiles(const MpseApi* api)
+{
+    assert(api);
+    return (api->flags & MPSE_MTBLD) != 0;
 }
 
 // was called during drop stats but actually commented out
@@ -182,14 +204,6 @@ void MpseManager::print_qinfo()
     sfksearch_print_qinfo();
     acsmx2_print_qinfo();
 }
-
-// this is commented out of snort.cc
-// combine with above?
-void MpseManager::print_search_engine_stats()
-{
-    IntelPmPrintBufferStats();
-}
-
 #endif
 
 #ifdef PIGLET

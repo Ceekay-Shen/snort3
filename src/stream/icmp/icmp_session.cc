@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -24,6 +24,7 @@
 #include "icmp_session.h"
 
 #include "flow/flow_key.h"
+#include "memory/memory_cap.h"
 #include "profiler/profiler_defs.h"
 #include "protocols/icmp4.h"
 #include "protocols/packet.h"
@@ -35,6 +36,8 @@
 #include "icmp_ha.h"
 #include "icmp_module.h"
 #include "stream_icmp.h"
+
+using namespace snort;
 
 const PegInfo icmp_pegs[] =
 {
@@ -162,8 +165,6 @@ static int ProcessIcmpUnreach(Packet* p)
     if (ssn)
     {
         /* Mark this session as dead. */
-        DebugMessage(DEBUG_STREAM_STATE,
-            "Marking session as dead, per ICMP Unreachable!\n");
         ssn->ssn_state.session_flags |= SSNFLAG_DROP_CLIENT;
         ssn->ssn_state.session_flags |= SSNFLAG_DROP_SERVER;
         ssn->session_state |= STREAM_STATE_UNREACH;
@@ -177,8 +178,10 @@ static int ProcessIcmpUnreach(Packet* p)
 //-------------------------------------------------------------------------
 
 IcmpSession::IcmpSession(Flow* flow) : Session(flow)
-{
-}
+{ memory::MemoryCap::update_allocations(sizeof(*this)); }
+
+IcmpSession::~IcmpSession()
+{ memory::MemoryCap::update_deallocations(sizeof(*this)); }
 
 bool IcmpSession::setup(Packet*)
 {
@@ -187,18 +190,30 @@ bool IcmpSession::setup(Packet*)
     ssn_time.tv_usec = 0;
     flow->ssn_state.session_flags |= SSNFLAG_SEEN_SENDER;
     SESSION_STATS_ADD(icmpStats);
+    
+    StreamIcmpConfig* pc = get_icmp_cfg(flow->ssn_server);
+    flow->set_default_session_timeout(pc->session_timeout, false);
+
     return true;
 }
 
 void IcmpSession::clear()
 {
     IcmpSessionCleanup(flow);
-    IcmpHAManager::process_deletion(flow);
+    IcmpHAManager::process_deletion(*flow);
 }
 
 int IcmpSession::process(Packet* p)
 {
     int status;
+    
+    flow->set_expire(p, flow->default_session_timeout);
+
+    if (!(flow->ssn_state.session_flags & SSNFLAG_ESTABLISHED) and !(p->is_from_client()))
+    {
+        DataBus::publish(STREAM_ICMP_BIDIRECTIONAL_EVENT, p);
+        flow->ssn_state.session_flags |= SSNFLAG_ESTABLISHED;
+    }
 
     switch (p->ptrs.icmph->type)
     {
@@ -213,33 +228,5 @@ int IcmpSession::process(Packet* p)
     }
 
     return status;
-}
-
-#define icmp_sender_ip flow->client_ip
-#define icmp_responder_ip flow->server_ip
-
-void IcmpSession::update_direction(char dir, const SfIp* ip, uint16_t)
-{
-    if (icmp_sender_ip.equals(*ip))
-    {
-        if ((dir == SSN_DIR_FROM_CLIENT) && (flow->ssn_state.direction == FROM_CLIENT))
-        {
-            /* Direction already set as SENDER */
-            return;
-        }
-    }
-    else if (icmp_responder_ip.equals(*ip))
-    {
-        if ((dir == SSN_DIR_FROM_SERVER) && (flow->ssn_state.direction == FROM_SERVER))
-        {
-            /* Direction already set as RESPONDER */
-            return;
-        }
-    }
-
-    /* Swap them -- leave ssn->ssn_state.direction the same */
-    SfIp tmpIp = icmp_sender_ip;
-    icmp_sender_ip = icmp_responder_ip;
-    icmp_responder_ip = tmpIp;
 }
 

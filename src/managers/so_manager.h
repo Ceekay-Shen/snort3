@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -25,7 +25,10 @@
 
 #include "framework/so_rule.h"
 
+namespace snort
+{
 struct SnortConfig;
+}
 struct SoApi;
 
 //-------------------------------------------------------------------------
@@ -40,7 +43,7 @@ public:
     static void instantiate(const SoApi*);
 
     // soid is arg to soid option, so is arg to so option
-    static const char* get_so_options(const char* soid);
+    static const char* get_so_rule(const char* soid);
     static SoEvalFunc get_so_eval(const char* soid, const char* so, void** data);
     static void delete_so_data(const char* soid, void*);
 

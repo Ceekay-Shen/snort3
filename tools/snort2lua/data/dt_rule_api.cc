@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -32,8 +32,17 @@
 std::size_t RuleApi::error_count = 0;
 std::string RuleApi::remark;
 
-RuleApi::RuleApi()
-    :   curr_rule(nullptr),
+std::set<GidSid> RuleApi::address_anomaly_rules =
+{
+    {"116", "403"},
+    {"116", "411"},
+    {"116", "412"},
+    {"129", "9"},
+    {"129", "10"},
+};
+
+RuleApi::RuleApi() :
+    curr_rule(nullptr),
     curr_data_bad(false)
 {
     bad_rules = new Comments(start_bad_rules, 0,
@@ -66,6 +75,14 @@ std::size_t RuleApi::num_errors() const
 bool RuleApi::empty() const
 { return rules.empty(); }
 
+void RuleApi::clear()
+{
+    for (auto r : rules)
+        delete r;
+
+    rules.clear();
+}
+
 void RuleApi::set_remark(const char* s)
 { remark = s; }
 
@@ -85,6 +102,16 @@ void RuleApi::make_rule_a_comment()
         begin_rule();
 
     curr_rule->make_comment();
+}
+
+bool RuleApi::enable_addr_anomaly_detection()
+{
+    if (curr_rule != nullptr)
+    {
+        return address_anomaly_rules.count(
+            { curr_rule->get_option("gid"), curr_rule->get_option("sid") }) != 0;
+    }
+    return false;
 }
 
 void RuleApi::bad_rule(std::istringstream& stream, const std::string& bad_option)
@@ -119,12 +146,28 @@ void RuleApi::include_rule_file(const std::string& file_name)
     }
 }
 
+void RuleApi::set_rule_old_action(const std::string &action)
+{
+    if (!curr_rule)
+        begin_rule();
+
+    curr_rule->set_rule_old_action(action);
+}
+
 void RuleApi::add_hdr_data(const std::string& data)
 {
     if (!curr_rule)
         begin_rule();
 
     curr_rule->add_hdr_data(data);
+}
+
+std::string& RuleApi::get_rule_old_action()
+{
+    if (!curr_rule)
+        begin_rule();
+
+    return (curr_rule->get_rule_old_action());
 }
 
 void RuleApi::update_rule_action(const std::string& new_type)
@@ -156,6 +199,22 @@ void RuleApi::add_option(const std::string& opt_name, const std::string& val)
     curr_rule->add_option(opt_name, val);
 }
 
+std::string RuleApi::get_option(const std::string& keyword)
+{
+    if (!curr_rule)
+        return std::string();
+
+    return curr_rule->get_option(keyword);
+}
+
+void RuleApi::update_option(const std::string& keyword, const std::string& val)
+{
+    if (!curr_rule)
+        return;
+
+    curr_rule->update_option(keyword, val);
+}
+
 void RuleApi::add_suboption(const std::string& keyword)
 {
     if (curr_rule)
@@ -173,6 +232,14 @@ void RuleApi::add_suboption(const std::string& keyword,
         DataApi::developer_error("Add some header data before adding content!!");
 }
 
+void RuleApi::reset_sticky(void)
+{
+    if (curr_rule)
+        curr_rule->reset_sticky();
+    else
+        DataApi::developer_error("Add a rule before resetting the sticky buffer!!");
+}
+
 void RuleApi::set_curr_options_buffer(const std::string& buffer, bool add_option)
 {
     if (curr_rule)
@@ -187,6 +254,28 @@ void RuleApi::add_comment(const std::string& comment)
         begin_rule();
 
     curr_rule->add_comment(comment);
+}
+
+void RuleApi::old_http_rule()
+{
+    if (!curr_rule)
+        begin_rule();
+
+    curr_rule->set_old_http_rule();
+}
+
+bool RuleApi::is_old_http_rule()
+{
+    if (!curr_rule)
+        return false;
+
+    return curr_rule->is_old_http_rule();
+}
+
+void RuleApi::resolve_pcre_buffer_options()
+{
+    if (curr_rule)
+        curr_rule->resolve_pcre_buffer_options();
 }
 
 std::ostream& operator<<(std::ostream& out, const RuleApi& data)

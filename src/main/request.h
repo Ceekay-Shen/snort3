@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2017-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2017-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -29,18 +29,18 @@ class Request
 public:
     Request(int f = -1);
 
-    bool read(int&);
+    bool read(const int&);
     const char* get() { return read_buf; }
     bool write_response(const char* s) const;
-    void respond(const char* s, bool queue_response = false);
+    void respond(const char* s, bool queue_response = false, bool remote_only = false);
 #ifdef SHELL
-    bool send_queued_response();
+    void send_queued_response();
 #endif
 
 private:
     int fd;
     char read_buf[1024];
     size_t bytes_read;
-    const char* queued_response;
+    const char* queued_response = nullptr;
 };
 #endif

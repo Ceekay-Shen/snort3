@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -27,6 +27,8 @@
 #include "profiler/profiler.h"
 #include "protocols/packet.h"
 
+using namespace snort;
+
 #define s_name "pkt_data"
 
 static THREAD_LOCAL ProfileStats pktDataPerfStats;
@@ -44,7 +46,7 @@ public:
 
 IpsOption::EvalStatus PktDataOption::eval(Cursor& c, Packet* p)
 {
-    Profile profile(pktDataPerfStats);
+    RuleProfile profile(pktDataPerfStats);
 
     c.reset(p);
     return MATCH;

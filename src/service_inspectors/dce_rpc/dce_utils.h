@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2008-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -128,7 +128,6 @@ inline int DCE2_UuidCompare(const void*, const void*);
  * Public function prototypes
  ********************************************************************/
 DCE2_Ret DCE2_GetValue(const char*, char*, void*, int, DCE2_IntType, uint8_t);
-void DCE2_PrintPktData(const uint8_t*, const uint16_t);
 DCE2_Buffer* DCE2_BufferNew(uint32_t, uint32_t);
 void* DCE2_ReAlloc(void*, uint32_t, uint32_t);
 DCE2_Ret DCE2_BufferAddData(DCE2_Buffer*, const uint8_t*,
@@ -137,7 +136,7 @@ void DCE2_BufferDestroy(DCE2_Buffer* buf);
 
 #define DCE2_UUID_BUF_SIZE 50
 const char* DCE2_UuidToStr(
-    const Uuid*, DceRpcBoFlag, char (& buf)[DCE2_UUID_BUF_SIZE]);
+    const Uuid*, DceRpcBoFlag, char (&buf)[DCE2_UUID_BUF_SIZE]);
 
 /********************************************************************
  * Function: DCE2_IsSpaceChar()
@@ -392,8 +391,23 @@ inline void DCE2_BufferEmpty(DCE2_Buffer* buf)
     buf->len = 0;
 }
 
-#define DCE2_MOVE(data_ptr, data_len, amount) \
-    { (data_len) -= (amount); (data_ptr) = (const uint8_t*)(data_ptr) + (amount); }
+inline void dce2_move(const uint8_t*& data_ptr, uint16_t& data_len, int amount)
+{
+    data_len -= amount;
+    data_ptr += amount;
+}
+
+inline void dce2_move(const uint8_t*& data_ptr, uint32_t& data_len, int amount)
+{
+    data_len -= amount;
+    data_ptr += amount;
+}
+
+inline void dce2_move(const uint8_t*& data_ptr, int64_t& data_len, int amount)
+{
+    data_len -= amount;
+    data_ptr += amount;
+}
 
 #endif
 

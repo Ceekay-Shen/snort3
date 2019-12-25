@@ -1,5 +1,5 @@
 
-add_library(preprocessor_states
+add_library(preprocessor_states OBJECT
     pps_appid.cc
     pps_arpspoof.cc
     pps_bo.cc
@@ -28,17 +28,15 @@ add_library(preprocessor_states
     pps_pop.cc
     pps_imap.cc
     pps_modbus.cc
+    pps_rna.cc
     pps_smtp.cc
     pps_sfportscan.cc
     pps_stream5_ip.cc
     pps_stream5_global.cc
     pps_stream5_tcp.cc
     pps_stream5_udp.cc
+    pps_stream5_ha.cc
     preprocessor_api.h
     preprocessor_api.cc
 )
 
-target_link_libraries( preprocessor_states
-    snort2lua_helpers
-    conversion_data
-)

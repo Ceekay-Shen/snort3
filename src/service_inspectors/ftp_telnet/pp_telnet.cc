@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 // Copyright (C) 1998-2002 Martin Roesch <roesch@sourcefire.com>
 //
@@ -55,6 +55,8 @@
 #include "ftpp_return_codes.h"
 #include "telnet_module.h"
 
+using namespace snort;
+
 #define NUL 0x00
 #define CR 0x0d
 #define LF 0x0a
@@ -72,7 +74,7 @@ void reset_telnet_buffer(Packet* p)
 
 const uint8_t* get_telnet_buffer(Packet* p, unsigned& len)
 {
-    DataBuffer& buf = DetectionEngine::get_alt_buffer(p);
+    const DataBuffer& buf = DetectionEngine::get_alt_buffer(p);
     len = buf.len;
     return len ? buf.data : nullptr;
 }
@@ -91,8 +93,8 @@ const uint8_t* get_telnet_buffer(Packet* p, unsigned& len)
  *
  */
 int normalize_telnet(
-    TELNET_SESSION* tnssn, Packet* p,
-    int iMode, char ignoreEraseCmds)
+    TELNET_SESSION* tnssn, Packet* p, DataBuffer& buf,
+    int iMode, char ignoreEraseCmds, bool on_ftp_channel)
 {
     int ret = FTPP_NORMALIZED;
     const unsigned char* read_ptr, * sb_start = nullptr;
@@ -101,8 +103,8 @@ int normalize_telnet(
     int normalization_required = 0;
     int consec_8bit_chars = 0;
 
-    DataBuffer& buf = DetectionEngine::get_alt_buffer(p);
     const unsigned char* start = buf.data;
+    buf.len = 0;
 
     /* Telnet commands are handled in here.
     * They can be 2 bytes long -- ie, IAC NOP, IAC AYT, etc.
@@ -129,6 +131,10 @@ int normalize_telnet(
         }
         else
         {
+            if ( on_ftp_channel )
+            {
+                return FTPP_SUCCESS;
+            }
             /* Okay, it wasn't an IAC also its a midstream pickup */
             if (*read_ptr > 0x7F && Stream::is_midstream(p->flow))
             {
@@ -167,7 +173,6 @@ int normalize_telnet(
 
     if (!normalization_required)
     {
-        DebugMessage(DEBUG_FTPTELNET, "Nothing to process!\n");
         if (tnssn && iMode == FTPP_SI_CLIENT_MODE)
             tnssn->consec_ayt = 0;
         return FTPP_SUCCESS;
@@ -213,6 +218,7 @@ int normalize_telnet(
                     if (write_ptr  > start)
                     {
                         write_ptr--;
+                        buf.len--;
                     }
                 }
                 break;
@@ -226,6 +232,7 @@ int normalize_telnet(
                     {
                         /* Go to previous char */
                         write_ptr--;
+                        buf.len--;
 
                         if ((*write_ptr == CR) &&
                             ((*(write_ptr+1) == NUL) || (*(write_ptr+1) == LF)) )
@@ -235,6 +242,7 @@ int normalize_telnet(
                              * beginning of this line
                              */
                             write_ptr+=2;
+                            buf.len+=2;
                             break;
                         }
                     }
@@ -285,6 +293,7 @@ int normalize_telnet(
                 * in the data stream since it was escaped */
                 read_ptr++; /* skip past the first IAC */
                 *write_ptr++ = *read_ptr++;
+                buf.len++;
                 break;
             case TNC_WILL:
             case TNC_WONT:
@@ -405,11 +414,6 @@ int normalize_telnet(
         }
         else
         {
-            DebugFormat(DEBUG_FTPTELNET,
-                "overwriting %2X(%c) with %2X(%c)\n",
-                (unsigned char)(*write_ptr&0xFF), *write_ptr,
-                (unsigned char)(*read_ptr & 0xFF), *read_ptr);
-
             /* overwrite the negotiation bytes with the follow-on bytes */
             switch (*((const unsigned char*)(read_ptr)))
             {
@@ -419,11 +423,13 @@ int normalize_telnet(
                 if (write_ptr > start)
                 {
                     write_ptr--;
+                    buf.len--;
                 }
                 read_ptr++;
                 break;
             default:
                 *write_ptr++ = *read_ptr++;
+                buf.len++;
                 break;
             }
 

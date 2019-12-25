@@ -1,12 +1,15 @@
 set (FLOW_INCLUDES
+    expect_cache.h
     flow.h
     flow_key.h
+    flow_stash.h
+    ha.h
+    stash_item.h
 )
 
-add_library (flow STATIC
+add_library (flow OBJECT
     ${FLOW_INCLUDES}
     expect_cache.cc
-    expect_cache.h
     flow.cc
     flow_cache.cc
     flow_cache.h
@@ -14,18 +17,19 @@ add_library (flow STATIC
     flow_control.cc
     flow_control.h
     flow_key.cc
+    flow_stash.cc
+    flow_stash.h
+    flow_uni_list.h
     ha.cc
-    ha.h
     ha_module.cc
     ha_module.h
     prune_stats.h
     session.h
-)
-
-target_link_libraries(flow
-    protocols
+    stash_item.h
 )
 
 install(FILES ${FLOW_INCLUDES}
     DESTINATION ${INCLUDE_INSTALL_PATH}/flow
 )
+
+add_subdirectory(test)

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -31,10 +31,17 @@
 #include "time_profiler_defs.h"
 
 #ifdef UNIT_TEST
-#include "catch/catch.hpp"
+#include "catch/snort_catch.h"
 #endif
 
+using namespace snort;
+
 #define s_time_table_title "module profile"
+
+// enabled is not in SnortConfig to avoid that ugly dependency
+// enabled is not in TimeContext because declaring it SO_PUBLIC made TimeContext visible
+// putting enabled in TimeProfilerStats seems to be the best solution
+bool TimeProfilerStats::enabled = false;
 
 namespace time_stats
 {
@@ -65,14 +72,14 @@ struct View
     { return stats.checks; }
 
     hr_duration avg_check() const
-    { return checks() ? hr_duration(elapsed().count() / checks()) : 0_ticks; }
+    { return checks() ? hr_duration(TO_TICKS(elapsed()) / checks()) : 0_ticks; }
 
     double pct_of(const TimeProfilerStats& o) const
     {
         if ( o.elapsed <= 0_ticks )
             return 0.0;
 
-        return double(elapsed().count()) / double(o.elapsed.count()) * 100.0;
+        return double(TO_TICKS(elapsed())) / double(TO_TICKS(o.elapsed)) * 100.0;
     }
 
     double pct_caller() const
@@ -127,10 +134,10 @@ static void print_fn(StatsTable& t, const View& v)
     t << v.checks();
 
     // total time
-    t << clock_usecs(duration_cast<microseconds>(v.elapsed()).count());
+    t << clock_usecs(TO_USECS(v.elapsed()));
 
     // avg/check
-    t << clock_usecs(duration_cast<microseconds>(v.avg_check()).count());
+    t << clock_usecs(TO_USECS(v.avg_check()));
 }
 
 } // namespace time_stats
@@ -461,10 +468,72 @@ TEST_CASE( "time profiler sorting", "[profiler][time_profiler]" )
     }
 }
 
+TEST_CASE( "time profiler time context disabled", "[profiler][time_profiler]" )
+{
+    TimeProfilerStats stats;
+    REQUIRE_FALSE( stats );
+    TimeProfilerStats::set_enabled(false);
+
+    SECTION( "lifetime" )
+    {
+        {
+            TimeContext ctx(stats);
+            CHECK( ctx.active() );
+            CHECK( stats.ref_count == 0 );
+        }
+
+        CHECK( stats.ref_count == 0 );
+    }
+
+    SECTION( "manually managed lifetime" )
+    {
+        {
+            TimeContext ctx(stats);
+            CHECK( ctx.active() );
+            CHECK( stats.ref_count == 0 );
+            ctx.stop();
+            CHECK( ctx.active() );
+            CHECK( stats.ref_count == 0 );
+        }
+
+        CHECK( stats.ref_count == 0 );
+    }
+
+    SECTION( "updates stats" )
+    {
+        TimeContext ctx(stats);
+        avoid_optimization();
+        ctx.stop();
+
+        CHECK( !stats );
+    }
+
+    SECTION( "reentrance" )
+    {
+        {
+            TimeContext ctx1(stats);
+
+            CHECK( stats.ref_count == 0 );
+
+            {
+                TimeContext ctx2(stats);
+
+                CHECK( (stats.ref_count == 0) );
+            }
+
+            CHECK( stats.ref_count == 0 );
+        }
+
+        CHECK( stats.ref_count == 0 ); // ref_count restored
+        CHECK( stats.checks == 0 ); // only updated once
+    }
+}
+
 TEST_CASE( "time profiler time context", "[profiler][time_profiler]" )
 {
     TimeProfilerStats stats;
     REQUIRE_FALSE( stats );
+    TimeProfilerStats::set_enabled(true);
 
     SECTION( "lifetime" )
     {

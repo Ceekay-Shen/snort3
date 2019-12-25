@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2009-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -22,17 +22,16 @@
 #include "config.h"
 #endif
 
-#include "catch/catch.hpp"
-#include "main/snort_types.h"
+#include "catch/snort_catch.h"
 #include "parser/parse_ip.h"
 #include "sfip/sf_ip.h"
 
 #include "rate_filter.h"
 #include "sfrf.h"
 
-//---------------------------------------------------------------
+using namespace snort;
 
-SNORT_FORCED_INCLUSION_DEFINITION(sfrf_test);
+//---------------------------------------------------------------
 
 #define IP_ANY   nullptr          // used to get "unset"
 
@@ -899,6 +898,8 @@ static void Init(unsigned cap)
     rfc = RateFilter_ConfigNew();
     rfc->memcap = cap;
 
+    SFRF_Alloc(rfc->memcap);
+
     for ( unsigned i = 0; i < NUM_NODES; i++ )
     {
         RateData* p = rfData + i;
@@ -909,9 +910,9 @@ static void Init(unsigned cap)
         cfg.tracking = p->track;
         cfg.count = p->count;
         cfg.seconds = p->seconds;
-        cfg.newAction = (RuleType)RULE_NEW;
+        cfg.newAction = (Actions::Type)RULE_NEW;
         cfg.timeout = p->timeout;
-        cfg.applyTo = p->ip ? sfip_var_from_string(p->ip) : nullptr;
+        cfg.applyTo = p->ip ? sfip_var_from_string(p->ip, "sfrf_test") : nullptr;
 
         p->create = SFRF_ConfigAdd(nullptr, rfc, &cfg);
     }
@@ -950,8 +951,8 @@ static int EventTest(EventData* p)
     status = SFRF_TestThreshold(
         rfc, p->gid, p->sid, &sip, &dip, curtime, op);
 
-    if ( status >= RULE_TYPE__MAX )
-        status -= RULE_TYPE__MAX;
+    if ( status >= Actions::MAX )
+        status -= Actions::MAX;
 
     return status;
 }
@@ -1017,4 +1018,3 @@ TEST_CASE("sfrf minimum memcap", "[sfrf]")
     }
     Term();
 }
-

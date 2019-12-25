@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 1998-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -24,15 +24,17 @@
 
 #include "sf_cidr.h"
 
+using namespace snort;
+
 SfIpRet SfCidr::set(const char* src)
 {
     return addr.set(src, &bits);
 }
 
-/* Check if ip is contained within the network specified by this addr */
-/* Returns SFIP_EQUAL if so.
- * XXX assumes that "ip" is not less specific than "addr" XXX
-*/
+// Check if ip is contained within the network specified by this addr
+// Returns SFIP_EQUAL if so.
+// assumes that "ip" is not less specific than "addr"
+
 SfIpRet SfCidr::contains(const SfIp* ip) const
 {
     uint16_t i;

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -23,67 +23,84 @@
 #include "config.h"
 #endif
 
+#include <cstdarg>
+
 #include "host_tracker/host_cache_module.h"
 #include "host_tracker/host_cache.h"
+#include "main/snort_config.h"
+#include "managers/module_manager.h"
 
 #include <CppUTest/CommandLineTestRunner.h>
 #include <CppUTest/TestHarness.h>
 
 #include "sfip/sf_ip.h"
 
-//  Fake AddProtocolReference to avoid bringing in a ton of dependencies.
-int16_t AddProtocolReference(const char* protocol)
+using namespace snort;
+using namespace std;
+
+// All tests here use the same module since host_cache is global. Creating a local module for each
+// test will cause host_cache PegCount testing to be dependent on the order of running these tests.
+static HostCacheModule module;
+#define LOG_MAX 128
+static char logged_message[LOG_MAX+1];
+
+namespace snort
 {
-    if (!strcmp("servicename", protocol))
-        return 3;
-    if (!strcmp("tcp", protocol))
-        return 2;
-    return 1;
+SnortConfig* SnortConfig::get_conf() { return nullptr; }
+char* snort_strdup(const char* s) { return strdup(s); }
+Module* ModuleManager::get_module(const char*) { return nullptr; }
+void LogMessage(const char* format,...)
+{
+    va_list args;
+    va_start(args, format);
+    vsnprintf(logged_message, LOG_MAX, format, args);
+    va_end(args);
+    logged_message[LOG_MAX] = '\0';
+}
+time_t packet_time() { return 0; }
 }
 
-//  Fake show_stats to avoid bringing in a ton of dependencies.
-void show_stats(PegCount*, const PegInfo*, unsigned, const char*)
-{ }
+extern "C"
+{
+const char* luaL_optlstring(lua_State*, int, const char*, size_t*) { return nullptr; }
+}
 
-void show_stats(PegCount*, const PegInfo*, IndexVec&, const char*, FILE*)
-{ }
-
-char* snort_strdup(const char* s)
-{ return strdup(s); }
-
-#define FRAG_POLICY 33
-#define STREAM_POLICY 100
-
-SfIp expected_addr;
+void show_stats(PegCount*, const PegInfo*, unsigned, const char*) { }
+void show_stats(PegCount*, const PegInfo*, const IndexVec&, const char*, FILE*) { }
 
 TEST_GROUP(host_cache_module)
-{ };
+{
+    void setup() override
+    {
+        MemoryLeakWarningPlugin::turnOffNewDeleteOverloads();
+    }
+
+    void teardown() override
+    {
+        MemoryLeakWarningPlugin::turnOnNewDeleteOverloads();
+    }
+};
 
 //  Test that HostCacheModule sets up host_cache size based on config.
 TEST(host_cache_module, host_cache_module_test_values)
 {
     Value size_val((double)2112);
     Parameter size_param = { "size", Parameter::PT_INT, nullptr, nullptr, "cache size" };
-    HostCacheModule module;
     const PegInfo* ht_pegs = module.get_pegs();
     const PegCount* ht_stats = module.get_counts();
 
     CHECK(!strcmp(ht_pegs[0].name, "lru_cache_adds"));
-    CHECK(!strcmp(ht_pegs[1].name, "lru_cache_replaces"));
-    CHECK(!strcmp(ht_pegs[2].name, "lru_cache_prunes"));
-    CHECK(!strcmp(ht_pegs[3].name, "lru_cache_find_hits"));
-    CHECK(!strcmp(ht_pegs[4].name, "lru_cache_find_misses"));
-    CHECK(!strcmp(ht_pegs[5].name, "lru_cache_removes"));
-    CHECK(!strcmp(ht_pegs[6].name, "lru_cache_clears"));
-    CHECK(!ht_pegs[7].name);
+    CHECK(!strcmp(ht_pegs[1].name, "lru_cache_prunes"));
+    CHECK(!strcmp(ht_pegs[2].name, "lru_cache_find_hits"));
+    CHECK(!strcmp(ht_pegs[3].name, "lru_cache_find_misses"));
+    CHECK(!strcmp(ht_pegs[4].name, "lru_cache_removes"));
+    CHECK(!ht_pegs[5].name);
 
     CHECK(ht_stats[0] == 0);
     CHECK(ht_stats[1] == 0);
     CHECK(ht_stats[2] == 0);
     CHECK(ht_stats[3] == 0);
     CHECK(ht_stats[4] == 0);
-    CHECK(ht_stats[5] == 0);
-    CHECK(ht_stats[6] == 0);
 
     size_val.set(&size_param);
 
@@ -94,12 +111,25 @@ TEST(host_cache_module, host_cache_module_test_values)
 
     ht_stats = module.get_counts();
     CHECK(ht_stats[0] == 0);
+}
 
-    CHECK(2112 == host_cache.get_max_size());
+TEST(host_cache_module, log_host_cache_messages)
+{
+    module.log_host_cache(nullptr, true);
+    STRCMP_EQUAL(logged_message, "File name is needed!\n");
+
+    module.log_host_cache("nowhere/host_cache.dump", true);
+    STRCMP_EQUAL(logged_message, "Couldn't open nowhere/host_cache.dump to write!\n");
+
+    module.log_host_cache("host_cache.dump", true);
+    STRCMP_EQUAL(logged_message, "Dumped host cache of size = 0 to host_cache.dump\n");
+
+    module.log_host_cache("host_cache.dump", true);
+    STRCMP_EQUAL(logged_message, "File host_cache.dump already exists!\n");
+    remove("host_cache.dump");
 }
 
 int main(int argc, char** argv)
 {
     return CommandLineTestRunner::RunAllTests(argc, argv);
 }
-

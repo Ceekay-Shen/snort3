@@ -1,9 +1,12 @@
 
-add_library( config_states
+add_library( config_states OBJECT
     config_alertfile.cc
     config_binding.cc
     config_checksums.cc
     config_classification.cc
+    config_daq.cc
+    config_daq_mode.cc
+    config_daq_var.cc
     config_decode_esp.cc
     config_default_rule_state.cc
     config_deleted.cc
@@ -33,7 +36,3 @@ add_library( config_states
     config_api.cc
 )
 
-target_link_libraries( config_states
-    snort2lua_helpers
-    conversion_data
-)

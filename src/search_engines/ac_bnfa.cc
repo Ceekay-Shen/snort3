@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -33,6 +33,8 @@
 #include "framework/mpse.h"
 
 #include "bnfa_search.h"
+
+using namespace snort;
 
 //-------------------------------------------------------------------------
 // "ac_bnfa"
@@ -92,7 +94,7 @@ public:
         return 0;
     }
 
-    int get_pattern_count() override
+    int get_pattern_count() const override
     {
         return bnfaPatternCount(obj);
     }
@@ -147,6 +149,7 @@ static const MpseApi bnfa_api =
     bnfa_dtor,
     bnfa_init,
     bnfa_print,
+    nullptr,
 };
 
 const BaseApi* se_ac_bnfa[] =

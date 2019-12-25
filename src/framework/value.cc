@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -28,16 +28,11 @@
 #include "sfip/sf_cidr.h"
 
 #ifdef UNIT_TEST
-#include "catch/catch.hpp"
+#include "catch/snort_catch.h"
 #endif
 
+using namespace snort;
 using namespace std;
-
-Value::~Value()
-{
-    if ( ss )
-        delete ss;
-}
 
 void Value::get_mac(uint8_t (&mac)[6]) const
 {
@@ -101,6 +96,19 @@ void Value::get_addr(SfCidr& cidr) const
 }
 
 void Value::get_bits(PortBitSet& list) const
+{
+    list.reset();
+    std::size_t len = str.size();
+    assert(len == list.size());
+
+    for ( std::size_t n = 0; n < len; ++n )
+    {
+        if ( str[n] == '1' )
+            list.set(n);
+    }
+}
+
+void Value::get_bits(ZoneBitSet& list) const
 {
     list.reset();
     std::size_t len = str.size();

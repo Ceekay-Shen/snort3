@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2013-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -28,7 +28,7 @@
 #include "detection/detect.h"
 #include "detection/detection_engine.h"
 #include "log/messages.h"
-#include "main/snort.h"
+#include "main/analyzer.h"
 #include "main/policy.h"
 
 #include "mstring.h"
@@ -43,6 +43,8 @@
 #define CHECKSUM_MODE_OPT__NO_UDP   "noudp"
 #define CHECKSUM_MODE_OPT__ICMP     "icmp"
 #define CHECKSUM_MODE_OPT__NO_ICMP  "noicmp"
+
+using namespace snort;
 
 static std::string lua_conf;
 static std::string snort_conf_dir;
@@ -180,7 +182,7 @@ void config_conf(const char* val)
 {
     lua_conf = val;
     SetSnortConfDir(lua_conf.c_str());
-    Snort::set_main_hook(DetectionEngine::inspect);
+    Analyzer::set_main_hook(DetectionEngine::inspect);
 }
 
 void SetSnortConfDir(const char* file)

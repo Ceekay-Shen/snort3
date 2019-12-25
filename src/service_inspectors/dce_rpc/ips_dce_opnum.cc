@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -30,6 +30,8 @@
 #include "utils/util.h"
 
 #include "dce_common.h"
+
+using namespace snort;
 
 //-------------------------------------------------------------------------
 // dcerpc2 opnum rule options
@@ -340,7 +342,7 @@ static DCE2_Ret DCE2_OpnumParse(char* args, DCE2_Opnum* opnum)
 class Dce2OpnumOption : public IpsOption
 {
 public:
-    Dce2OpnumOption(DCE2_Opnum& src_opnum) : IpsOption(s_name)
+    Dce2OpnumOption(const DCE2_Opnum& src_opnum) : IpsOption(s_name)
     { opnum = src_opnum; }
     uint32_t hash() const override;
     bool operator==(const IpsOption&) const override;
@@ -398,21 +400,22 @@ bool Dce2OpnumOption::operator==(const IpsOption& ips) const
 
 IpsOption::EvalStatus Dce2OpnumOption::eval(Cursor&, Packet* p)
 {
-    Profile profile(dce2_opnum_perf_stats);
+    RuleProfile profile(dce2_opnum_perf_stats);
 
     if (p->dsize == 0)
     {
         return NO_MATCH;
     }
 
-    DCE2_SsnData* sd = get_dce2_session_data(p);
-
-    if ((sd == nullptr) || DCE2_SsnNoInspect(sd))
+    if (DceContextData::is_noinspect(p))
     {
         return NO_MATCH;
     }
 
-    DCE2_Roptions* ropts = &sd->ropts;
+    DCE2_Roptions* ropts = DceContextData::get_current_ropts(p);
+
+    if ( !ropts )
+        return NO_MATCH;
 
     if (ropts->opnum == DCE2_SENTINEL)
     {

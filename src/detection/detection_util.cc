@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 // Copyright (C) 1998-2002 Martin Roesch <roesch@sourcefire.com>
 //
@@ -29,7 +29,10 @@
 #include "protocols/packet.h"
 #include "utils/stats.h"
 
+#include "ips_context.h"
 #include "treenodes.h"
+
+using namespace snort;
 
 #define LOG_CHARS 16
 
@@ -71,7 +74,7 @@ static void LogBuffer(const char* s, const uint8_t* p, unsigned n)
 
 void EventTrace_Log(const Packet* p, const OptTreeNode* otn, int action)
 {
-    const char* acts = get_action_string((RuleType)action);
+    const char* acts = Actions::get_string((Actions::Type)action);
 
     if ( !tlog )
         return;
@@ -81,9 +84,9 @@ void EventTrace_Log(const Packet* p, const OptTreeNode* otn, int action)
         event_id, otn->sigInfo.gid, otn->sigInfo.sid, otn->sigInfo.rev, acts);
 
     TextLog_Print(tlog,
-        "Pkt=%lu, Sec=%u.%6u, Len=%u, Cap=%u\n",
-        pc.total_from_daq, p->pkth->ts.tv_sec, p->pkth->ts.tv_usec,
-        p->pkth->pktlen, p->pkth->caplen);
+        "Pkt=" STDu64 ", Sec=%lu.%6lu, Len=%u, Cap=%u\n",
+        p->context->packet_number, (long)p->pkth->ts.tv_sec, (long)p->pkth->ts.tv_usec,
+        p->pkth->pktlen, p->pktlen);
 
     TextLog_Print(tlog,
         "Pkt Bits: Flags=0x%X, Proto=0x%X, Err=0x%X\n",
@@ -93,7 +96,6 @@ void EventTrace_Log(const Packet* p, const OptTreeNode* otn, int action)
         "Pkt Cnts: Dsz=%u, Alt=%u\n",
         (unsigned)p->dsize, (unsigned)p->alt_dsize);
 
-    // FIXIT-L delete alt_dsize (only set by OHI)
     uint16_t n = p->alt_dsize > 0 ? p->alt_dsize : p->dsize;
     LogBuffer("Packet", p->data, n);
 

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -55,6 +55,8 @@
 #include "utils/util.h"
 #include "utils/util_cstring.h"
 
+using namespace snort;
+
 #define s_name "react"
 
 #define s_help \
@@ -95,9 +97,8 @@ struct ReactData
     int rule_msg;        // 1=>use rule msg; 0=>use DEFAULT_MSG
     ssize_t buf_len;     // length of response
     char* resp_buf;      // response to send
+    char* resp_page;
 };
-
-static char* s_page = nullptr;
 
 class ReactAction : public IpsAction
 {
@@ -122,11 +123,6 @@ private:
 
 ReactAction::~ReactAction()
 {
-    if ( s_page )
-    {
-        snort_free(s_page);
-        s_page = nullptr;
-    }
     if (config->resp_buf)
         snort_free(config->resp_buf);
 
@@ -137,7 +133,7 @@ void ReactAction::exec(Packet* p)
 {
     Profile profile(reactPerfStats);
 
-    if ( Active::is_reset_candidate(p) )
+    if ( p->active->is_reset_candidate(p) )
         send(p);
 }
 
@@ -146,76 +142,23 @@ void ReactAction::send(Packet* p)
     EncodeFlags df = (p->is_from_server()) ? ENC_FLAG_FWD : 0;
     EncodeFlags sent = config->buf_len;
 
+    Active* act = p->active;
+
     if ( p->packet_flags & PKT_STREAM_EST )
     {
-        Active::send_data(p, df, (uint8_t*)config->resp_buf, config->buf_len);
-        // Active::send_data() sends a FIN, so need to bump seq by 1.
+        act->send_data(p, df, (uint8_t*)config->resp_buf, config->buf_len);
+        // act->send_data() sends a FIN, so need to bump seq by 1.
         sent++;
     }
 
     EncodeFlags rf = ENC_FLAG_SEQ | (ENC_FLAG_VAL & sent);
-    Active::send_reset(p, rf);
-    Active::send_reset(p, ENC_FLAG_FWD);
+    act->send_reset(p, rf);
 }
 
 //-------------------------------------------------------------------------
 // implementation foo
 //-------------------------------------------------------------------------
 
-static bool react_getpage(const char* file)
-{
-    char* msg;
-    char* percent_s;
-    struct stat fs;
-    FILE* fd;
-    size_t n;
-
-    if ( stat(file, &fs) )
-    {
-        ParseError("can't stat react page file '%s'.", file);
-        return false;
-    }
-
-    s_page = (char*)snort_calloc(fs.st_size+1);
-    fd = fopen(file, "r");
-
-    if ( !fd )
-    {
-        ParseError("can't open react page file '%s'.", file);
-        return false;
-    }
-
-    n = fread(s_page, 1, fs.st_size, fd);
-    fclose(fd);
-
-    if ( n != (size_t)fs.st_size )
-    {
-        ParseError("can't load react page file '%s'.", file);
-        return false;
-    }
-
-    s_page[n] = '\0';
-    msg = strstr(s_page, MSG_KEY);
-    if ( msg )
-        strncpy(msg, "%s", 2);
-
-    // search for %
-    percent_s = strstr(s_page, MSG_PERCENT);
-    if (percent_s)
-    {
-        percent_s += strlen(MSG_PERCENT); // move past current
-        // search for % again
-        percent_s = strstr(percent_s, MSG_PERCENT);
-        if (percent_s)
-        {
-            ParseError("can't specify more than one %%s or other "
-                "printf style formatting characters in react page '%s'.",
-                file);
-            return false;
-        }
-    }
-    return true;
-}
 
 //--------------------------------------------------------------------
 
@@ -226,7 +169,7 @@ static void react_config(ReactData* rd)
     char dummy;
 
     const char* head = DEFAULT_HTTP;
-    const char* body = s_page ? s_page : DEFAULT_HTML;
+    const char* body = rd->resp_page ? rd->resp_page : DEFAULT_HTML;
     const char* msg = DEFAULT_MSG;
 
     body_len = snprintf(&dummy, 1, body, msg);
@@ -261,7 +204,8 @@ static const Parameter s_params[] =
 class ReactModule : public Module
 {
 public:
-    ReactModule() : Module(s_name, s_help, s_params) { }
+    ReactModule() : Module(s_name, s_help, s_params) { page = nullptr; }
+    ~ReactModule() override { if (page) snort_free(page); }
 
     bool begin(const char*, int, SnortConfig*) override;
     bool set(const char*, Value&, SnortConfig*) override;
@@ -274,7 +218,65 @@ public:
 
 public:
     bool msg;
+    char* page;
+private:
+    bool getpage(const char* file);
 };
+
+bool ReactModule::getpage(const char* file)
+{
+    char* msg;
+    char* percent_s;
+    struct stat fs;
+    FILE* fd;
+    size_t n;
+
+    if ( stat(file, &fs) )
+    {
+        ParseError("can't stat react page file '%s'.", file);
+        return false;
+    }
+
+    page = (char*)snort_calloc(fs.st_size+1);
+    fd = fopen(file, "r");
+
+    if ( !fd )
+    {
+        ParseError("can't open react page file '%s'.", file);
+        return false;
+    }
+
+    n = fread(page, 1, fs.st_size, fd);
+    fclose(fd);
+
+    if ( n != (size_t)fs.st_size )
+    {
+        ParseError("can't load react page file '%s'.", file);
+        return false;
+    }
+
+    page[n] = '\0';
+    msg = strstr(page, MSG_KEY);
+    if ( msg )
+        strncpy(msg, "%s", 3);
+
+    // search for %
+    percent_s = strstr(page, MSG_PERCENT);
+    if (percent_s)
+    {
+        percent_s += strlen(MSG_PERCENT); // move past current
+        // search for % again
+        percent_s = strstr(percent_s, MSG_PERCENT);
+        if (percent_s)
+        {
+            ParseError("can't specify more than one %%s or other "
+                "printf style formatting characters in react page '%s'.",
+                file);
+            return false;
+        }
+    }
+    return true;
+}
 
 bool ReactModule::begin(const char*, int, SnortConfig*)
 {
@@ -288,7 +290,7 @@ bool ReactModule::set(const char*, Value& v, SnortConfig*)
         msg = v.get_bool();
 
     else if ( v.is("page") )
-        return react_getpage(v.get_string());
+        return getpage(v.get_string());
 
     else
         return false;
@@ -316,7 +318,7 @@ static IpsAction* react_ctor(Module* p)
 
     ReactModule* m = (ReactModule*)p;
     rd->rule_msg = m->msg;
-
+    rd->resp_page = m->page;
     react_config(rd); // FIXIT-L this must be done per response
     Active::set_enabled();
 
@@ -342,7 +344,7 @@ static const ActionApi react_api =
         mod_ctor,
         mod_dtor
     },
-    RULE_TYPE__DROP,
+    Actions::DROP,
     nullptr,  // pinit
     nullptr,  // pterm
     nullptr,  // tinit

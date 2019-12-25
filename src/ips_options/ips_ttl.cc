@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -27,6 +27,8 @@
 #include "hash/hashfcn.h"
 #include "profiler/profiler.h"
 #include "protocols/packet.h"
+
+using namespace snort;
 
 #define s_name "ttl"
 
@@ -78,7 +80,7 @@ bool TtlOption::operator==(const IpsOption& ips) const
 
 IpsOption::EvalStatus TtlOption::eval(Cursor&, Packet* p)
 {
-    Profile profile(ttlCheckPerfStats);
+    RuleProfile profile(ttlCheckPerfStats);
 
     if(!p->ptrs.ip_api.is_ip())
         return NO_MATCH;
@@ -98,7 +100,7 @@ IpsOption::EvalStatus TtlOption::eval(Cursor&, Packet* p)
 static const Parameter s_params[] =
 {
     { "~range", Parameter::PT_INTERVAL, RANGE, nullptr,
-      "check if ip ttl is in the given range" },
+      "check if IP TTL is in the given range" },
 
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
 };

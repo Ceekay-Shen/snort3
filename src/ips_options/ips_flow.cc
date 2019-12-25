@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -32,6 +32,8 @@
 #include "profiler/profiler.h"
 #include "protocols/packet.h"
 #include "target_based/snort_protocols.h"
+
+using namespace snort;
 
 #define s_name "flow"
 
@@ -115,7 +117,7 @@ bool FlowCheckOption::operator==(const IpsOption& ips) const
 
 IpsOption::EvalStatus FlowCheckOption::eval(Cursor&, Packet* p)
 {
-    Profile profile(flowCheckPerfStats);
+    RuleProfile profile(flowCheckPerfStats);
 
     FlowCheckData* fcd = &config;
 
@@ -408,15 +410,9 @@ static IpsOption* flow_ctor(Module* p, OptTreeNode* otn)
     FlowModule* m = (FlowModule*)p;
 
     if ( m->data.stateless )
-        otn->stateless = 1;
+        otn->set_stateless();
 
-    if ( m->data.established )
-        otn->established = 1;
-
-    if ( m->data.unestablished )
-        otn->unestablished = 1;
-
-    if (otn->proto == SNORT_PROTO_ICMP)
+    if (otn->snort_protocol_id == SNORT_PROTO_ICMP)
     {
         if ( (m->data.only_reassembled != ONLY_FRAG) &&
             (m->data.ignore_reassembled != IGNORE_FRAG) )

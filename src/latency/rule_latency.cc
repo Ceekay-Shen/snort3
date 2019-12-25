@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -40,9 +40,11 @@
 #include "rule_latency_state.h"
 
 #ifdef UNIT_TEST
-#include "catch/catch.hpp"
+#include "catch/snort_catch.h"
 #include "main/thread_config.h"
 #endif
+
+using namespace snort;
 
 namespace rule_latency
 {
@@ -84,7 +86,7 @@ static inline std::ostream& operator<<(std::ostream& os, const Event& e)
     using std::chrono::duration_cast;
     using std::chrono::microseconds;
 
-    os << "latency: " << pc.total_from_daq << " rule tree ";
+    os << "latency: " << e.packet->context->packet_number << " rule tree ";
 
     switch ( e.type )
     {
@@ -101,7 +103,7 @@ static inline std::ostream& operator<<(std::ostream& os, const Event& e)
         break;
     }
 
-    os << clock_usecs(duration_cast<microseconds>(e.elapsed).count()) << " usec, ";
+    os << clock_usecs(TO_USECS(e.elapsed)) << " usec, ";
     os << e.root->otn->sigInfo.gid << ":" << e.root->otn->sigInfo.sid << ":"
         << e.root->otn->sigInfo.rev;
 
@@ -157,7 +159,6 @@ struct DefaultRuleInterface
             for ( int i = 0; i < root.num_children; ++i )
             {
                 auto& child_state = root.children[i]->state[get_instance_id()];
-                // FIXIT-L rename to something like latency_timeout_count
                 ++child_state.latency_timeouts;
                 ++child_state.latency_suspends;
             }
@@ -169,7 +170,6 @@ struct DefaultRuleInterface
         {
             for ( int i = 0; i < root.num_children; ++i )
             {
-                // FIXIT-L rename to something like latency_timeout_count
                 ++root.children[i]->state[get_instance_id()].latency_timeouts;
             }
         }
@@ -321,6 +321,7 @@ static struct SnortLogHandler : public EventHandler
 
 static THREAD_LOCAL Impl<>* impl = nullptr;
 
+// FIXIT-L this should probably be put in a tinit
 static inline Impl<>& get_impl()
 {
     if ( !impl )

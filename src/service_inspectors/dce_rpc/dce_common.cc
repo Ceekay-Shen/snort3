@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -27,14 +27,16 @@
 #include "detection/detection_engine.h"
 #include "ips_options/extract.h"
 #include "log/messages.h"
-#include "main/snort_debug.h"
 #include "utils/safec.h"
 
+#include "dce_context_data.h"
 #include "dce_http_proxy_module.h"
 #include "dce_http_server_module.h"
 #include "dce_smb_utils.h"
 #include "dce_tcp.h"
 #include "dce_udp.h"
+
+using namespace snort;
 
 THREAD_LOCAL int dce2_detected = 0;
 static THREAD_LOCAL bool using_rpkt = false;
@@ -82,13 +84,18 @@ static const char* dce2_get_policy_name(DCE2_Policy policy)
 
 bool dce2_set_common_config(Value& v, dce2CommonProtoConf& common)
 {
-    if ( v.is("disable_defrag") )
+    if ( v.is("limit_alerts") )
+            common.limit_alerts = v.get_bool();
+
+    else if ( v.is("disable_defrag") )
         common.disable_defrag = v.get_bool();
 
     else if ( v.is("max_frag_len") )
-        common.max_frag_len = v.get_long();
+        common.max_frag_len = v.get_uint16();
+
     else
         return false;
+
     return true;
 }
 
@@ -96,17 +103,24 @@ bool dce2_set_co_config(Value& v, dce2CoProtoConf& co)
 {
     if (dce2_set_common_config(v, co.common))
         return true;
+
     else if ( v.is("policy") )
-        co.policy = (DCE2_Policy)v.get_long();
+        co.policy = (DCE2_Policy)v.get_uint8();
+
     else if ( v.is("reassemble_threshold") )
-        co.co_reassemble_threshold = v.get_long();
+        co.co_reassemble_threshold = v.get_uint16();
+
     else
         return false;
+
     return true;
 }
 
 void print_dce2_common_config(dce2CommonProtoConf& common)
 {
+    LogMessage("    One alert per flow: %s\n",
+        common.limit_alerts ?
+        "ENABLED" : "DISABLED");
     LogMessage("    Defragmentation: %s\n",
         common.disable_defrag ?
         "DISABLED" : "ENABLED");
@@ -126,82 +140,23 @@ void print_dce2_co_config(dce2CoProtoConf& co)
 
 bool dce2_paf_abort(Flow* flow, DCE2_SsnData* sd)
 {
-    if (flow->get_session_flags() & SSNFLAG_MIDSTREAM)
-    {
-        DebugMessage(DEBUG_DCE_COMMON,
-            "Aborting PAF because of midstream pickup.\n");
+    // FIXIT-L Checking flags from flow is okay here because this is in paf?
+    if ( (flow->get_session_flags() & SSNFLAG_MIDSTREAM) )
         return true;
-    }
-    else if (!(flow->get_session_flags() & SSNFLAG_ESTABLISHED))
-    {
-        DebugMessage(DEBUG_DCE_COMMON,
-            "Aborting PAF because of unestablished session.\n");
+
+    else if ( !(flow->get_session_flags() & SSNFLAG_ESTABLISHED) )
         return true;
-    }
 
     if ((sd != nullptr) && DCE2_SsnNoInspect(sd))
-    {
-        DebugMessage(DEBUG_DCE_COMMON, "Aborting PAF because of session data check.\n");
         return true;
-    }
 
     return false;
 }
 
-static void DCE2_PrintRoptions(DCE2_Roptions* ropts)
-{
-    DebugFormat(DEBUG_DCE_COMMON,
-        "  First frag: %s\n", ropts->first_frag == 1 ? "yes" : (ropts->first_frag == 0 ? "no" :
-        "unset"));
-    if (ropts->first_frag == DCE2_SENTINEL)
-    {
-        DebugMessage(DEBUG_DCE_COMMON, "  Iface: unset\n");
-        DebugMessage(DEBUG_DCE_COMMON, "  Iface version: unset\n");
-    }
-    else
-    {
-        DEBUG_WRAP(char uuid_buf[DCE2_UUID_BUF_SIZE];)
-        DebugFormat(DEBUG_DCE_COMMON, "  Iface: %s\n",
-            DCE2_UuidToStr(&ropts->iface, DCERPC_BO_FLAG__NONE, uuid_buf));
-        DebugFormat(DEBUG_DCE_COMMON, "  Iface version: %hu\n", ropts->iface_vers_maj);
-    }
-    if (ropts->opnum == DCE2_SENTINEL)
-        DebugMessage(DEBUG_DCE_COMMON, "  Opnum: unset\n");
-    else
-    {
-        DebugFormat(DEBUG_DCE_COMMON, "  Opnum: %d\n", ropts->opnum);
-    }
-    if (ropts->stub_data != nullptr)
-        DebugFormat(DEBUG_DCE_COMMON, "  Stub data: %p\n", ropts->stub_data);
-    else
-    {
-        DebugMessage(DEBUG_DCE_COMMON, "  Stub data: NULL\n");
-    }
-}
-
-static void dce2_protocol_detect(DCE2_SsnData* sd, Packet* pkt)
-{
-    if (sd->trans == DCE2_TRANS_TYPE__TCP)
-    {
-        // FIXIT-M this doesn't look right; profile immediately goes out of scope
-        Profile profile(dce2_tcp_pstat_detect);
-    }
-    else if (sd->trans == DCE2_TRANS_TYPE__SMB)
-    {
-        Profile profile(dce2_smb_pstat_detect);
-    }
-    else
-    {
-        Profile profile(dce2_udp_pstat_detect);
-    }
-
-    DetectionEngine::detect(pkt);
-
-    dce2_detected = 1;
-}
 
 void DCE2_Detect(DCE2_SsnData* sd)
 {
+    DceContextData::set_current_ropts(sd);
     if ( using_rpkt )
     {
         using_rpkt = false;
@@ -210,48 +165,36 @@ void DCE2_Detect(DCE2_SsnData* sd)
         return;
     }
     Packet* top_pkt = DetectionEngine::get_current_packet();
-
-    DCE2_PrintRoptions(&sd->ropts);
-    DebugMessage(DEBUG_DCE_COMMON, "Payload:\n");
-    DCE2_PrintPktData(top_pkt->data, top_pkt->dsize);
-
-    if (sd->ropts.stub_data != nullptr)
-    {
-        DebugMessage(DEBUG_DCE_COMMON,"\nStub data:\n");
-        DCE2_PrintPktData(sd->ropts.stub_data,
-            top_pkt->dsize - (sd->ropts.stub_data - top_pkt->data));
-    }
-
-    dce2_protocol_detect(sd, top_pkt);
+    DetectionEngine::detect(top_pkt);
+    dce2_detected = 1;
     /* Always reset rule option data after detecting */
-    DCE2_ResetRopts(&sd->ropts);
-    DebugMessage(DEBUG_DCE_COMMON, "----------------------------------------------------------\n");
+    DCE2_ResetRopts(sd , top_pkt);
 }
 
-DCE2_SsnData* get_dce2_session_data(Packet* p)
+DCE2_TransType get_dce2_trans_type(const Packet* p)
 {
     DCE2_SmbSsnData* smb_data = get_dce2_smb_session_data(p->flow);
     DCE2_SsnData* sd = (smb_data != nullptr) ? &(smb_data->sd) : nullptr;
     if ((sd != nullptr) && (sd->trans == DCE2_TRANS_TYPE__SMB))
     {
-        return sd;
+        return DCE2_TRANS_TYPE__SMB;
     }
 
     DCE2_TcpSsnData* tcp_data = get_dce2_tcp_session_data(p->flow);
     sd = (tcp_data != nullptr) ? &(tcp_data->sd) : nullptr;
     if ((sd != nullptr) && (sd->trans == DCE2_TRANS_TYPE__TCP))
     {
-        return sd;
+        return DCE2_TRANS_TYPE__TCP;
     }
 
     DCE2_UdpSsnData* udp_data = get_dce2_udp_session_data(p->flow);
     sd = (udp_data != nullptr) ? &(udp_data->sd) : nullptr;
     if ((sd != nullptr) && (sd->trans == DCE2_TRANS_TYPE__UDP))
     {
-        return sd;
+        return DCE2_TRANS_TYPE__UDP;
     }
 
-    return nullptr;
+    return DCE2_TRANS_TYPE__NONE;
 }
 
 DceEndianness::DceEndianness()
@@ -274,43 +217,29 @@ bool DceEndianness::get_offset_endianness(int32_t offset, uint8_t& endian)
 
     if ((data_byte_order == DCE2_SENTINEL) ||
         (hdr_byte_order == DCE2_SENTINEL))
-    {
-        DebugMessage(DEBUG_DCE_COMMON,
-            "Data byte order or header byte order not set "
-            "in rule options - not evaluating.\n");
         return false;
-    }
 
     if (stub_data_offset == DCE2_SENTINEL)
     {
-        DebugMessage(DEBUG_DCE_COMMON, "Stub data is NULL.  "
-            "Setting byte order to that of the header.\n");
         byte_order = (DceRpcBoFlag)hdr_byte_order;
     }
     else if (offset < stub_data_offset)
     {
-        DebugMessage(DEBUG_DCE_COMMON,
-            "Reading data in the header.  Setting byte order "
-            "to that of the header.\n");
         byte_order = (DceRpcBoFlag)hdr_byte_order;
     }
     else
     {
-        DebugMessage(DEBUG_DCE_COMMON,
-            "Reading data in the stub.  Setting byte order "
-            "to that of the stub data.\n");
         byte_order = (DceRpcBoFlag)data_byte_order;
     }
 
     endian = (byte_order == DCERPC_BO_FLAG__BIG_ENDIAN) ? ENDIAN_BIG : ENDIAN_LITTLE;
-    DebugFormat(DEBUG_DCE_COMMON, " Byte order: %s\n",
-        endian == ENDIAN_LITTLE ? "little endian" : "big endian");
+ 
     return true;
 }
 
-uint16_t DCE2_GetRpktMaxData(DCE2_SsnData* sd, DCE2_RpktType rtype)
+uint16_t DCE2_GetRpktMaxData(DCE2_RpktType rtype)
 {
-    Packet* p = sd->wire_pkt;
+    Packet* p = DetectionEngine::get_current_packet();
     uint16_t overhead = 0;
 
     switch (rtype)
@@ -320,14 +249,14 @@ uint16_t DCE2_GetRpktMaxData(DCE2_SsnData* sd, DCE2_RpktType rtype)
         break;
 
     case DCE2_RPKT_TYPE__SMB_CO_SEG:
-        if (DCE2_SsnFromClient(p))
+        if (p->is_from_client())
             overhead += DCE2_MOCK_HDR_LEN__SMB_CLI;
         else
             overhead += DCE2_MOCK_HDR_LEN__SMB_SRV;
         break;
 
     case DCE2_RPKT_TYPE__SMB_CO_FRAG:
-        if (DCE2_SsnFromClient(p))
+        if (p->is_from_client())
             overhead += DCE2_MOCK_HDR_LEN__SMB_CLI + DCE2_MOCK_HDR_LEN__CO_CLI;
         else
             overhead += DCE2_MOCK_HDR_LEN__SMB_SRV + DCE2_MOCK_HDR_LEN__CO_SRV;
@@ -336,14 +265,14 @@ uint16_t DCE2_GetRpktMaxData(DCE2_SsnData* sd, DCE2_RpktType rtype)
     case DCE2_RPKT_TYPE__TCP_CO_SEG:
         break;
     case DCE2_RPKT_TYPE__TCP_CO_FRAG:
-        if (DCE2_SsnFromClient(p))
+        if (p->is_from_client())
             overhead += DCE2_MOCK_HDR_LEN__CO_CLI;
         else
             overhead += DCE2_MOCK_HDR_LEN__CO_SRV;
         break;
 
     default:
-        DebugFormat(DEBUG_DCE_COMMON,"Invalid reassembly packet type: %d\n",rtype);
+        assert(false);
         return 0;
     }
     return (Packet::max_dsize - overhead);
@@ -366,7 +295,7 @@ static void dce2_fill_rpkt_info(Packet* rpkt, Packet* p)
 Packet* DCE2_GetRpkt(Packet* p,DCE2_RpktType rpkt_type,
     const uint8_t* data, uint32_t data_len)
 {
-    Packet* rpkt = DetectionEngine::set_next_packet();
+    Packet* rpkt = DetectionEngine::set_next_packet(p);
     uint8_t* wrdata = const_cast<uint8_t*>(rpkt->data);
     dce2_fill_rpkt_info(rpkt, p);
     uint16_t data_overhead = 0;
@@ -379,7 +308,7 @@ Packet* DCE2_GetRpkt(Packet* p,DCE2_RpktType rpkt_type,
 
     case DCE2_RPKT_TYPE__SMB_TRANS:
         rpkt->pseudo_type = PSEUDO_PKT_SMB_TRANS;
-        if (DCE2_SsnFromClient(p))
+        if (p->is_from_client())
         {
             data_overhead = DCE2_MOCK_HDR_LEN__SMB_CLI;
             memset(wrdata, 0, data_overhead);
@@ -395,7 +324,7 @@ Packet* DCE2_GetRpkt(Packet* p,DCE2_RpktType rpkt_type,
 
     case DCE2_RPKT_TYPE__SMB_CO_SEG:
         rpkt->pseudo_type = PSEUDO_PKT_DCE_SEG;
-        if (DCE2_SsnFromClient(p))
+        if (p->is_from_client())
         {
             data_overhead = DCE2_MOCK_HDR_LEN__SMB_CLI;
             memset(wrdata, 0, data_overhead);
@@ -411,7 +340,7 @@ Packet* DCE2_GetRpkt(Packet* p,DCE2_RpktType rpkt_type,
 
     case DCE2_RPKT_TYPE__SMB_CO_FRAG:
         rpkt->pseudo_type = PSEUDO_PKT_DCE_FRAG;
-        if (DCE2_SsnFromClient(p))
+        if (p->is_from_client())
         {
             data_overhead = DCE2_MOCK_HDR_LEN__SMB_CLI + DCE2_MOCK_HDR_LEN__CO_CLI;
             memset(wrdata, 0, data_overhead);
@@ -441,7 +370,7 @@ Packet* DCE2_GetRpkt(Packet* p,DCE2_RpktType rpkt_type,
         if (rpkt_type == DCE2_RPKT_TYPE__TCP_CO_FRAG)
         {
             rpkt->pseudo_type = PSEUDO_PKT_DCE_FRAG;
-            if (DCE2_SsnFromClient(p))
+            if (p->is_from_client())
             {
                 data_overhead = DCE2_MOCK_HDR_LEN__CO_CLI;
                 memset(wrdata, 0, data_overhead);
@@ -461,7 +390,6 @@ Packet* DCE2_GetRpkt(Packet* p,DCE2_RpktType rpkt_type,
         break;
 
     default:
-        DebugFormat(DEBUG_DCE_COMMON, "Invalid reassembly packet type: %d\n",rpkt_type);
         assert(false);
         return nullptr;
     }
@@ -471,7 +399,6 @@ Packet* DCE2_GetRpkt(Packet* p,DCE2_RpktType rpkt_type,
 
     if (data_len > Packet::max_dsize - data_overhead)
     {
-        DebugMessage(DEBUG_DCE_COMMON, "Failed to create reassembly packet.\n");
         delete rpkt->endianness;
         rpkt->endianness = nullptr;
         return nullptr;

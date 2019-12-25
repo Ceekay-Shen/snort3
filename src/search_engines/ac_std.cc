@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2013-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -24,6 +24,8 @@
 #include "framework/mpse.h"
 
 #include "acsmx.h"
+
+using namespace snort;
 
 //-------------------------------------------------------------------------
 // "ac_std"
@@ -62,7 +64,7 @@ public:
     int print_info() override
     { return acsmPrintDetailInfo(obj); }
 
-    int get_pattern_count() override
+    int get_pattern_count() const override
     { return acsmPatternCount(obj); }
 };
 
@@ -114,6 +116,7 @@ static const MpseApi ac_api =
     ac_dtor,
     ac_init,
     ac_print,
+    nullptr,
 };
 
 #ifdef BUILDING_SO

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -27,6 +27,10 @@
 #include "tcp_ha.h"
 #include "tcp_module.h"
 #include "tcp_session.h"
+#include "tcp_reassemblers.h"
+#include "tcp_state_machine.h"
+
+using namespace snort;
 
 //-------------------------------------------------------------------------
 // inspector stuff
@@ -40,30 +44,22 @@ public:
 
     void show(SnortConfig*) override;
     bool configure(SnortConfig*) override;
-
     void tinit() override;
     void tterm() override;
 
     NORETURN_ASSERT void eval(Packet*) override;
 
 public:
-    TcpStreamConfig* config;
+    TcpStreamConfig* const config;
 };
 
-StreamTcp::StreamTcp (TcpStreamConfig* c)
-{
-    config = c;
-}
+StreamTcp::StreamTcp (TcpStreamConfig* c) : config(c) {}
 
 StreamTcp::~StreamTcp()
-{
-    delete config;
-}
+{ delete config; }
 
 void StreamTcp::show(SnortConfig*)
-{
-    TcpStreamConfig::show_config(config);
-}
+{ TcpStreamConfig::show_config(config); }
 
 bool StreamTcp::configure(SnortConfig* sc)
 {
@@ -74,11 +70,13 @@ bool StreamTcp::configure(SnortConfig* sc)
 void StreamTcp::tinit()
 {
     TcpHAManager::tinit();
+    TcpSession::sinit();
 }
 
 void StreamTcp::tterm()
 {
     TcpHAManager::tterm();
+    TcpSession::sterm();
 }
 
 NORETURN_ASSERT void StreamTcp::eval(Packet*)
@@ -110,24 +108,24 @@ static Inspector* tcp_ctor(Module* m)
 }
 
 static void tcp_dtor(Inspector* p)
+{ delete p; }
+
+static void stream_tcp_pinit()
 {
-    delete p;
+    TcpStateMachine::initialize();
+    TcpReassemblerFactory::initialize();
+    TcpNormalizerFactory::initialize();
+}
+
+static void stream_tcp_pterm()
+{
+    TcpStateMachine::term();
+    TcpReassemblerFactory::term();
+    TcpNormalizerFactory::term();
 }
 
 static Session* tcp_ssn(Flow* lws)
-{
-    return new TcpSession(lws);
-}
-
-static void tcp_tinit()
-{
-    TcpSession::sinit();
-}
-
-static void tcp_tterm()
-{
-    TcpSession::sterm();
-}
+{ return new TcpSession(lws); }
 
 static const InspectApi tcp_api =
 {
@@ -144,13 +142,13 @@ static const InspectApi tcp_api =
         mod_dtor
     },
     IT_STREAM,
-    (unsigned)PktType::TCP,
+    PROTO_BIT__TCP,
     nullptr,  // buffers
     nullptr,  // service
-    nullptr,  // init
-    nullptr,  // term
-    tcp_tinit,
-    tcp_tterm,
+    stream_tcp_pinit,  // pinit
+    stream_tcp_pterm,  // pterm
+    nullptr,  // tinit,
+    nullptr,  // tterm,
     tcp_ctor,
     tcp_dtor,
     tcp_ssn,

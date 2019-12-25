@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -24,8 +24,9 @@
 
 #include "framework/codec.h"
 #include "main/snort_config.h"
-#include "packet_io/active.h"
 #include "protocols/teredo.h"
+
+using namespace snort;
 
 #define CD_TEREDO_NAME "teredo"
 #define CD_TEREDO_HELP "support for teredo"
@@ -44,7 +45,7 @@ public:
 
 void TeredoCodec::get_protocol_ids(std::vector<ProtocolId>& v)
 {
-    v.push_back(ProtocolId::TEREDO);
+    v.emplace_back(ProtocolId::TEREDO);
 }
 
 bool TeredoCodec::decode(const RawData& raw, CodecData& codec, DecodeData& snort)
@@ -87,7 +88,7 @@ bool TeredoCodec::decode(const RawData& raw, CodecData& codec, DecodeData& snort
         codec.codec_flags |= CODEC_TEREDO_SEEN;  // for ipv6 codec
 
         if ( SnortConfig::tunnel_bypass_enabled(TUNNEL_TEREDO) )
-            Active::set_tunnel_bypass();
+            codec.tunnel_bypass = true;
 
         if ( (!teredo::is_teredo_port(snort.sp)) && (!teredo::is_teredo_port(snort.dp)) )
             codec.codec_flags |= CODEC_ENCAP_LAYER;

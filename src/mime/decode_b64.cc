@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 1998-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -28,18 +28,20 @@
 
 #include "decode_buffer.h"
 
+using namespace snort;
+
 void B64Decode::reset_decode_state()
 {
     reset_decoded_bytes();
     buffer->reset_saved();
 }
 
-DecodeResult B64Decode::decode_data(const uint8_t* start, const uint8_t* end)
+DecodeResult B64Decode::decode_data(const uint8_t* start, const uint8_t* end, uint8_t* decode_buf)
 {
     uint32_t act_encode_size = 0, act_decode_size = 0;
     uint32_t i = 0;
 
-    if (!buffer->check_restore_buffer())
+    if (!buffer->check_restore_buffer() || !decode_buf)
     {
         reset_decode_state();
         return DECODE_EXCEEDED;
@@ -69,7 +71,7 @@ DecodeResult B64Decode::decode_data(const uint8_t* start, const uint8_t* end)
         buffer->reset_saved();
 
     if (sf_base64decode(buffer->get_encode_buff(), act_encode_size,
-        buffer->get_decode_buff(), buffer->get_decode_avail(), &act_decode_size) != 0)
+        decode_buf, buffer->get_decode_avail(), &act_decode_size) != 0)
     {
         reset_decode_state();
         return DECODE_FAIL;
@@ -81,7 +83,7 @@ DecodeResult B64Decode::decode_data(const uint8_t* start, const uint8_t* end)
     }
 
     decoded_bytes = act_decode_size;
-    decodePtr = buffer->get_decode_buff();
+    decodePtr = decode_buf;
     buffer->update_buffer(act_encode_size, act_decode_size);
     decode_bytes_read = buffer->get_decode_bytes_read();
     return DECODE_SUCCESS;
@@ -118,6 +120,8 @@ uint8_t sf_decode64tab[256] =
     100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100
 };
 
+namespace snort
+{
 /* base64decode assumes the input data terminates with '=' and/or at the end of the input buffer
  * at inbuf_size.  If extra characters exist within inbuf before inbuf_size is reached, it will
  * happily decode what it can and skip over what it can't.  This is consistent with other decoders
@@ -212,4 +216,5 @@ int sf_base64decode(uint8_t* inbuf, uint32_t inbuf_size, uint8_t* outbuf, uint32
     else
         return(0);
 }
+} // namespace snort
 

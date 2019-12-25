@@ -5,11 +5,7 @@ set(SFIP_INCLUDES
     sf_returns.h
 )
 
-if ( ENABLE_UNIT_TESTS )
-    set(TEST_FILES sfip_test.cc)
-endif()
-
-add_library ( sfip STATIC
+add_library ( sfip OBJECT
     ${SFIP_INCLUDES}
     ${TEST_FILES}
     sf_cidr.cc
@@ -23,3 +19,5 @@ add_library ( sfip STATIC
 install (FILES ${SFIP_INCLUDES}
     DESTINATION "${INCLUDE_INSTALL_PATH}/sfip"
 )
+
+add_subdirectory(test)

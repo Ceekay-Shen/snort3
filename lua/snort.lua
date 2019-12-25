@@ -6,42 +6,17 @@
 -- many can be used with defaults w/o any explicit configuration.
 -- use this conf as a template for your specific configuration.
 
--- 1. configure environment
--- 2. configure defaults
--- 3. configure inspection
--- 4. configure bindings
--- 5. configure performance
--- 6. configure detection
--- 7. configure filters
--- 8. configure outputs
+-- 1. configure defaults
+-- 2. configure inspection
+-- 3. configure bindings
+-- 4. configure performance
+-- 5. configure detection
+-- 6. configure filters
+-- 7. configure outputs
+-- 8. configure tweaks
 
 ---------------------------------------------------------------------------
--- 1. configure environment
----------------------------------------------------------------------------
-
--- given:
--- export DIR=/install/path
--- configure --prefix=$DIR
--- make install
-
--- then:
--- export LUA_PATH=$DIR/include/snort/lua/?.lua\;\;
--- export SNORT_LUA_PATH=$DIR/etc/snort
-
--- this depends on LUA_PATH
--- used to load this conf into Snort
-require('snort_config')
-
--- this depends on SNORT_LUA_PATH
--- where to find other config files
-conf_dir = os.getenv('SNORT_LUA_PATH')
-
-if ( not conf_dir ) then
-    conf_dir = '.'
-end
-
----------------------------------------------------------------------------
--- 2. configure defaults
+-- 1. configure defaults
 ---------------------------------------------------------------------------
 
 -- HOME_NET and EXTERNAL_NET must be set now
@@ -52,11 +27,11 @@ HOME_NET = 'any'
 -- (leave as "any" in most situations)
 EXTERNAL_NET = 'any'
 
-dofile(conf_dir .. '/snort_defaults.lua')
-dofile(conf_dir .. '/file_magic.lua')
+include 'snort_defaults.lua'
+include 'file_magic.lua'
 
 ---------------------------------------------------------------------------
--- 3. configure inspection
+-- 2. configure inspection
 ---------------------------------------------------------------------------
 
 -- mod = { } uses internal defaults
@@ -80,6 +55,7 @@ back_orifice = { }
 dnp3 = { }
 dns = { }
 http_inspect = { }
+http2_inspect = { }
 imap = { }
 modbus = { }
 normalizer = { }
@@ -126,7 +102,7 @@ reputation =
 --]]
 
 ---------------------------------------------------------------------------
--- 4. configure bindings
+-- 3. configure bindings
 ---------------------------------------------------------------------------
 
 wizard = default_wizard
@@ -134,10 +110,11 @@ wizard = default_wizard
 binder =
 {
     -- port bindings required for protocols without wizard support
-    { when = { proto = 'udp', ports = '53' },  use = { type = 'dns' } },
-    { when = { proto = 'tcp', ports = '111' }, use = { type = 'rpc_decode' } },
-    { when = { proto = 'tcp', ports = '502' }, use = { type = 'modbus' } },
-    { when = { proto = 'tcp', ports = '2123 2152 3386' }, use = { type = 'gtp' } },
+    { when = { proto = 'udp', ports = '53', role='server' },  use = { type = 'dns' } },
+    { when = { proto = 'tcp', ports = '53', role='server' },  use = { type = 'dns' } },
+    { when = { proto = 'tcp', ports = '111', role='server' }, use = { type = 'rpc_decode' } },
+    { when = { proto = 'tcp', ports = '502', role='server' }, use = { type = 'modbus' } },
+    { when = { proto = 'tcp', ports = '2123 2152 3386', role='server' }, use = { type = 'gtp' } },
 
     { when = { proto = 'tcp', service = 'dcerpc' }, use = { type = 'dce_tcp' } },
     { when = { proto = 'udp', service = 'dcerpc' }, use = { type = 'dce_udp' } },
@@ -153,6 +130,7 @@ binder =
     { when = { service = 'gtp' },              use = { type = 'gtp_inspect' } },
     { when = { service = 'imap' },             use = { type = 'imap' } },
     { when = { service = 'http' },             use = { type = 'http_inspect' } },
+    { when = { service = 'http2' },            use = { type = 'http2_inspect' } },
     { when = { service = 'modbus' },           use = { type = 'modbus' } },
     { when = { service = 'pop3' },             use = { type = 'pop' } },
     { when = { service = 'ssh' },              use = { type = 'ssh' } },
@@ -166,22 +144,18 @@ binder =
 }
 
 ---------------------------------------------------------------------------
--- 5. configure performance
+-- 4. configure performance
 ---------------------------------------------------------------------------
 
 -- use latency to monitor / enforce packet and rule thresholds
-latency =
-{
-    packet = { max_time = 1500 },
-    rule = { max_time = 200 },
-}
+--latency = { }
 
 -- use these to capture perf data for analysis and tuning
 --profiler = { }
 --perf_monitor = { }
 
 ---------------------------------------------------------------------------
--- 6. configure detection
+-- 5. configure detection
 ---------------------------------------------------------------------------
 
 references = default_references
@@ -194,7 +168,7 @@ ips =
 
     -- use include for rules files; be sure to set your path
     -- note that rules files can include other rules files
-    --include = 'snort3_community.rules'
+    --include = 'snort3-community.rules'
 }
 
 -- use these to configure additional rule actions
@@ -203,7 +177,7 @@ ips =
 -- rewrite = { }
 
 ---------------------------------------------------------------------------
--- 7. configure filters
+-- 6. configure filters
 ---------------------------------------------------------------------------
 
 -- below are examples of filters
@@ -243,7 +217,7 @@ rate_filter =
 --]]
 
 ---------------------------------------------------------------------------
--- 8. configure outputs
+-- 7. configure outputs
 ---------------------------------------------------------------------------
 
 -- event logging
@@ -265,4 +239,12 @@ rate_filter =
 -- additional logs
 --packet_capture = { }
 --file_log = { }
+
+---------------------------------------------------------------------------
+-- 8. configure tweaks
+---------------------------------------------------------------------------
+
+if ( tweaks ~= nil ) then
+    include(tweaks .. '.lua')
+end
 

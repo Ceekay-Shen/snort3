@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -32,8 +32,10 @@
 #include "profiler_defs.h"
 
 #ifdef UNIT_TEST
-#include "catch/catch.hpp"
+#include "catch/snort_catch.h"
 #endif
+
+using namespace snort;
 
 // -----------------------------------------------------------------------------
 // types
@@ -123,15 +125,20 @@ void ProfilerNode::accumulate()
 void ProfilerNodeMap::register_node(const std::string &n, const char* pn, Module* m)
 { setup_node(get_node(n), get_node(pn ? pn : ROOT_NODE), m); }
 
-void ProfilerNodeMap::register_node(const std::string& n, const char* pn, get_profile_stats_fn fn)
-{ setup_node(get_node(n), get_node(pn ? pn : ROOT_NODE), fn); }
-
 void ProfilerNodeMap::accumulate_nodes()
 {
     static std::mutex stats_mutex;
     std::lock_guard<std::mutex> lock(stats_mutex);
 
     for ( auto it = nodes.begin(); it != nodes.end(); ++it )
+        it->second.accumulate();
+}
+
+void ProfilerNodeMap::accumulate_flex()
+{
+    auto it = nodes.find(FLEX_NODE);
+
+    if ( it != nodes.end() )
         it->second.accumulate();
 }
 
@@ -151,17 +158,6 @@ ProfilerNode& ProfilerNodeMap::get_node(const std::string& key)
 }
 
 #ifdef UNIT_TEST
-
-static ProfileStats* s_profiler_stats = nullptr;
-static const char* s_profiler_name = nullptr;
-
-static ProfileStats* s_profiler_stats_getter(const char* name)
-{
-    if ( s_profiler_name && std::string(name) == s_profiler_name )
-        return s_profiler_stats;
-
-    return nullptr;
-}
 
 static ProfilerNode find_node(const ProfilerNodeMap& tree, const std::string& name)
 {
@@ -237,18 +233,6 @@ TEST_CASE( "get profile functor for module", "[profiler]" )
     }
 }
 
-TEST_CASE( "get profile functor for function", "[profiler]" )
-{
-    ProfileStats the_stats;
-    s_profiler_stats = &the_stats;
-    s_profiler_name = "foo";
-
-    GetProfileFromFunction functor("foo", s_profiler_stats_getter);
-    CHECK( functor() == &the_stats );
-
-    s_profiler_stats = nullptr;
-}
-
 TEST_CASE( "profiler node", "[profiler]" )
 {
     ProfileStats the_stats;
@@ -271,17 +255,6 @@ TEST_CASE( "profiler node", "[profiler]" )
         {
             node.accumulate();
             CHECK( node.get_stats() == the_stats );
-        }
-
-        SECTION( "function" )
-        {
-            ProfilerNode f_node("foo");
-            s_profiler_stats = &the_stats;
-            s_profiler_name = "foo";
-            f_node.set(s_profiler_stats_getter);
-            f_node.accumulate();
-            CHECK( f_node.get_stats() == the_stats );
-            s_profiler_stats = nullptr;
         }
     }
 
@@ -325,12 +298,6 @@ TEST_CASE( "profiler node map", "[profiler]" )
         SECTION( "register module" )
         {
             tree.register_node("foo", nullptr, &m);
-            CHECK( !find_node(tree, "foo").name.empty() );
-        }
-
-        SECTION( "register function")
-        {
-            tree.register_node("foo", nullptr, s_profiler_stats_getter);
             CHECK( !find_node(tree, "foo").name.empty() );
         }
 

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -27,8 +27,10 @@
 #include "hash/hashes.h"
 
 #include "file_capture.h"
-#include "file_enforcer.h"
+#include "file_lib.h"
 #include "file_service.h"
+
+using namespace snort;
 
 static FileRule emptyRule;
 
@@ -64,7 +66,7 @@ void FilePolicy::set_file_capture(bool enabled)
 
 void FilePolicy::insert_file_rule(FileRule& rule)
 {
-    file_rules.push_back(rule);
+    file_rules.emplace_back(rule);
 
     if (!rule.when.sha256.empty())
     {
@@ -157,7 +159,7 @@ void FilePolicy::policy_check(Flow*, FileInfo* file)
     file->config_file_capture(capture_enabled);
 }
 
-FileVerdict FilePolicy::type_lookup(Flow*, FileInfo* file)
+FileVerdict FilePolicy::type_lookup(Packet*, FileInfo* file)
 {
     FileRule rule = match_file_rule(nullptr, file);
     file->config_file_signature(rule.use.signature_enabled);
@@ -165,7 +167,7 @@ FileVerdict FilePolicy::type_lookup(Flow*, FileInfo* file)
     return rule.use.verdict;
 }
 
-FileVerdict FilePolicy::signature_lookup(Flow*, FileInfo* file)
+FileVerdict FilePolicy::signature_lookup(Packet*, FileInfo* file)
 {
     FileRule& rule = match_file_rule(nullptr, file);
 
@@ -177,6 +179,10 @@ FileVerdict FilePolicy::signature_lookup(Flow*, FileInfo* file)
             captured->store_file_async();
         else
             delete captured;
+
+        FileState state = file->get_file_state();
+        if (state.sig_state == FILE_SIG_DEPTH_FAIL)
+            return FILE_VERDICT_LOG;
     }
 
     return match_file_signature(nullptr, file);

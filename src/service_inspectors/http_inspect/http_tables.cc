@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -21,10 +21,12 @@
 #include "config.h"
 #endif
 
+#include "http_enum.h"
 #include "http_msg_header.h"
 #include "http_msg_request.h"
 
 using namespace HttpEnums;
+using namespace snort;
 
 const StrCode HttpMsgRequest::method_list[] =
 {
@@ -135,6 +137,7 @@ const StrCode HttpMsgHeadShared::header_list[] =
     { HEAD_X_WORKING_WITH,            "x-working-with" },
     { HEAD_CONTENT_TRANSFER_ENCODING, "content-transfer-encoding" },
     { HEAD_MIME_VERSION,              "mime-version" },
+    { HEAD_PROXY_AGENT,               "proxy-agent" },
     { 0,                              nullptr }
 };
 
@@ -149,6 +152,13 @@ const StrCode HttpMsgHeadShared::content_code_list[] =
     { CONTENTCODE_X_COMPRESS,    "x-compress" },
     { CONTENTCODE_IDENTITY,      "identity" },
     { CONTENTCODE_CHUNKED,       "chunked" },
+    { CONTENTCODE_BR,            "br" },
+    { CONTENTCODE_BZIP2,         "bzip2" },
+    { CONTENTCODE_LZMA,          "lzma" },
+    { CONTENTCODE_PEERDIST,      "peerdist" },
+    { CONTENTCODE_SDCH,          "sdch" },
+    { CONTENTCODE_XPRESS,        "xpress" },
+    { CONTENTCODE_XZ,            "xz" },
     { 0,                         nullptr }
 };
 
@@ -171,111 +181,99 @@ const StrCode HttpMsgHeadShared::charset_code_opt_list[] =
 };
 
 const HeaderNormalizer HttpMsgHeadShared::NORMALIZER_BASIC
-    { EVENT__NONE, INF__NONE, nullptr, nullptr, nullptr };
+    { EVENT__NONE, INF__NONE, false, nullptr, nullptr, nullptr };
 
 const HeaderNormalizer HttpMsgHeadShared::NORMALIZER_NO_REPEAT
-    { EVENT_REPEATED_HEADER, INF_REPEATED_HEADER, nullptr, nullptr, nullptr };
+    { EVENT_REPEATED_HEADER, INF_REPEATED_HEADER, false, nullptr, nullptr, nullptr };
 
 const HeaderNormalizer HttpMsgHeadShared::NORMALIZER_CASE_INSENSITIVE
-    { EVENT__NONE, INF__NONE, norm_to_lower, nullptr, nullptr };
+    { EVENT__NONE, INF__NONE, false, norm_to_lower, nullptr, nullptr };
 
 const HeaderNormalizer HttpMsgHeadShared::NORMALIZER_NUMBER
-    { EVENT_REPEATED_HEADER, INF_REPEATED_HEADER, norm_remove_lws, nullptr, nullptr };
+    { EVENT_REPEATED_HEADER, INF_REPEATED_HEADER, false, norm_remove_lws, nullptr, nullptr };
 
 const HeaderNormalizer HttpMsgHeadShared::NORMALIZER_TOKEN_LIST
-    { EVENT__NONE, INF__NONE, norm_remove_lws, norm_to_lower, nullptr };
+    { EVENT__NONE, INF__NONE, false, norm_remove_lws, norm_to_lower, nullptr };
 
 const HeaderNormalizer HttpMsgHeadShared::NORMALIZER_METHOD_LIST
-    { EVENT__NONE, INF__NONE, norm_remove_lws, nullptr, nullptr };
+    { EVENT__NONE, INF__NONE, false, norm_remove_lws, nullptr, nullptr };
 
 // FIXIT-L implement a date normalization function that converts the three legal formats into a
 // single standard format. For now we do nothing special for dates. This object is a placeholder
 // to keep track of which headers have date values.
 const HeaderNormalizer HttpMsgHeadShared::NORMALIZER_DATE
-    { EVENT__NONE, INF__NONE, nullptr, nullptr, nullptr };
+    { EVENT__NONE, INF__NONE, false, nullptr, nullptr, nullptr };
 
 // FIXIT-M implement a URI normalization function, probably by extending existing URI capabilities
 // to cover relative formats
 const HeaderNormalizer HttpMsgHeadShared::NORMALIZER_URI
-    { EVENT__NONE, INF__NONE, nullptr, nullptr, nullptr };
+    { EVENT__NONE, INF__NONE, false, nullptr, nullptr, nullptr };
 
 const HeaderNormalizer HttpMsgHeadShared::NORMALIZER_CONTENT_LENGTH
-    { EVENT_MULTIPLE_CONTLEN, INF_MULTIPLE_CONTLEN, norm_remove_lws, nullptr, nullptr };
+    { EVENT_MULTIPLE_CONTLEN, INF_MULTIPLE_CONTLEN, true, norm_remove_lws, nullptr, nullptr };
 
 const HeaderNormalizer HttpMsgHeadShared::NORMALIZER_CHARSET
-    { EVENT__NONE, INF__NONE, norm_remove_quotes_lws, norm_to_lower, nullptr };
+    { EVENT__NONE, INF__NONE, false, norm_remove_quotes_lws, norm_to_lower, nullptr };
 
-#if defined(__clang__)
-// Designated initializers are not supported in C++11. However we're going to play compilation
-// roulette and hopes this works.
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wc99-extensions"
-#endif
-
-/* *INDENT-OFF* */
 const HeaderNormalizer* const HttpMsgHeadShared::header_norms[HEAD__MAX_VALUE] = {
-    [0] = &NORMALIZER_BASIC,
-    [HEAD__OTHER] = &NORMALIZER_BASIC,
-    [HEAD_CACHE_CONTROL] = &NORMALIZER_TOKEN_LIST,
-    [HEAD_CONNECTION] = &NORMALIZER_TOKEN_LIST,
-    [HEAD_DATE] = &NORMALIZER_DATE,
-    [HEAD_PRAGMA] = &NORMALIZER_TOKEN_LIST,
-    [HEAD_TRAILER] = &NORMALIZER_TOKEN_LIST,
-    [HEAD_COOKIE] = &NORMALIZER_BASIC,
-    [HEAD_SET_COOKIE] = &NORMALIZER_BASIC,
-    [HEAD_TRANSFER_ENCODING] = &NORMALIZER_TOKEN_LIST,
-    [HEAD_UPGRADE] = &NORMALIZER_BASIC,
-    [HEAD_VIA] = &NORMALIZER_BASIC,
-    [HEAD_WARNING] = &NORMALIZER_BASIC,
-    [HEAD_ACCEPT] = &NORMALIZER_TOKEN_LIST,
-    [HEAD_ACCEPT_CHARSET] = &NORMALIZER_TOKEN_LIST,
-    [HEAD_ACCEPT_ENCODING] = &NORMALIZER_TOKEN_LIST,
-    [HEAD_ACCEPT_LANGUAGE] = &NORMALIZER_TOKEN_LIST,
-    [HEAD_AUTHORIZATION] = &NORMALIZER_BASIC,
-    [HEAD_EXPECT] = &NORMALIZER_CASE_INSENSITIVE,
-    [HEAD_FROM] = &NORMALIZER_BASIC,
-    [HEAD_HOST] = &NORMALIZER_NO_REPEAT,
-    [HEAD_IF_MATCH] = &NORMALIZER_BASIC,
-    [HEAD_IF_MODIFIED_SINCE] = &NORMALIZER_DATE,
-    [HEAD_IF_NONE_MATCH] = &NORMALIZER_BASIC,
-    [HEAD_IF_RANGE] = &NORMALIZER_BASIC,
-    [HEAD_IF_UNMODIFIED_SINCE] = &NORMALIZER_DATE,
-    [HEAD_MAX_FORWARDS] = &NORMALIZER_BASIC,
-    [HEAD_PROXY_AUTHORIZATION] = &NORMALIZER_BASIC,
-    [HEAD_RANGE] = &NORMALIZER_BASIC,
-    [HEAD_REFERER] = &NORMALIZER_URI,
-    [HEAD_TE] = &NORMALIZER_TOKEN_LIST,
-    [HEAD_USER_AGENT] = &NORMALIZER_BASIC,
-    [HEAD_ACCEPT_RANGES] = &NORMALIZER_TOKEN_LIST,
-    [HEAD_AGE] = &NORMALIZER_NUMBER,
-    [HEAD_ETAG] = &NORMALIZER_BASIC,
-    [HEAD_LOCATION] = &NORMALIZER_URI,
-    [HEAD_PROXY_AUTHENTICATE] = &NORMALIZER_BASIC,
-    [HEAD_RETRY_AFTER] = &NORMALIZER_BASIC,  // may be date or number
-    [HEAD_SERVER] = &NORMALIZER_BASIC,
-    [HEAD_VARY] = &NORMALIZER_TOKEN_LIST,
-    [HEAD_WWW_AUTHENTICATE] = &NORMALIZER_BASIC,
-    [HEAD_ALLOW] = &NORMALIZER_METHOD_LIST,
-    [HEAD_CONTENT_ENCODING] = &NORMALIZER_TOKEN_LIST,
-    [HEAD_CONTENT_LANGUAGE] = &NORMALIZER_TOKEN_LIST,
-    [HEAD_CONTENT_LENGTH] = &NORMALIZER_CONTENT_LENGTH,
-    [HEAD_CONTENT_LOCATION] = &NORMALIZER_URI,
-    [HEAD_CONTENT_MD5] = &NORMALIZER_BASIC,
-    [HEAD_CONTENT_RANGE] = &NORMALIZER_BASIC,
-    [HEAD_CONTENT_TYPE] = &NORMALIZER_CHARSET,
-    [HEAD_EXPIRES] = &NORMALIZER_DATE,
-    [HEAD_LAST_MODIFIED] = &NORMALIZER_DATE,
-    [HEAD_X_FORWARDED_FOR] = &NORMALIZER_BASIC,
-    [HEAD_TRUE_CLIENT_IP] = &NORMALIZER_BASIC,
-    [HEAD_X_WORKING_WITH] = &NORMALIZER_BASIC,
-    [HEAD_CONTENT_TRANSFER_ENCODING] = &NORMALIZER_TOKEN_LIST,
-    [HEAD_MIME_VERSION] = &NORMALIZER_BASIC,
+    &NORMALIZER_BASIC,      // 0
+    &NORMALIZER_BASIC,      // HEAD__OTHER
+    &NORMALIZER_TOKEN_LIST, // HEAD_CACHE_CONTROL
+    &NORMALIZER_TOKEN_LIST, // HEAD_CONNECTION
+    &NORMALIZER_DATE,       // HEAD_DATE
+    &NORMALIZER_TOKEN_LIST, // HEAD_PRAGMA
+    &NORMALIZER_TOKEN_LIST, // HEAD_TRAILER
+    &NORMALIZER_BASIC,      //HEAD_COOKIE
+    &NORMALIZER_BASIC,      //HEAD_SET_COOKIE
+    &NORMALIZER_TOKEN_LIST, // HEAD_TRANSFER_ENCODING
+    &NORMALIZER_BASIC,      // HEAD_UPGRADE
+    &NORMALIZER_BASIC,      // HEAD_VIA
+    &NORMALIZER_BASIC,      // HEAD_WARNING
+    &NORMALIZER_TOKEN_LIST, // HEAD_ACCEPT
+    &NORMALIZER_TOKEN_LIST, // HEAD_ACCEPT_CHARSET
+    &NORMALIZER_TOKEN_LIST, // HEAD_ACCEPT_ENCODING
+    &NORMALIZER_TOKEN_LIST, // HEAD_ACCEPT_LANGUAGE
+    &NORMALIZER_BASIC,      // HEAD_AUTHORIZATION
+    &NORMALIZER_CASE_INSENSITIVE, // HEAD_EXPECT
+    &NORMALIZER_BASIC,      // HEAD_FROM
+    &NORMALIZER_NO_REPEAT,  // HEAD_HOST
+    &NORMALIZER_BASIC,      // HEAD_IF_MATCH
+    &NORMALIZER_DATE,       // HEAD_IF_MODIFIED_SINCE
+    &NORMALIZER_BASIC,      // HEAD_IF_NONE_MATCH
+    &NORMALIZER_BASIC,      // HEAD_IF_RANGE
+    &NORMALIZER_DATE,       // HEAD_IF_UNMODIFIED_SINCE
+    &NORMALIZER_BASIC,      // HEAD_MAX_FORWARDS
+    &NORMALIZER_BASIC,      // HEAD_PROXY_AUTHORIZATION
+    &NORMALIZER_BASIC,      // HEAD_RANGE
+    &NORMALIZER_URI,        // HEAD_REFERER
+    &NORMALIZER_TOKEN_LIST, // HEAD_TE
+    &NORMALIZER_BASIC,      // HEAD_USER_AGENT
+    &NORMALIZER_TOKEN_LIST, // HEAD_ACCEPT_RANGES
+    &NORMALIZER_NUMBER,     // HEAD_AGE
+    &NORMALIZER_BASIC,      // HEAD_ETAG
+    &NORMALIZER_URI,        // HEAD_LOCATION
+    &NORMALIZER_BASIC,      // HEAD_PROXY_AUTHENTICATE
+    &NORMALIZER_BASIC,      // HEAD_RETRY_AFTER, may be date or number
+    &NORMALIZER_BASIC,      // HEAD_SERVER
+    &NORMALIZER_TOKEN_LIST, // HEAD_VARY
+    &NORMALIZER_BASIC,      // HEAD_WWW_AUTHENTICATE
+    &NORMALIZER_METHOD_LIST, // HEAD_ALLOW
+    &NORMALIZER_TOKEN_LIST, // HEAD_CONTENT_ENCODING
+    &NORMALIZER_TOKEN_LIST, // HEAD_CONTENT_LANGUAGE
+    &NORMALIZER_CONTENT_LENGTH, // HEAD_CONTENT_LENGTH
+    &NORMALIZER_URI,        // HEAD_CONTENT_LOCATION
+    &NORMALIZER_BASIC,      // HEAD_CONTENT_MD5
+    &NORMALIZER_BASIC,      // HEAD_CONTENT_RANGE
+    &NORMALIZER_CHARSET,    // HEAD_CONTENT_TYPE
+    &NORMALIZER_DATE,       // HEAD_EXPIRES
+    &NORMALIZER_DATE,       // HEAD_LAST_MODIFIED
+    &NORMALIZER_BASIC,      // HEAD_X_FORWARDED_FOR
+    &NORMALIZER_BASIC,      // HEAD_TRUE_CLIENT_IP
+    &NORMALIZER_BASIC,      // HEAD_X_WORKING_WITH
+    &NORMALIZER_TOKEN_LIST, // HEAD_CONTENT_TRANSFER_ENCODING
+    &NORMALIZER_BASIC,      // HEAD_MIME_VERSION
+    &NORMALIZER_BASIC,      // HEAD_PROXY_AGENT
 };
-/* *INDENT-ON* */
-
-#if defined(__clang__)
-#pragma clang diagnostic pop
-#endif
 
 const RuleMap HttpModule::http_events[] =
 {
@@ -313,7 +311,7 @@ const RuleMap HttpModule::http_events[] =
     { EVENT_SIMPLE_REQUEST,             "simple request" },
     { EVENT_UNESCAPED_SPACE_URI,        "unescaped space in HTTP URI" },
     { EVENT_PIPELINE_MAX,               "too many pipelined requests" },
-    { EVENT_ANOM_SERVER,                "anomalous http server on undefined HTTP port" },
+    { EVENT_OBSOLETE_ANOM_SERVER,       "obsolete event--deleted" },
     { EVENT_INVALID_STATCODE,           "invalid status code in HTTP response" },
     { EVENT_UNUSED_1,                   "unused event number--should not appear" },
     { EVENT_UTF_NORM_FAIL,              "HTTP response has UTF charset that failed to normalize" },
@@ -343,7 +341,7 @@ const RuleMap HttpModule::http_events[] =
     { EVENT_URI_BAD_FORMAT,             "URI badly formatted" },
     { EVENT_UNKNOWN_PERCENT,            "unrecognized type of percent encoding in URI" },
     { EVENT_BROKEN_CHUNK,               "HTTP chunk misformatted" },
-    { EVENT_CHUNK_WHITESPACE,           "white space following chunk length" },
+    { EVENT_CHUNK_WHITESPACE,           "white space adjacent to chunk length" },
     { EVENT_HEAD_NAME_WHITESPACE,       "white space within header name" },
     { EVENT_GZIP_OVERRUN,               "excessive gzip compression" },
     { EVENT_GZIP_FAILURE,               "gzip decompression failed" },
@@ -359,7 +357,7 @@ const RuleMap HttpModule::http_events[] =
     { EVENT_UNKNOWN_ENCODING,           "unknown Content-Encoding used" },
     { EVENT_STACKED_ENCODINGS,          "multiple Content-Encodings applied" },
     { EVENT_RESPONSE_WO_REQUEST,        "server response before client request" },
-    { EVENT_PDF_SWF_OVERRUN,            "PDF/SWF decompression of server response too big" },
+    { EVENT_FILE_DECOMPR_OVERRUN,       "PDF/SWF/ZIP decompression of server response too big" },
     { EVENT_BAD_CHAR_IN_HEADER_NAME,    "nonprinting character in HTTP message header name" },
     { EVENT_BAD_CONTENT_LENGTH,         "bad Content-Length value in HTTP header" },
     { EVENT_HEADER_WRAPPING,            "HTTP header line wrapped" },
@@ -378,6 +376,9 @@ const RuleMap HttpModule::http_events[] =
     { EVENT_CONTENT_ENCODING_CHUNKED,   "invalid value chunked in Content-Encoding header" },
     { EVENT_206_WITHOUT_RANGE,          "206 response sent to a request without a Range header" },
     { EVENT_VERSION_NOT_UPPERCASE,      "'HTTP' in version field not all upper case" },
+    { EVENT_BAD_HEADER_WHITESPACE,      "white space embedded in critical header value" },
+    { EVENT_GZIP_EARLY_END,             "gzip compressed data followed by unexpected non-gzip "
+                                        "data" },
     { 0, nullptr }
 };
 
@@ -405,6 +406,8 @@ const PegInfo HttpModule::peg_names[PEG_COUNT_MAX+1] =
     { CountType::SUM, "uri_coding", "URIs with character coding problems" },
     { CountType::NOW, "concurrent_sessions", "total concurrent http sessions" },
     { CountType::MAX, "max_concurrent_sessions", "maximum concurrent http sessions" },
+    { CountType::SUM, "detained_packets", "TCP packets delayed by detained inspection" },
+    { CountType::SUM, "partial_inspections", "pre-inspections for detained inspection" },
     { CountType::END, nullptr, nullptr }
 };
 

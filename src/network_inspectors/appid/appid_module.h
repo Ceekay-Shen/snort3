@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -26,35 +26,67 @@
 #include <vector>
 
 #include "appid_config.h"
+#include "appid_pegs.h"
 #include "framework/module.h"
 
-extern THREAD_LOCAL ProfileStats appidPerfStats;
+extern THREAD_LOCAL snort::ProfileStats appid_perf_stats;
+
+extern Trace TRACE_NAME(appid_module);
 
 #define MOD_NAME "appid"
 #define MOD_HELP "application and service identification"
 
-class AppIdModule : public Module
+
+class AppIdReloadTuner : public snort::ReloadResourceTuner
+{
+public:
+    AppIdReloadTuner() = default;
+
+    bool tinit() override;
+    bool tune_packet_context() override
+    {
+        return tune_resources( max_work );
+    }
+    bool tune_idle_context() override
+    {
+        return tune_resources( max_work_idle );
+    }
+
+    friend class AppIdModule;
+
+private:
+    size_t memcap = 0;
+
+    bool tune_resources(unsigned work_limit);
+};
+
+extern THREAD_LOCAL AppIdStats appid_stats;
+
+class AppIdModule : public snort::Module
 {
 public:
     AppIdModule();
     ~AppIdModule() override;
 
-    bool begin(const char*, int, SnortConfig*) override;
-    bool set(const char*, Value&, SnortConfig*) override;
-    bool end(const char*, int, SnortConfig*) override;
+    bool begin(const char*, int, snort::SnortConfig*) override;
+    bool set(const char*, snort::Value&, snort::SnortConfig*) override;
+    bool end(const char*, int, snort::SnortConfig*) override;
 
+    const snort::Command* get_commands() const override;
     const PegInfo* get_pegs() const override;
     PegCount* get_counts() const override;
-    ProfileStats* get_profile() const override;
+    snort::ProfileStats* get_profile() const override;
 
     const AppIdModuleConfig* get_data();
 
     Usage get_usage() const override
     { return CONTEXT; }
+    void sum_stats(bool) override;
+    void show_dynamic_stats() override;
 
 private:
     AppIdModuleConfig* config;
+    AppIdReloadTuner appid_rrt;
 };
 
 #endif
-

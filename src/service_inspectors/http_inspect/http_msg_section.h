@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -22,6 +22,8 @@
 
 #include "detection/detection_util.h"
 
+#include "http_common.h"
+#include "http_enum.h"
 #include "http_field.h"
 #include "http_module.h"
 #include "http_flow_data.h"
@@ -37,10 +39,17 @@ public:
     virtual ~HttpMsgSection() = default;
     virtual HttpEnums::InspectSection get_inspection_section() const
         { return HttpEnums::IS_NONE; }
-    virtual bool detection_required() const;
-    HttpEnums::SourceId get_source_id() const { return source_id; }
+    virtual bool detection_required() const = 0;
+    HttpCommon::SourceId get_source_id() const { return source_id; }
     HttpTransaction* get_transaction() const { return transaction; }
     const HttpParaList* get_params() const { return params; }
+
+    HttpMsgRequest* get_request() const { return request; }
+    HttpMsgStatus* get_status() const { return status; }
+    HttpMsgHeader* get_header(HttpCommon::SourceId source_id) const { return header[source_id]; }
+    HttpMsgTrailer* get_trailer(HttpCommon::SourceId source_id) const
+        { return trailer[source_id]; }
+    virtual HttpMsgBody* get_body() { return nullptr; }
 
     // Minimum necessary processing for every message
     virtual void analyze() = 0;
@@ -63,6 +72,11 @@ public:
     // Publish an inspection event for other modules to consume.
     virtual void publish() { }
 
+    void clear();
+    bool is_clear() { return cleared; }
+
+    HttpMsgSection* next = nullptr;
+
 #ifdef REG_TEST
     // Test tool prints all derived message parts
     virtual void print_section(FILE* output) = 0;
@@ -70,22 +84,30 @@ public:
 
 protected:
     HttpMsgSection(const uint8_t* buffer, const uint16_t buf_size, HttpFlowData* session_data_,
-        HttpEnums::SourceId source_id_, bool buf_owner, Flow* flow_, const HttpParaList*
+        HttpCommon::SourceId source_id_, bool buf_owner, snort::Flow* flow_, const HttpParaList*
         params_);
 
-    const Field msg_text;
+    void get_related_sections();
 
+    const Field msg_text;
     HttpFlowData* const session_data;
-    const HttpEnums::SourceId source_id;
-    Flow* const flow;
-    uint64_t trans_num;
+    snort::Flow* const flow;
     const HttpParaList* const params;
     HttpTransaction* const transaction;
-    const bool tcp_close;
-
+    uint64_t trans_num;
+    int32_t status_code_num;
+    const HttpCommon::SourceId source_id;
     HttpEnums::VersionId version_id;
     HttpEnums::MethodId method_id;
-    int32_t status_code_num;
+    const bool tcp_close;
+
+    // Pointers to related message sections in the same transaction
+    HttpMsgRequest* request;
+    HttpMsgStatus* status;
+    HttpMsgHeader* header[2];
+    HttpMsgTrailer* trailer[2];
+
+    bool cleared = false;
 
     // Convenience methods shared by multiple subclasses
     void add_infraction(int infraction);

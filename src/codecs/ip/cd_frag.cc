@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -25,6 +25,8 @@
 #include "framework/codec.h"
 #include "log/text_log.h"
 #include "main/snort_config.h"
+
+using namespace snort;
 
 #define CD_IPV6_FRAG_NAME "ipv6_frag"
 #define CD_IPV6_FRAG_HELP "support for IPv6 fragment decoding"
@@ -93,13 +95,13 @@ bool Ipv6FragCodec::decode(const RawData& raw, CodecData& codec, DecodeData& sno
     codec.proto_bits |= PROTO_BIT__IP6_EXT;
     codec.ip6_extension_count++;
 
-    // FIXIT-H the comment says to call it after setting next_prot_id,
+    // FIXIT-RC the comment says to call it after setting next_prot_id,
     // but it looks like it's called (twice) before setting it.
 
     // must be called AFTER setting next_prot_id
     CheckIPv6ExtensionOrder(codec, IpProtocol::FRAGMENT);
 
-    // FIXIT-H this breaks the tests/ips/normalize/ip6/would_opts_nop test
+    // FIXIT-RC this breaks the tests/ips/normalize/ip6/would_opts_nop test
     // because ip6frag_hdr->ip6f_nxt is set to FINISHED_DECODE here.  (or
     // maybe the test has the wrong expected data).
 
@@ -126,7 +128,7 @@ bool Ipv6FragCodec::decode(const RawData& raw, CodecData& codec, DecodeData& sno
 }
 
 void Ipv6FragCodec::get_protocol_ids(std::vector<ProtocolId>& v)
-{ v.push_back(ProtocolId::FRAGMENT); }
+{ v.emplace_back(ProtocolId::FRAGMENT); }
 
 void Ipv6FragCodec::log(TextLog* const text_log, const uint8_t* raw_pkt,
     const uint16_t /*lyr_len*/)

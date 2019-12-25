@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -23,7 +23,10 @@
 
 #include "http_api.h"
 
+#include "http_context_data.h"
 #include "http_inspect.h"
+
+using namespace snort;
 
 const char* HttpApi::http_my_name = HTTP_NAME;
 const char* HttpApi::http_help = "the new HTTP inspector!";
@@ -32,6 +35,12 @@ Inspector* HttpApi::http_ctor(Module* mod)
 {
     HttpModule* const http_mod = (HttpModule*)mod;
     return new HttpInspect(http_mod->get_once_params());
+}
+
+void HttpApi::http_init()
+{
+    HttpFlowData::init();
+    HttpContextData::init();
 }
 
 const char* HttpApi::classic_buffer_names[] =
@@ -71,13 +80,13 @@ const InspectApi HttpApi::http_api =
         HttpApi::http_mod_dtor
     },
     IT_SERVICE,
-    (uint16_t)PktType::PDU,
+    PROTO_BIT__PDU,
     classic_buffer_names,
     "http",
     HttpApi::http_init,
     HttpApi::http_term,
-    HttpApi::http_tinit,
-    HttpApi::http_tterm,
+    nullptr,
+    nullptr,
     HttpApi::http_ctor,
     HttpApi::http_dtor,
     nullptr,

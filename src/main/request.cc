@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2017-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2017-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -26,6 +26,8 @@
 #include "main.h"
 #include "utils/util.h"
 
+using namespace snort;
+
 //-------------------------------------------------------------------------
 // request foo
 //-------------------------------------------------------------------------
@@ -36,7 +38,7 @@ Request::Request(int f)
     bytes_read = 0;
 }
 
-bool Request::read(int& f)
+bool Request::read(const int& f)
 {
     bool newline_found = false;
     char buf;
@@ -55,10 +57,7 @@ bool Request::read(int& f)
     }
 
     if ( n <= 0 and errno != EAGAIN and errno != EINTR )
-    {
-        f = -1;
         return false;
-    }
 
     if ( bytes_read == sizeof(read_buf) )
         bytes_read = 0;
@@ -84,11 +83,15 @@ bool Request::write_response(const char* s) const
 
 // FIXIT-L supporting only simple strings for now
 // could support var args formats
-void Request::respond(const char* s, bool queue_response)
+void Request::respond(const char* s, bool queue_response, bool remote_only)
 {
+    if (remote_only && (fd == STDOUT_FILENO))
+        return;
+ 
     if ( fd < 1 )
     {
-        LogMessage("%s", s);
+        if (!remote_only)
+            LogMessage("%s", s);
         return;
     }
 
@@ -101,15 +104,12 @@ void Request::respond(const char* s, bool queue_response)
 }
 
 #ifdef SHELL
-bool Request::send_queued_response()
+void Request::send_queued_response()
 {
-    bool ret = true;
     if ( queued_response )
     {
-        ret = write_response(queued_response);
+        write_response(queued_response);
         queued_response = nullptr;
     }
-
-    return ret;
 }
 #endif

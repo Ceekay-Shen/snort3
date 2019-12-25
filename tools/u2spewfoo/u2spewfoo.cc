@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 // Copyright (C) 1998-2002 Martin Roesch <roesch@sourcefire.com>
 //
@@ -121,7 +121,7 @@ static bool get_record(u2iterator* it, u2record* record)
     if (bytes_read != sizeof(uint32_t)*2)
     {
         puts("ERROR: Failed to read record metadata.");
-        printf("\tRead %u of %lu bytes\n", bytes_read, (unsigned long)sizeof(uint32_t)*2);
+        printf("\tRead %u of %zu bytes\n", bytes_read, sizeof(uint32_t)*2);
         return false;
     }
 
@@ -299,7 +299,7 @@ static const char* get_status(uint8_t stat)
 
 static const char* get_action(uint8_t act)
 {
-    const char* acts[] = { "pass", "dtop", "block", "reset" };
+    const char* acts[] = { "pass", "hold", "retry", "drop", "block", "reset" };
     return lookup(acts, sizeof(acts)/sizeof(acts[0]), act);
 }
 

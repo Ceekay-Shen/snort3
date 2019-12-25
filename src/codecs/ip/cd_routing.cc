@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -25,6 +25,8 @@
 #include "codecs/codec_module.h"
 #include "framework/codec.h"
 #include "main/snort_config.h"
+
+using namespace snort;
 
 #define CD_IPV6_ROUTING_NAME "ipv6_routing"
 #define CD_IPV6_ROUTING_HELP "support for IPv6 routing extension"
@@ -66,7 +68,7 @@ struct IP6Route0
 } // namespace
 
 void Ipv6RoutingCodec::get_protocol_ids(std::vector<ProtocolId>& v)
-{ v.push_back(ProtocolId::ROUTING); }
+{ v.emplace_back(ProtocolId::ROUTING); }
 
 bool Ipv6RoutingCodec::decode(const RawData& raw, CodecData& codec, DecodeData&)
 {

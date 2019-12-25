@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2017-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2017-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -30,18 +30,22 @@
 #include <CppUTest/CommandLineTestRunner.h>
 #include <CppUTest/TestHarness.h>
 
+using namespace snort;
+
 //--------------------------------------------------------------------------
 // mocks
 //--------------------------------------------------------------------------
-
+namespace snort
+{
 THREAD_LOCAL SnortConfig* snort_conf = nullptr;
 SnortConfig* SnortConfig::get_conf()
 { return snort_conf; }
 
 static StreamSplitter* next_splitter = nullptr;
-static int flushed = 0;
 
-Flow::Flow() { }
+Flow::Flow() = default;
+Packet::Packet(bool) { }
+Packet::~Packet() { }
 
 struct Packet* DetectionEngine::get_current_packet()
 { return nullptr; }
@@ -49,17 +53,22 @@ struct Packet* DetectionEngine::get_current_packet()
 uint8_t* DetectionEngine::get_next_buffer(unsigned int&)
 { return nullptr; }
 
-uint16_t FlushBucket::get_size()
-{ return 1; }
-
 StreamSplitter* Stream::get_splitter(Flow*, bool)
 { return next_splitter; }
+
+static int flushed = 0;
 
 void Stream::flush_client(Packet*)
 { flushed = 1; }
 
 void Stream::flush_server(Packet*)
 { flushed = 2; }
+}
+
+
+uint16_t FlushBucket::get_size()
+{ return 1; }
+
 
 //--------------------------------------------------------------------------
 // atom splitter tests
@@ -132,7 +141,7 @@ TEST(other_splitter, log)
 
 TEST(other_splitter, stop_and_wait)
 {
-    Flow flow;
+    Packet pkt(false);
 
     StopAndWaitSplitter cs(false);
     StopAndWaitSplitter ss(true);
@@ -140,19 +149,19 @@ TEST(other_splitter, stop_and_wait)
     uint32_t fp = 0;
     next_splitter = &ss;
 
-    CHECK(cs.scan(nullptr, nullptr, 123, 0, &fp) == StreamSplitter::SEARCH);
+    CHECK(cs.scan(&pkt, nullptr, 123, 0, &fp) == StreamSplitter::SEARCH);
     CHECK(fp == 0);
     CHECK(flushed == 0);
 
     next_splitter = &cs;
 
-    CHECK(ss.scan(nullptr, nullptr, 456, 0, &fp) == StreamSplitter::SEARCH);
+    CHECK(ss.scan(&pkt, nullptr, 456, 0, &fp) == StreamSplitter::SEARCH);
     CHECK(fp == 0);
     CHECK(flushed == 1);
 
     next_splitter = &ss;
 
-    CHECK(cs.scan(nullptr, nullptr, 123, 0, &fp) == StreamSplitter::SEARCH);
+    CHECK(cs.scan(&pkt, nullptr, 123, 0, &fp) == StreamSplitter::SEARCH);
     CHECK(fp == 0);
     CHECK(flushed == 2);
 }

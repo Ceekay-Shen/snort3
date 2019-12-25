@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -23,8 +23,7 @@
 #include <cassert>
 
 #include "http_enum.h"
-#include "http_event_gen.h"
-#include "http_infractions.h"
+#include "http_event.h"
 
 //-------------------------------------------------------------------------
 // HttpCutter class and subclasses
@@ -35,17 +34,18 @@ class HttpCutter
 public:
     virtual ~HttpCutter() = default;
     virtual HttpEnums::ScanResult cut(const uint8_t* buffer, uint32_t length,
-        HttpInfractions* infractions, HttpEventGen* events, uint32_t flow_target,
-        uint32_t flow_max) = 0;
+        HttpInfractions* infractions, HttpEventGen* events, uint32_t flow_target, bool stretch)
+        = 0;
     uint32_t get_num_flush() const { return num_flush; }
     uint32_t get_octets_seen() const { return octets_seen; }
     uint32_t get_num_excess() const { return num_crlf; }
     virtual uint32_t get_num_head_lines() const { return 0; }
     virtual bool get_is_broken_chunk() const { return false; }
     virtual uint32_t get_num_good_chunks() const { return 0; }
+    virtual void soft_reset() {}
 
 protected:
-    // number of octets processed by previous cut() calls that returned NOTFOUND
+    // number of octets processed by previous cut() calls that returned NOT_FOUND
     uint32_t octets_seen = 0;
     uint32_t num_crlf = 0;
     uint32_t num_flush = 0;
@@ -55,7 +55,7 @@ class HttpStartCutter : public HttpCutter
 {
 public:
     HttpEnums::ScanResult cut(const uint8_t* buffer, uint32_t length,
-        HttpInfractions* infractions, HttpEventGen* events, uint32_t, uint32_t) override;
+        HttpInfractions* infractions, HttpEventGen* events, uint32_t, bool) override;
 
 protected:
     enum ValidationResult { V_GOOD, V_BAD, V_TBD };
@@ -84,7 +84,7 @@ class HttpHeaderCutter : public HttpCutter
 {
 public:
     HttpEnums::ScanResult cut(const uint8_t* buffer, uint32_t length,
-        HttpInfractions* infractions, HttpEventGen* events, uint32_t, uint32_t) override;
+        HttpInfractions* infractions, HttpEventGen* events, uint32_t, bool) override;
     uint32_t get_num_head_lines() const override { return num_head_lines; }
 
 private:
@@ -93,41 +93,65 @@ private:
     int32_t num_head_lines = 0;
 };
 
-class HttpBodyClCutter : public HttpCutter
+class HttpBodyCutter : public HttpCutter
 {
 public:
-    explicit HttpBodyClCutter(int64_t expected_length) : remaining(expected_length)
+    HttpBodyCutter(bool detained_inspection_) : detained_inspection(detained_inspection_) {}
+    void soft_reset() override { octets_seen = 0; packet_detained = false; }
+    void detain_ended() { packet_detained = false; }
+
+protected:
+    bool need_detained_inspection(const uint8_t* data, uint32_t length);
+
+private:
+    bool dangerous(const uint8_t* data, uint32_t length);
+
+    const bool detained_inspection;
+    bool packet_detained = false;
+    uint8_t partial_match = 0;
+    bool detention_required = false;
+};
+
+class HttpBodyClCutter : public HttpBodyCutter
+{
+public:
+    HttpBodyClCutter(int64_t expected_length, bool detained_inspection) :
+        HttpBodyCutter(detained_inspection), remaining(expected_length)
         { assert(remaining > 0); }
     HttpEnums::ScanResult cut(const uint8_t*, uint32_t length, HttpInfractions*, HttpEventGen*,
-        uint32_t flow_target, uint32_t flow_max) override;
+        uint32_t flow_target, bool stretch) override;
 
 private:
     int64_t remaining;
 };
 
-class HttpBodyOldCutter : public HttpCutter
+class HttpBodyOldCutter : public HttpBodyCutter
 {
 public:
+    explicit HttpBodyOldCutter(bool detained_inspection) : HttpBodyCutter(detained_inspection) {}
     HttpEnums::ScanResult cut(const uint8_t*, uint32_t, HttpInfractions*, HttpEventGen*,
-        uint32_t flow_target, uint32_t) override;
+        uint32_t flow_target, bool stretch) override;
 };
 
-class HttpBodyChunkCutter : public HttpCutter
+class HttpBodyChunkCutter : public HttpBodyCutter
 {
 public:
+    explicit HttpBodyChunkCutter(bool detained_inspection) : HttpBodyCutter(detained_inspection)
+        {}
     HttpEnums::ScanResult cut(const uint8_t* buffer, uint32_t length,
-        HttpInfractions* infractions, HttpEventGen* events, uint32_t flow_target, uint32_t)
+        HttpInfractions* infractions, HttpEventGen* events, uint32_t flow_target, bool stretch)
         override;
     bool get_is_broken_chunk() const override { return curr_state == HttpEnums::CHUNK_BAD; }
     uint32_t get_num_good_chunks() const override { return num_good_chunks; }
+    void soft_reset() override { num_good_chunks = 0; HttpBodyCutter::soft_reset(); }
 
 private:
     uint32_t data_seen = 0;
     HttpEnums::ChunkState curr_state = HttpEnums::CHUNK_NEWLINES;
     uint32_t expected = 0;
+    uint32_t num_leading_ws = 0;
     uint32_t num_zeros = 0;
     uint32_t digits_seen = 0;
-    bool new_section = false;
     uint32_t num_good_chunks = 0;  // that end in the current section
 };
 

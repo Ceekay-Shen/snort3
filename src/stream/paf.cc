@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2011-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -25,8 +25,10 @@
 
 #include "paf.h"
 
-#include "main/snort_debug.h"
+#include "detection/detection_engine.h"
 #include "protocols/packet.h"
+
+using namespace snort;
 
 //--------------------------------------------------------------------
 // private state
@@ -55,16 +57,14 @@ struct PafAux
 // max paf max = max datagram - eth mtu - 255 = 63780
 #define MAX_PAF_MAX (65535 -  PAF_LIMIT_FUZZ - 255)
 
+THREAD_LOCAL ProfileStats pafPerfStats;
+
 //--------------------------------------------------------------------
 
-static uint32_t paf_flush (PAF_State* ps, PafAux& px, uint32_t* flags)
+static uint32_t paf_flush (PAF_State* ps, const PafAux& px, uint32_t* flags)
 {
     uint32_t at = 0;
     *flags &= ~(PKT_PDU_HEAD | PKT_PDU_TAIL);
-
-    DebugFormat(DEBUG_STREAM_PAF,
-        "%s: type=%d, fpt=%u, len=%u, tot=%u\n",
-        __func__, px.ft, ps->fpt, px.len, ps->tot);
 
     switch ( px.ft )
     {
@@ -130,11 +130,12 @@ static uint32_t paf_flush (PAF_State* ps, PafAux& px, uint32_t* flags)
 //--------------------------------------------------------------------
 
 static bool paf_callback (
-    StreamSplitter* ss, PAF_State* ps, PafAux& px, Flow* ssn,
+    StreamSplitter* ss, PAF_State* ps, PafAux& px, Packet* pkt,
     const uint8_t* data, uint32_t len, uint32_t flags)
 {
     ps->fpt = 0;
-    ps->paf = ss->scan(ssn, data, len, flags, &ps->fpt);
+
+    ps->paf = ss->scan(pkt, data, len, flags, &ps->fpt);
 
     if ( ps->paf == StreamSplitter::ABORT )
         return false;
@@ -156,21 +157,15 @@ static bool paf_callback (
 //--------------------------------------------------------------------
 
 static inline bool paf_eval (
-    StreamSplitter* ss, PAF_State* ps, PafAux& px, Flow* ssn,
+    StreamSplitter* ss, PAF_State* ps, PafAux& px, Packet* pkt,
     uint32_t flags, const uint8_t* data, uint32_t len)
 {
-    DebugFormat(DEBUG_STREAM_PAF,
-        "%s: paf=%d, idx=%u, len=%u, fpt=%u\n",
-        __func__, ps->paf, px.idx, px.len, ps->fpt);
-
-    uint16_t fuzz = 0; // FIXIT-L PAF add a little zippedy-do-dah
-
     switch ( ps->paf )
     {
     case StreamSplitter::SEARCH:
         if ( px.len > px.idx )
         {
-            return paf_callback(ss, ps, px, ssn, data, len, flags);
+            return paf_callback(ss, ps, px, pkt, data, len, flags);
         }
         return false;
 
@@ -181,7 +176,7 @@ static inline bool paf_eval (
             ps->paf = StreamSplitter::SEARCH;
             return true;
         }
-        if ( px.len >= ss->max(ssn) + fuzz )
+        if ( px.len >= ss->max(pkt->flow) )
         {
             px.ft = FT_MAX;
             return false;
@@ -190,7 +185,7 @@ static inline bool paf_eval (
 
     case StreamSplitter::LIMIT:
         // if we are within PAF_LIMIT_FUZZ character of paf_max ...
-        if ( px.len + PAF_LIMIT_FUZZ >= ss->max(ssn) + fuzz)
+        if ( px.len + PAF_LIMIT_FUZZ >= ss->max(pkt->flow))
         {
             px.ft = FT_LIMIT;
             ps->paf = StreamSplitter::LIMITED;
@@ -211,7 +206,7 @@ static inline bool paf_eval (
                 len -= delta;
             }
             px.idx = ps->fpt;
-            return paf_callback(ss, ps, px, ssn, data, len, flags);
+            return paf_callback(ss, ps, px, pkt, data, len, flags);
         }
         return false;
 
@@ -237,14 +232,11 @@ static inline bool paf_eval (
 
 void paf_setup (PAF_State* ps)
 {
-    // this is already cleared when instantiated
-    //memset(ps, 0, sizeof(*ps));
     ps->paf = StreamSplitter::START;
 }
 
 void paf_reset (PAF_State* ps)
 {
-    memset(ps, 0, sizeof(*ps));
     ps->paf = StreamSplitter::START;
 }
 
@@ -256,19 +248,17 @@ void paf_clear (PAF_State* ps)
 //--------------------------------------------------------------------
 
 int32_t paf_check (
-    StreamSplitter* ss, PAF_State* ps, Flow* ssn,
+    StreamSplitter* ss, PAF_State* ps, Packet* pkt,
     const uint8_t* data, uint32_t len, uint32_t total,
     uint32_t seq, uint32_t* flags)
 {
-    DebugFormat(DEBUG_STREAM_PAF,
-        "%s: len=%u, amt=%u, seq=%u, cur=%u, pos=%u, fpt=%u, tot=%u, paf=%d\n",
-        __func__, len, total, seq, ps->seq, ps->pos, ps->fpt, ps->tot, ps->paf);
-
+    Profile profile(pafPerfStats);
     PafAux px;
 
     if ( !paf_initialized(ps) )
     {
         ps->seq = ps->pos = seq;
+        ps->fpt = ps->tot = 0;
         ps->paf = StreamSplitter::SEARCH;
     }
     else if ( SEQ_GT(seq, ps->seq) )
@@ -300,21 +290,19 @@ int32_t paf_check (
     px.idx = total - len;
 
     // if 'total' is greater than the maximum paf_max AND 'total' is greater
-    // than paf_max bytes + fuzz (i.e. after we have finished analyzing the
+    // than paf_max bytes (i.e. after we have finished analyzing the
     // current segment, total bytes analyzed will be greater than the
-    // configured (fuzz + paf_max) == (ss->max() + fuzz), we must ensure a flush
-    // occurs at the paf_max byte.  So, we manually set the data's length and
+    // configured paf_max == ss->max(), we must ensure a flush
+    // occurs at the paf_max byte. So, we manually set the data's length and
     // total queued bytes (px.len) to guarantee that at most paf_max bytes will
     // be analyzed and flushed since the last flush point.  It should also be
     // noted that we perform the check here rather in in paf_flush() to
     // avoid scanning the same data twice. The first scan would analyze the
     // entire segment and the second scan would analyze this segments
     // unflushed data.
-    uint16_t fuzz = 0; // FIXIT-L PAF add a little zippedy-do-dah
-
-    if ( total >= MAX_PAF_MAX && total > ss->max(ssn) + fuzz )
+    if ( total >= MAX_PAF_MAX && total > ss->max(pkt->flow) )
     {
-        px.len = MAX_PAF_MAX + fuzz;
+        px.len = MAX_PAF_MAX;
         len = len + px.len - total;
     }
     else
@@ -327,7 +315,7 @@ int32_t paf_check (
         px.ft = FT_NOP;
         uint32_t idx = px.idx;
 
-        bool cont = paf_eval(ss, ps, px, ssn, *flags, data, len);
+        const bool cont = paf_eval(ss, ps, px, pkt, *flags, data, len);
 
         if ( px.ft != FT_NOP )
         {
@@ -352,7 +340,7 @@ int32_t paf_check (
     if ( ps->paf == StreamSplitter::ABORT )
         *flags = 0;
 
-    else if ( (ps->paf != StreamSplitter::FLUSH) && (px.len > ss->max(ssn)+fuzz) )
+    else if ( (ps->paf != StreamSplitter::FLUSH) && (px.len > ss->max(pkt->flow)) )
     {
         px.ft = FT_MAX;
         uint32_t fp = paf_flush(ps, px, flags);

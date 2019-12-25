@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -23,9 +23,13 @@
 
 #include "http_uri.h"
 
+#include "http_common.h"
+#include "http_enum.h"
 #include "hash/hashfcn.h"
 
+using namespace HttpCommon;
 using namespace HttpEnums;
+using namespace snort;
 
 void HttpUri::parse_uri()
 {
@@ -144,9 +148,8 @@ void HttpUri::parse_abs_path()
     }
 }
 
-void HttpUri::check_oversize_dir(Field& uri_field)
+void HttpUri::check_oversize_dir(const Field& uri_field)
 {
-    int32_t total_length = 0;
     const uint8_t* last_dir = nullptr;
     const uint8_t* cur;
     const uint8_t* end;
@@ -163,7 +166,7 @@ void HttpUri::check_oversize_dir(Field& uri_field)
         {
             if ( last_dir )
             {
-                total_length = cur - last_dir - 1;
+                int32_t total_length = cur - last_dir - 1;
 
                 if ( total_length > uri_param.oversize_dir_length )
                 {

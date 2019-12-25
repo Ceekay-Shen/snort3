@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -26,8 +26,9 @@
 #include "flow/flow.h"
 #include "framework/codec.h"
 #include "main/snort_config.h"
-#include "packet_io/active.h"
 #include "utils/safec.h"
+
+using namespace snort;
 
 #define CD_MPLS_NAME "mpls"
 #define CD_MPLS_HELP "support for multiprotocol label switching"
@@ -42,7 +43,7 @@ static const Parameter mpls_params[] =
     { "enable_mpls_overlapping_ip", Parameter::PT_BOOL, nullptr, "false",
       "enable if private network addresses overlap and must be differentiated by MPLS label(s)" },
 
-    { "max_mpls_stack_depth", Parameter::PT_INT, "-1:", "-1",
+    { "max_mpls_stack_depth", Parameter::PT_INT, "-1:255", "-1",
       "set MPLS stack depth" },
 
     { "mpls_payload_type", Parameter::PT_ENUM, "eth | ip4 | ip6", "ip4",
@@ -100,11 +101,11 @@ public:
         }
         else if ( v.is("max_mpls_stack_depth") )
         {
-            sc->mpls_stack_depth = v.get_long();
+            sc->mpls_stack_depth = v.get_int16();
         }
         else if ( v.is("mpls_payload_type") )
         {
-            sc->mpls_payload_type = v.get_long() + 1;
+            sc->mpls_payload_type = v.get_uint8() + 1;
         }
         else
             return false;
@@ -141,9 +142,9 @@ constexpr int MPLS_PAYLOADTYPE_ERROR = -1;
 
 void MplsCodec::get_protocol_ids(std::vector<ProtocolId>& v)
 {
-    v.push_back(ProtocolId::ETHERTYPE_MPLS_UNICAST);
-    v.push_back(ProtocolId::ETHERTYPE_MPLS_MULTICAST);
-    v.push_back(ProtocolId::MPLS_IP);
+    v.emplace_back(ProtocolId::ETHERTYPE_MPLS_UNICAST);
+    v.emplace_back(ProtocolId::ETHERTYPE_MPLS_MULTICAST);
+    v.emplace_back(ProtocolId::MPLS_IP);
 }
 
 bool MplsCodec::decode(const RawData& raw, CodecData& codec, DecodeData& snort)
@@ -207,7 +208,7 @@ bool MplsCodec::decode(const RawData& raw, CodecData& codec, DecodeData& snort)
     }   /* while bos not 1, peel off more labels */
 
     if (SnortConfig::tunnel_bypass_enabled(TUNNEL_MPLS))
-        Active::set_tunnel_bypass();
+        codec.tunnel_bypass = true;
 
     codec.lyr_len = (const uint8_t*)tmpMplsHdr - raw.data;
 

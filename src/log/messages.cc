@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2013-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -35,10 +35,19 @@
 #include "time/packet_time.h"
 #include "utils/util_cstring.h"
 
+using namespace snort;
+
 static int already_fatal = 0;
 
 static unsigned parse_errors = 0;
 static unsigned parse_warnings = 0;
+static unsigned reload_errors = 0;
+
+void reset_parse_errors()
+{
+    parse_errors = 0;
+    reload_errors = 0;
+}
 
 unsigned get_parse_errors()
 {
@@ -54,6 +63,11 @@ unsigned get_parse_warnings()
     return tmp;
 }
 
+unsigned get_reload_errors()
+{
+    return reload_errors;
+}
+
 static void log_message(FILE* file, const char* type, const char* msg)
 {
     const char* file_name;
@@ -62,23 +76,16 @@ static void log_message(FILE* file, const char* type, const char* msg)
 
     if ( file_line )
         LogMessage(file, "%s: %s:%d %s\n", type, file_name, file_line, msg);
+
+    else if ( file_name )
+        LogMessage(file, "%s: %s: %s\n", type, file_name, msg);
+
     else
         LogMessage(file, "%s: %s\n", type, msg);
 }
 
-void ParseMessage(const char* format, ...)
+namespace snort
 {
-    char buf[STD_BUF+1];
-    va_list ap;
-
-    va_start(ap, format);
-    vsnprintf(buf, STD_BUF, format, ap);
-    va_end(ap);
-
-    buf[STD_BUF] = '\0';
-    log_message(stderr, "INFO", buf);
-}
-
 void ParseWarning(WarningGroup wg, const char* format, ...)
 {
     if ( !(SnortConfig::get_conf()->warning_flags & (1 << wg)) )
@@ -110,6 +117,21 @@ void ParseError(const char* format, ...)
     log_message(stderr, "ERROR", buf);
 
     parse_errors++;
+}
+
+void ReloadError(const char* format, ...)
+{
+    char buf[STD_BUF+1];
+    va_list ap;
+
+    va_start(ap, format);
+    vsnprintf(buf, STD_BUF, format, ap);
+    va_end(ap);
+
+    buf[STD_BUF] = '\0';
+    log_message(stderr, "ERROR", buf);
+
+    reload_errors++;
 }
 
 [[noreturn]] void ParseAbort(const char* format, ...)
@@ -311,4 +333,5 @@ NORETURN_ASSERT void log_safec_error(const char* msg, void*, int e)
 
     assert(false);
 }
+} //namespace snort
 

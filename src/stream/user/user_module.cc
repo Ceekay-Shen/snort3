@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -25,6 +25,7 @@
 
 #include "stream_user.h"
 
+using namespace snort;
 using namespace std;
 
 Trace TRACE_NAME(stream_user);
@@ -35,7 +36,7 @@ Trace TRACE_NAME(stream_user);
 
 static const Parameter s_params[] =
 {
-    { "session_timeout", Parameter::PT_INT, "1:86400", "30",
+    { "session_timeout", Parameter::PT_INT, "1:max31", "30",
       "session tracking timeout" },
 
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
@@ -63,7 +64,7 @@ StreamUserConfig* StreamUserModule::get_data()
 bool StreamUserModule::set(const char* fqn, Value& v, SnortConfig* sc)
 {
     if ( v.is("session_timeout") )
-        config->session_timeout = v.get_long();
+        config->session_timeout = v.get_uint32();
 
     else
         return Module::set(fqn, v, sc);

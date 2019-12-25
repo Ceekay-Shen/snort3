@@ -1,3 +1,4 @@
+add_subdirectory(test)
 
 set (FRAMEWORK_INCLUDES
     base_api.h
@@ -15,6 +16,7 @@ set (FRAMEWORK_INCLUDES
     lua_api.h
     module.h
     mpse.h
+    mpse_batch.h
     parameter.h
     range.h
     so_rule.h
@@ -22,7 +24,7 @@ set (FRAMEWORK_INCLUDES
     connector.h
 )
 
-add_library ( framework STATIC
+add_library ( framework OBJECT
     ${FRAMEWORK_INCLUDES}
     codec.cc
     cursor.cc
@@ -32,6 +34,7 @@ add_library ( framework STATIC
     parameter.cc
     module.cc
     mpse.cc
+    mpse_batch.cc
     range.cc
     value.cc
 )
@@ -39,10 +42,6 @@ add_library ( framework STATIC
 install (FILES ${FRAMEWORK_INCLUDES} ${CMAKE_CURRENT_BINARY_DIR}/api_options.h
     DESTINATION "${INCLUDE_INSTALL_PATH}/framework"
 )
-
-if ( ENABLE_UNIT_TESTS )
-    target_link_libraries ( framework catch_tests )
-endif ( ENABLE_UNIT_TESTS )
 
 add_custom_command(
     OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/api_options.h
@@ -58,3 +57,16 @@ set_property(
     ADDITIONAL_MAKE_CLEAN_FILES api_options.h
 )
 
+add_catch_test( parameter_test
+    NO_TEST_SOURCE
+    SOURCES
+        parameter.cc
+    LIBS
+        ${DNET_LIBRARIES}
+)
+
+add_catch_test( range_test
+    NO_TEST_SOURCE
+    SOURCES
+        range.cc
+)

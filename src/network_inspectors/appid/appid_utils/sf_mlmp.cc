@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -25,11 +25,10 @@
 
 #include "sf_mlmp.h"
 
-#include "main/snort_debug.h"
 #include "search_engines/search_tool.h"
 #include "utils/util.h"
 
-#define _MLMP_DEBUG 0
+using namespace snort;
 
 struct tPatternNode
 {
@@ -79,7 +78,6 @@ struct tMatchedPatternList
 static int compareMlmpPatterns(const void* p1, const void* p2);
 static int createTreesRecusively(tMlmpTree* root);
 static void destroyTreesRecursively(tMlmpTree* root);
-static void dumpTreesRecursively(tMlmpTree* root);
 static int addPatternRecursively(tMlmpTree* root, const tMlmpPattern* inputPatternList,
     void* metaData, uint32_t level);
 static tPatternNode* urlPatternSelector(const tMatchedPatternList* matchList, const
@@ -177,10 +175,6 @@ void mlmpDestroy(tMlmpTree* root)
     destroyTreesRecursively(root);
 }
 
-void mlmpDump(tMlmpTree* root)
-{
-    dumpTreesRecursively(root);
-}
 
 /**tMlmpPattern comparator: compares patterns based on pattern, patternSize. This will
  * result in alphabetical order. Notice that patternId is ignored here.
@@ -268,48 +262,6 @@ static void destroyTreesRecursively(tMlmpTree* rootNode)
     snort_free(rootNode);
 }
 
-static void dumpTreesRecursively(tMlmpTree* rootNode)
-{
-    tPatternPrimaryNode* primaryPatternNode;
-    tPatternNode* ddPatternNode;
-    char prefix[41];
-    uint32_t prefixSize;
-
-    prefixSize = 4 * (rootNode->level) + 2;
-    if (prefixSize > 40)
-        prefixSize = 40;
-
-    memset(prefix, ' ', prefixSize);
-    prefix[prefixSize] = '\0';
-
-    for (primaryPatternNode = rootNode->patternList;
-        primaryPatternNode;
-        primaryPatternNode = primaryPatternNode->nextPrimaryNode)
-    {
-        DebugFormat(DEBUG_APPID, "%s%u. Primary id %u. partTotal %u, Data %p\n", prefix,
-            rootNode->level+1,
-            primaryPatternNode->patternNode.patternId,
-            primaryPatternNode->patternNode.partTotal,
-            primaryPatternNode->patternNode.userData);
-
-        for (ddPatternNode = &primaryPatternNode->patternNode;
-            ddPatternNode;
-            ddPatternNode = ddPatternNode->nextPattern)
-        {
-            DebugFormat(DEBUG_APPID, "%s\t part %u/%u: Pattern %s, size %u\n", prefix,
-                ddPatternNode->partNum,
-                ddPatternNode->partTotal,
-                (const char*)ddPatternNode->pattern.pattern,
-                (uint32_t)ddPatternNode->pattern.patternSize);
-        }
-
-        if (primaryPatternNode->nextLevelMatcher)
-        {
-            dumpTreesRecursively(primaryPatternNode->nextLevelMatcher);
-        }
-    }
-}
-
 /*compares multipart patterns, and orders then according to <patternId, partNum>.
   Comparing multi-parts alphanumerically does not make sense. */
 static int compareMlmpPatternList(const tPatternNode* p1, const tPatternNode* p2)
@@ -332,27 +284,6 @@ static tPatternNode* patternSelector(const tMatchedPatternList* patternMatchList
     partNum = 0;
     patternId = 0;
     patternSize = maxPatternSize = 0;
-
-#if  _MLMP_DEBUG
-    tPatternNode* ddPatternNode;
-    DebugMessage(DEBUG_APPID, "\tMatches found -------------------\n"); for (tmpList =
-        patternMatchList;
-        tmpList;
-        tmpList = tmpList->next)
-    {
-        ddPatternNode = tmpList->patternNode;
-        {
-            DebugFormat(DEBUG_APPID,
-                "\t\tid %d, Pattern %s, size %u, partNum %u, partTotal %u, userData %p\n",
-                ddPatternNode->patternId,
-                ddPatternNode->pattern.pattern,
-                (uint32_t)ddPatternNode->pattern.patternSize,
-                ddPatternNode->partNum,
-                ddPatternNode->partTotal,
-                ddPatternNode->userData);
-        }
-    }
-#endif
 
     for (tmpList = patternMatchList;
         tmpList;
@@ -395,23 +326,6 @@ static tPatternNode* patternSelector(const tMatchedPatternList* patternMatchList
         }
     }
 
-#if _MLMP_DEBUG
-    if (bestNode)
-    {
-        ddPatternNode = bestNode;
-        {
-            DebugFormat(DEBUG_APPID,
-                "\t\tSELECTED Id %d, pattern %s, size %u, partNum %u, partTotal %u, userData %p\n",
-                ddPatternNode->patternId,
-                ddPatternNode->pattern.pattern,
-                (uint32_t)ddPatternNode->pattern.patternSize,
-                ddPatternNode->partNum,
-                ddPatternNode->partTotal,
-                ddPatternNode->userData);
-        }
-    }
-    DebugMessage(DEBUG_APPID, "\tMatches end -------------------\n");
-#endif
     return bestNode;
 }
 
@@ -436,17 +350,6 @@ static int patternMatcherCallback(void* id, void*, int match_end_pos, void* data
     tMatchedPatternList* newNode;
 
     /*sort matches by patternId, and then by partId or pattern// */
-
-#if _MLMP_DEBUG
-    DebugFormat(DEBUG_APPID,
-        "\tCallback id %d, Pattern %s, size %u, partNum %u, partTotal %u, userData %p\n",
-        target->patternId,
-        target->pattern.pattern,
-        (uint32_t)target->pattern.patternSize,
-        target->partNum,
-        target->partTotal,
-        target->userData);
-#endif
 
     for (prevNode = nullptr, tmpList = *matchList;
         tmpList;
@@ -539,7 +442,7 @@ static int addPatternRecursively(tMlmpTree* rootNode, const tMlmpPattern* inputP
     tPatternNode* newNode;
     tPatternPrimaryNode* prevPrimaryPatternNode = nullptr;
     tPatternPrimaryNode* primaryNode = nullptr;
-    const tMlmpPattern* patterns = inputPatternList;
+    const tMlmpPattern* patterns;
     uint32_t partTotal = 0;
     uint32_t i;
 

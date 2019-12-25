@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -28,6 +28,8 @@
 
 #include "framework/module.h"
 #include "main/snort_config.h"
+#include "main/thread_config.h"
+#include "time/stopwatch.h"
 
 #include "memory_context.h"
 #include "memory_profiler.h"
@@ -36,8 +38,16 @@
 #include "time_profiler.h"
 
 #ifdef UNIT_TEST
-#include "catch/catch.hpp"
+#include "catch/snort_catch.h"
 #endif
+
+using namespace snort;
+
+THREAD_LOCAL ProfileStats totalPerfStats;
+THREAD_LOCAL ProfileStats otherPerfStats;
+
+THREAD_LOCAL TimeContext* ProfileContext::curr_time = nullptr;
+THREAD_LOCAL Stopwatch<SnortClock>* run_timer = nullptr;
 
 static ProfilerNodeMap s_profiler_nodes;
 
@@ -50,8 +60,8 @@ void Profiler::register_module(Module* m)
     {
         unsigned i = 0;
         const char* n, * pn;
-        // const ProfilerStats* ps = nullptr;
         const ProfileStats* ps = nullptr;
+
         while ( (ps = m->get_profile(i++, n, pn)) )
             register_module(n, pn, m);
     }
@@ -63,10 +73,20 @@ void Profiler::register_module(const char* n, const char* pn, Module* m)
     s_profiler_nodes.register_node(n, pn, m);
 }
 
-void Profiler::register_module(const char* n, const char* pn, get_profile_stats_fn fn)
+void Profiler::start()
 {
-    assert(n);
-    s_profiler_nodes.register_node(n, pn, fn);
+    run_timer = new Stopwatch<SnortClock>;
+    run_timer->start();
+}
+
+void Profiler::stop(uint64_t checks)
+{
+    run_timer->stop();
+    totalPerfStats.time.elapsed = run_timer->get();
+    totalPerfStats.time.checks = checks;
+
+    delete run_timer;
+    run_timer = nullptr;
 }
 
 void Profiler::consolidate_stats()
@@ -83,6 +103,20 @@ void Profiler::reset_stats()
 
 void Profiler::show_stats()
 {
+    const ProfilerNode& root = s_profiler_nodes.get_root();
+    auto children = root.get_children();
+
+    hr_duration runtime = root.get_stats().time.elapsed;
+    hr_duration sum = 0_ticks;
+
+    for ( auto pn : children )
+        sum += pn->get_stats().time.elapsed;
+
+    otherPerfStats.time.checks = root.get_stats().time.checks;
+    otherPerfStats.time.elapsed = (runtime > sum) ?  (runtime - sum) : 0_ticks;
+
+    s_profiler_nodes.accumulate_flex();
+
     const auto* config = SnortConfig::get_profiler();
     assert(config);
 

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -25,6 +25,8 @@
 #include "codecs/codec_module.h"
 #include "framework/codec.h"
 #include "main/snort_config.h"
+
+using namespace snort;
 
 #define CD_ESP_NAME "esp"
 #define CD_ESP_HELP "support for encapsulating security payload"
@@ -80,7 +82,7 @@ constexpr uint32_t ESP_TRAILER_LEN = 2;
 } // anonymous namespace
 
 void EspCodec::get_protocol_ids(std::vector<ProtocolId>& v)
-{ v.push_back(ProtocolId::ESP); }
+{ v.emplace_back(ProtocolId::ESP); }
 
 /*
  * Attempt to decode Encapsulated Security Payload.

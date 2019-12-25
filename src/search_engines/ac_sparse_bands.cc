@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2013-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -24,6 +24,8 @@
 #include "framework/mpse.h"
 
 #include "acsmx2.h"
+
+using namespace snort;
 
 //-------------------------------------------------------------------------
 // "ac_sparse_bands"
@@ -70,7 +72,7 @@ public:
     int print_info() override
     { return acsmPrintDetailInfo2(obj); }
 
-    int get_pattern_count() override
+    int get_pattern_count() const override
     { return acsmPatternCount2(obj); }
 };
 
@@ -123,6 +125,7 @@ static const MpseApi acsb_api =
     acsb_dtor,
     acsb_init,
     acsb_print,
+    nullptr,
 };
 
 const BaseApi* se_ac_sparse_bands = &acsb_api.base;

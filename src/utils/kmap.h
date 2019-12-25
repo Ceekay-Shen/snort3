@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2003-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -68,19 +68,20 @@ typedef struct _kmap
     KMapUserFreeFunc userfree;
 
     int nchars;      // # character nodes
+    bool nocase;
 
-    int nocase;
 } KMAP;
 
-SO_PUBLIC KMAP* KMapNew(KMapUserFreeFunc userfree);
-SO_PUBLIC void KMapDelete(KMAP* km);
+namespace snort
+{
+SO_PUBLIC KMAP* KMapNew(KMapUserFreeFunc, bool nocase);
+SO_PUBLIC void KMapDelete(KMAP*);
 
-SO_PUBLIC void KMapSetNoCase(KMAP* km, int flag);
-SO_PUBLIC int KMapAdd(KMAP* km, void* key, int ksize, void* userdata);
+SO_PUBLIC int KMapAdd(KMAP*, void* key, int ksize, void* userdata);
 
-SO_PUBLIC void* KMapFind(KMAP* km, void* key, int ksize);
-SO_PUBLIC void* KMapFindFirst(KMAP* km);
-SO_PUBLIC void* KMapFindNext(KMAP* km);
-
+SO_PUBLIC void* KMapFind(KMAP*, void* key, int ksize);
+SO_PUBLIC void* KMapFindFirst(KMAP*);
+SO_PUBLIC void* KMapFindNext(KMAP*);
+}
 #endif
 

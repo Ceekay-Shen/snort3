@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -23,16 +23,22 @@
 #include <string>
 
 #include "framework/bits.h"
+#include "main/policy.h"
 #include "sfip/sf_ipvar.h"
 
+namespace snort
+{
 class Flow;
 struct Packet;
+}
+
 struct BindWhen
 {
     enum Role
     { BR_CLIENT, BR_SERVER, BR_EITHER, BR_MAX };
 
-    unsigned ips_id;
+    PolicyId ips_id;
+    unsigned ips_id_user;
     unsigned protos;
     Role role;
     std::string svc;
@@ -48,8 +54,9 @@ struct BindWhen
     PortBitSet src_ports;
     PortBitSet dst_ports;
 
-    int32_t src_zone;
-    int32_t dst_zone;
+    bool split_zones;
+    ZoneBitSet src_zones;
+    ZoneBitSet dst_zones;
 };
 
 struct BindUse
@@ -97,17 +104,19 @@ struct Binding
     Binding();
     ~Binding();
 
-    bool check_all(const Flow*, Packet*) const;
-    bool check_ips_policy(const Flow*) const;
-    bool check_iface(const Packet*) const;
-    bool check_vlan(const Flow*) const;
-    bool check_addr(const Flow*) const;
-    DirResult check_split_addr(const Flow*, const Packet*, const DirResult) const;
-    bool check_proto(const Flow*) const;
-    bool check_port(const Flow*) const;
-    DirResult check_split_port(const Flow*, const Packet*, const DirResult) const;
-    bool check_service(const Flow*) const;
-    DirResult check_zone(const Packet*, const DirResult) const;
+    bool check_all(const snort::Flow*, snort::Packet*, const char* = nullptr) const;
+    bool check_ips_policy(const snort::Flow*) const;
+    bool check_iface(const snort::Packet*) const;
+    bool check_vlan(const snort::Flow*) const;
+    bool check_addr(const snort::Flow*) const;
+    DirResult check_split_addr(const snort::Flow*, const snort::Packet*, const DirResult) const;
+    bool check_proto(const snort::Flow*) const;
+    bool check_port(const snort::Flow*) const;
+    DirResult check_split_port(const snort::Flow*, const snort::Packet*, const DirResult) const;
+    bool check_zone(const snort::Packet*) const;
+    DirResult check_split_zone(const snort::Packet*, const DirResult) const;
+    bool check_service(const snort::Flow*) const;
+    bool check_service(const char* service) const;
 };
 
 #endif

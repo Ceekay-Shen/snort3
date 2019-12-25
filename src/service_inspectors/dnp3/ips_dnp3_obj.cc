@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2017 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -31,13 +31,15 @@
 
 #include "dnp3.h"
 
+using namespace snort;
+
 //-------------------------------------------------------------------------
 // DNP3 object headers rule options
 //-------------------------------------------------------------------------
 
 #define s_name "dnp3_obj"
 #define s_help \
-    "detection option to check dnp3 object headers"
+    "detection option to check DNP3 object headers"
 
 /* Object decoding constants */
 #define DNP3_OBJ_HDR_MIN_LEN 3 /* group, var, qualifier */
@@ -105,7 +107,7 @@ bool Dnp3ObjOption::operator==(const IpsOption& ips) const
 
 IpsOption::EvalStatus Dnp3ObjOption::eval(Cursor&, Packet* p)
 {
-    Profile profile(dnp3_obj_perf_stats);
+    RuleProfile profile(dnp3_obj_perf_stats);
 
     size_t header_size;
 
@@ -153,9 +155,11 @@ IpsOption::EvalStatus Dnp3ObjOption::eval(Cursor&, Packet* p)
 static const Parameter s_params[] =
 {
     { "group", Parameter::PT_INT, "0:255", "0",
-      "match given dnp3 object header group" },
+      "match given DNP3 object header group" },
+
     { "var", Parameter::PT_INT, "0:255", "0",
-      "match given dnp3 object header var" },
+      "match given DNP3 object header var" },
+
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
 };
 
@@ -186,9 +190,10 @@ bool Dnp3ObjModule::begin(const char*, int, SnortConfig*)
 bool Dnp3ObjModule::set(const char*, Value& v, SnortConfig*)
 {
     if ( v.is("group") )
-        group = v.get_long();
+        group = v.get_uint8();
+
     else if ( v.is("var") )
-        var = v.get_long();
+        var = v.get_uint8();
 
     return true;
 }
