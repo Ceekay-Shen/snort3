@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -28,11 +28,7 @@
 
 #include "file_config.h"
 
-namespace snort
-{
-struct XHash;
-struct XHashNode;
-}
+class ExpectedFileCache;
 
 class FileCache
 {
@@ -75,7 +71,7 @@ private:
     int store_verdict(snort::Flow*, snort::FileInfo*, int64_t timeout);
 
     /* The hash table of expected files */
-    snort::XHash* fileHash = nullptr;
+    ExpectedFileCache* fileHash = nullptr;
     int64_t block_timeout = DEFAULT_FILE_BLOCK_TIMEOUT;
     int64_t lookup_timeout = DEFAULT_FILE_LOOKUP_TIMEOUT;
     int64_t max_files = DEFAULT_MAX_FILES_CACHED;

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2013-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -65,8 +65,9 @@
 #include "service_inspectors/service_inspectors.h"
 #include "side_channel/side_channel.h"
 #include "stream/stream_inspectors.h"
-#include "target_based/sftarget_reader.h"
+#include "target_based/host_attributes.h"
 #include "time/periodic.h"
+#include "trace/trace_api.h"
 #include "utils/util.h"
 
 #ifdef PIGLET
@@ -106,7 +107,6 @@ void Snort::init(int argc, char** argv)
 #endif
 
     InitProtoNames();
-    SFAT_Init();
 
     load_actions();
     load_codecs();
@@ -134,16 +134,13 @@ void Snort::init(int argc, char** argv)
 
     SideChannelManager::pre_config_init();
 
-    ModuleManager::init();
     ScriptManager::load_scripts(snort_cmd_line_conf->script_paths);
     PluginManager::load_plugins(snort_cmd_line_conf->plugin_path);
-    ModuleManager::load_params();
 
-    if ( snort_cmd_line_conf->logging_flags & LOGGING_FLAG__SHOW_PLUGINS )
-    {
-        ModuleManager::dump_modules();
-        PluginManager::dump_plugins();
-    }
+    /* load_plugins() must be called before init() so that
+    TraceModule can properly generate its Parameter table */
+    ModuleManager::init();
+    ModuleManager::load_params();
 
     FileService::init();
 
@@ -156,6 +153,17 @@ void Snort::init(int argc, char** argv)
     sc->merge(snort_cmd_line_conf);
     SnortConfig::set_conf(sc);
 
+    // This call must be immediately after "SnortConfig::set_conf(sc)"
+    // since the first trace call may happen somewhere after this point
+    TraceApi::thread_init(sc->trace_config);
+
+    PluginManager::load_so_plugins(sc);
+
+    if ( sc->logging_flags & LOGGING_FLAG__SHOW_PLUGINS )
+    {
+        ModuleManager::dump_modules();
+        PluginManager::dump_plugins();
+    }
 #ifdef PIGLET
     if ( !Piglet::piglet_mode() )
 #endif
@@ -169,17 +177,22 @@ void Snort::init(int argc, char** argv)
 
     HighAvailabilityManager::configure(sc->ha_config);
 
-    if (SnortConfig::alert_before_pass())
+    if (sc->alert_before_pass())
         sc->rule_order = "reset block drop alert pass log";
 
     sc->setup();
-    FileService::post_init();
+
+    if ( !sc->attribute_hosts_file.empty() )
+        HostAttributes::load_hosts_file(sc, sc->attribute_hosts_file.c_str());
 
     // Must be after CodecManager::instantiate()
     if ( !InspectorManager::configure(sc) )
         ParseError("can't initialize inspectors");
-    else if ( SnortConfig::log_verbose() )
+    else if ( sc->log_verbose() )
         InspectorManager::print_config(sc);
+
+    // Must be after InspectorManager::configure()
+    FileService::post_init(sc);
 
     ModuleManager::reset_stats(sc);
 
@@ -201,7 +214,7 @@ void Snort::init(int argc, char** argv)
     if ((offload_search_api != nullptr) and (offload_search_api != search_api))
         MpseManager::activate_search_engine(offload_search_api, sc);
 
-    SFAT_Start();
+    HostAttributes::activate();
 
 #ifdef PIGLET
     if ( !Piglet::piglet_mode() )
@@ -222,7 +235,7 @@ void Snort::init(int argc, char** argv)
 
     LogMessage("%s\n", LOG_DIV);
 
-    SFDAQ::init(sc->daq_config);
+    SFDAQ::init(sc->daq_config, ThreadConfig::get_instance_max());
 }
 
 // this function should only include initialization that must be done as a
@@ -243,20 +256,22 @@ void Snort::init(int argc, char** argv)
 
 bool Snort::drop_privileges()
 {
-    /* Enter the chroot jail if necessary. */
-    if (!SnortConfig::get_conf()->chroot_dir.empty() &&
-        !EnterChroot(SnortConfig::get_conf()->chroot_dir, SnortConfig::get_conf()->log_dir))
+    SnortConfig* sc = SnortConfig::get_main_conf();
+
+    // Enter the chroot jail if necessary.
+    if (!sc->chroot_dir.empty() && !EnterChroot(sc->chroot_dir, sc->log_dir))
         return false;
 
-    /* Drop privileges if requested. */
-    if (SnortConfig::get_uid() != -1 || SnortConfig::get_gid() != -1)
+    // Drop privileges if requested.
+    if (sc->get_uid() != -1 || sc->get_gid() != -1)
     {
         if (!SFDAQ::can_run_unprivileged())
         {
-            ParseError("Cannot drop privileges - at least one of the configured DAQ modules does not support unprivileged operation.\n");
+            ParseError("Cannot drop privileges - "
+                "at least one of the configured DAQ modules does not support unprivileged operation.\n");
             return false;
         }
-        if (!SetUidGid(SnortConfig::get_uid(), SnortConfig::get_gid()))
+        if (!SetUidGid(sc->get_uid(), sc->get_gid()))
             return false;
     }
 
@@ -270,7 +285,7 @@ void Snort::do_pidfile()
 {
     static bool pid_file_created = false;
 
-    if (SnortConfig::create_pid_file() && !pid_file_created)
+    if (SnortConfig::get_conf()->create_pid_file() && !pid_file_created)
     {
         CreatePidFile(snort_main_thread_pid);
         pid_file_created = true;
@@ -295,14 +310,16 @@ void Snort::term()
     if ( already_exiting )
         return;
 
+    const SnortConfig* sc = SnortConfig::get_conf();
+
     already_exiting = true;
     initializing = false;  // just in case we cut out early
 
     memory::MemoryCap::print();
 
     term_signals();
-    IpsManager::global_term(SnortConfig::get_conf());
-    SFAT_Cleanup();
+    IpsManager::global_term(sc);
+    HostAttributes::cleanup();
 
 #ifdef PIGLET
     if ( !Piglet::piglet_mode() )
@@ -312,14 +329,14 @@ void Snort::term()
     ClosePidFile();
 
     /* remove pid file */
-    if ( !SnortConfig::get_conf()->pid_filename.empty() )
+    if ( !sc->pid_filename.empty() )
     {
-        int ret = unlink(SnortConfig::get_conf()->pid_filename.c_str());
+        int ret = unlink(sc->pid_filename.c_str());
 
         if (ret != 0)
         {
             ErrorMessage("Could not remove pid file %s: %s\n",
-                SnortConfig::get_conf()->pid_filename.c_str(), get_error(errno));
+                sc->pid_filename.c_str(), get_error(errno));
         }
     }
 
@@ -329,21 +346,17 @@ void Snort::term()
 
     LogMessage("%s  Snort exiting\n", get_prompt());
 
-    /* free allocated memory */
-    if (SnortConfig::get_conf() == snort_cmd_line_conf)
-    {
-        delete snort_cmd_line_conf;
-        snort_cmd_line_conf = nullptr;
-        SnortConfig::set_conf(nullptr);
-    }
-    else
-    {
-        delete snort_cmd_line_conf;
-        snort_cmd_line_conf = nullptr;
+    // This call must be before SnortConfig cleanup
+    // since the "TraceApi::thread_term()" uses SnortConfig
+    TraceApi::thread_term();
 
-        delete SnortConfig::get_conf();
-        SnortConfig::set_conf(nullptr);
-    }
+    /* free allocated memory */
+    if (sc != snort_cmd_line_conf)
+        delete sc;
+
+    delete snort_cmd_line_conf;
+    snort_cmd_line_conf = nullptr;
+    SnortConfig::set_conf(nullptr);
 
     CleanupProtoNames();
     HighAvailabilityManager::term();
@@ -385,19 +398,20 @@ void Snort::setup(int argc, char* argv[])
     OpenLogger();
 
     init(argc, argv);
+    const SnortConfig* sc = SnortConfig::get_conf();
 
-    if ( SnortConfig::daemon_mode() )
+    if ( sc->daemon_mode() )
         daemonize();
 
     // this must follow daemonization
     snort_main_thread_pid = gettid();
 
     /* Change groups */
-    InitGroups(SnortConfig::get_uid(), SnortConfig::get_gid());
+    InitGroups(sc->get_uid(), sc->get_gid());
 
     set_quick_exit(false);
 
-    memory::MemoryCap::calculate(ThreadConfig::get_instance_max());
+    memory::MemoryCap::calculate();
     memory::MemoryCap::print();
     host_cache.print_config();
 
@@ -411,7 +425,7 @@ void Snort::cleanup()
     SFDAQ::term();
     FileService::close();
 
-    if ( !SnortConfig::test_mode() )  // FIXIT-M ideally the check is in one place
+    if ( !SnortConfig::get_conf()->test_mode() )  // FIXIT-M ideally the check is in one place
         PrintStatistics();
 
     CloseLogger();
@@ -428,7 +442,7 @@ void Snort::reload_failure_cleanup(SnortConfig* sc)
 
 // FIXIT-M refactor this so startup and reload call the same core function to
 // instantiate things that can be reloaded
-SnortConfig* Snort::get_reload_config(const char* fname)
+SnortConfig* Snort::get_reload_config(const char* fname, const char* plugin_path)
 {
     reloading = true;
     ModuleManager::reset_errors();
@@ -445,6 +459,7 @@ SnortConfig* Snort::get_reload_config(const char* fname)
         return nullptr;
     }
 
+    PluginManager::reload_so_plugins(plugin_path, sc);
     sc->setup();
 
 #ifdef SHELL
@@ -464,8 +479,8 @@ SnortConfig* Snort::get_reload_config(const char* fname)
         return nullptr;
     }
 
-    if ((sc->file_mask != 0) && (sc->file_mask != SnortConfig::get_conf()->file_mask))
-        umask(sc->file_mask);
+    if ( sc->log_verbose() )
+        InspectorManager::print_config(sc);
 
     // FIXIT-L is this still needed?
     /* Transfer any user defined rule type outputs to the new rule list */
@@ -506,7 +521,8 @@ SnortConfig* Snort::get_reload_config(const char* fname)
     return sc;
 }
 
-SnortConfig* Snort::get_updated_policy(SnortConfig* other_conf, const char* fname, const char* iname)
+SnortConfig* Snort::get_updated_policy(
+    SnortConfig* other_conf, const char* fname, const char* iname)
 {
     reloading = true;
     reset_parse_errors();

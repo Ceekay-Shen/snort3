@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -29,6 +29,7 @@
 
 enum class IpProtocol : uint8_t;
 
+class AppIdContext;
 class AppIdSession;
 
 namespace snort
@@ -52,15 +53,17 @@ public:
     SO_PRIVATE AppIdApi() = default;
 
     AppIdSession* get_appid_session(const Flow& flow);
-    const char* get_application_name(AppId app_id);
+    const char* get_application_name(AppId app_id, AppIdContext& ctxt);
     const char* get_application_name(const Flow& flow, bool from_client);
-    AppId get_application_id(const char* appName);
+    AppId get_application_id(const char* appName, AppIdContext& ctxt);
     uint32_t produce_ha_state(const Flow& flow, uint8_t* buf);
     uint32_t consume_ha_state(Flow& flow, const uint8_t* buf, uint8_t length, IpProtocol,
         SfIp*, uint16_t initiatorPort);
-    bool ssl_app_group_id_lookup(Flow* flow, const char*, const char*, AppId& service_id, AppId& client_id, AppId& payload_id);
+    bool ssl_app_group_id_lookup(Flow* flow, const char*, const char*, const char*,
+        const char*, bool, AppId& service_id, AppId& client_id, AppId& payload_id);
     AppIdSessionApi* create_appid_session_api(const Flow& flow);
     void free_appid_session_api(AppIdSessionApi* api);
+    bool is_inspection_needed(const Inspector& g) const;
 };
 
 SO_PUBLIC extern AppIdApi appid_api;

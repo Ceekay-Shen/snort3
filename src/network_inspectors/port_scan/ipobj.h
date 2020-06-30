@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2003-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -62,9 +62,9 @@ struct IPSET
 
    Snort Accepts:
 
-    IP-Address		192.168.1.1
-    IP-Address/MaskBits	192.168.1.0/24
-    IP-Address/Mask		192.168.1.0/255.255.255.0
+    IP-Address          192.168.1.1
+    IP-Address/MaskBits 192.168.1.0/24
+    IP-Address/Mask     192.168.1.0/255.255.255.0
 
    These can all be handled via the CIDR block notation : IP/MaskBits
 

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -32,7 +32,8 @@ using namespace HttpEnums;
 using namespace snort;
 
 void UriNormalizer::normalize(const Field& input, Field& result, bool do_path, uint8_t* buffer,
-    const HttpParaList::UriParam& uri_param, HttpInfractions* infractions, HttpEventGen* events)
+    const HttpParaList::UriParam& uri_param, HttpInfractions* infractions, HttpEventGen* events,
+    bool own_the_buffer)
 {
     // Normalize percent encodings and similar escape sequences
     int32_t data_length = norm_char_clean(input, buffer, uri_param, infractions, events);
@@ -47,7 +48,7 @@ void UriNormalizer::normalize(const Field& input, Field& result, bool do_path, u
         data_length = norm_path_clean(buffer, data_length, infractions, events);
     }
 
-    result.set(data_length, buffer);
+    result.set(data_length, buffer, own_the_buffer);
 }
 
 bool UriNormalizer::need_norm(const Field& uri_component, bool do_path,
@@ -450,7 +451,7 @@ int32_t UriNormalizer::norm_path_clean(uint8_t* buf, const int32_t in_length,
 
 // Provide traditional URI-style normalization for buffers that usually are not URIs
 void UriNormalizer::classic_normalize(const Field& input, Field& result,
-    const HttpParaList::UriParam& uri_param)
+    bool do_path, const HttpParaList::UriParam& uri_param)
 {
     // The requirements for generating events related to these normalizations are unclear. It
     // definitely doesn't seem right to generate standard URI events. For now we won't generate
@@ -469,7 +470,7 @@ void UriNormalizer::classic_normalize(const Field& input, Field& result,
     // Normalize character escape sequences
     int32_t data_length = norm_char_clean(input, buffer, uri_param, &unused, &dummy_ev);
 
-    if (uri_param.simplify_path)
+    if (do_path && uri_param.simplify_path)
     {
         // Normalize path directory traversals
         // Find the leading slash if there is one

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -72,7 +72,6 @@ struct BindUse
     std::string name;
 
     Action action;
-    unsigned network_index;
     unsigned inspection_index;
     unsigned ips_index;
     What what;

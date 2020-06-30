@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2003-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -62,7 +62,7 @@ private:
     void discover_network_non_ip(const snort::Packet* p);
     void discover_network_tcp(const snort::Packet* p);
     void discover_network_udp(const snort::Packet* p);
-    void discover_network(const snort::Packet* p, u_int8_t ttl);
+    void discover_network(const snort::Packet* p, uint8_t ttl);
 
     RnaLogger logger;
     DiscoveryFilter filter;

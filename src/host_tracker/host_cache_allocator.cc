@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -22,23 +22,6 @@
 #define HOST_CACHE_ALLOCATOR_CC
 
 #include "host_cache.h"
-
-template <class T>
-T* HostCacheAlloc<T>::allocate(std::size_t n)
-{
-    size_t sz=n*sizeof(T);
-    T* out=std::allocator<T>::allocate(n);
-    lru->update(sz);
-    return out;
-}
-
-template <class T>
-void HostCacheAlloc<T>::deallocate(T* p, std::size_t n) noexcept
-{
-    size_t sz = n*sizeof(T);
-    std::allocator<T>::deallocate(p, n);
-    lru->update( -(int) sz);
-}
 
 template <class T>
 HostCacheAllocIp<T>::HostCacheAllocIp()

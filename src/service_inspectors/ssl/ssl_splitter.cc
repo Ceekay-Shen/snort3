@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2017-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2017-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -58,7 +58,7 @@ StreamSplitter::Status SslSplitter::scan(
                 is_sslv2 = true;
                 paf_state = SSL_PAF_STATES_LEN2_V2;
             }
-            else 
+            else
             {
                 // unknown
                 if (last_fp > 0)

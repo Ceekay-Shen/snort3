@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2007-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -166,7 +166,7 @@ static void alert_event(Packet* p, const char*, Unified2Config* config, const Ev
     Unified2Event u2_event;
     memset(&u2_event, 0, sizeof(u2_event));
 
-    u2_event.snort_id = 0;  // FIXIT-H define / use
+    u2_event.snort_id = 0;  // FIXIT-H alert_event define / use
 
     u2_event.event_id = htonl(event->event_id);
     u2_event.event_second = htonl(event->ref_time.tv_sec);
@@ -335,7 +335,7 @@ static void _Unified2LogPacketAlert(
     unsigned u2_type, U2PseudoHeader* u2h = nullptr)
 {
     Serial_Unified2_Header hdr;
-    Serial_Unified2Packet logheader;
+    Serial_Unified2Packet logheader = {};
 
     uint32_t pkt_length = 0;
     uint32_t write_len = sizeof(hdr) + sizeof(Serial_Unified2Packet) - 4;
@@ -814,12 +814,12 @@ public:
     bool begin(const char*, int, SnortConfig*) override;
 
     Usage get_usage() const override
-    { return CONTEXT; }
+    { return GLOBAL; }
 
 public:
-    size_t limit;
-    bool nostamp;
-    bool legacy_events;
+    size_t limit = 0;
+    bool nostamp = true;
+    bool legacy_events = false;
 };
 
 bool U2Module::set(const char*, Value& v, SnortConfig*)
@@ -839,10 +839,10 @@ bool U2Module::set(const char*, Value& v, SnortConfig*)
     return true;
 }
 
-bool U2Module::begin(const char*, int, SnortConfig*)
+bool U2Module::begin(const char*, int, SnortConfig* sc)
 {
     limit = 0;
-    nostamp = SnortConfig::output_no_timestamp();
+    nostamp = sc->output_no_timestamp();
     legacy_events = false;
     return true;
 }
@@ -1006,7 +1006,7 @@ static Module* mod_ctor()
 static void mod_dtor(Module* m)
 { delete m; }
 
-static Logger* u2_ctor(SnortConfig*, Module* mod)
+static Logger* u2_ctor(Module* mod)
 { return new U2Logger((U2Module*)mod); }
 
 static void u2_dtor(Logger* p)

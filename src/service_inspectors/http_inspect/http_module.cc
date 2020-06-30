@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -89,13 +89,13 @@ const Parameter HttpModule::http_params[] =
     { "iis_unicode_code_page", Parameter::PT_INT, "0:65535", "1252",
       "code page to use from the IIS unicode map file" },
 
-    { "iis_double_decode", Parameter::PT_BOOL, nullptr, "false",
+    { "iis_double_decode", Parameter::PT_BOOL, nullptr, "true",
       "perform double decoding of percent encodings to normalize characters" },
 
     { "oversize_dir_length", Parameter::PT_INT, "1:65535", "300",
       "maximum length for URL directory" },
 
-    { "backslash_to_slash", Parameter::PT_BOOL, nullptr, "false",
+    { "backslash_to_slash", Parameter::PT_BOOL, nullptr, "true",
       "replace \\ with / when normalizing URIs" },
 
     { "plus_to_space", Parameter::PT_BOOL, nullptr, "true",
@@ -306,24 +306,27 @@ HttpParaList::JsNormParam::~JsNormParam()
     delete js_norm;
 }
 
+// Characters that should not be percent-encoded
+// 0-9, a-z, A-Z, tilde, period, underscore, and minus
+// Initializer string for std::bitset is in reverse order. The first character is element 255
+// and the last is element 0.
+// __STRDUMP_DISABLE__
+const std::bitset<256> HttpParaList::UriParam::UriParam::default_unreserved_char
+    { std::string(
+        "00000000" "00000000" "00000000" "00000000"
+        "00000000" "00000000" "00000000" "00000000"
+        "00000000" "00000000" "00000000" "00000000"
+        "00000000" "00000000" "00000000" "00000000"
+        "01000111" "11111111" "11111111" "11111110"
+        "10000111" "11111111" "11111111" "11111110"
+        "00000011" "11111111" "01100000" "00000000"
+        "00000000" "00000000" "00000000" "00000000") };
+// __STRDUMP_ENABLE__
+
 // Some values in these tables may be changed by configuration parameters.
 HttpParaList::UriParam::UriParam() :
-  // Characters that should not be percent-encoded
-  // 0-9, a-z, A-Z, tilde, period, underscore, and minus
-  // Initializer string for std::bitset is in reverse order. The first character is element 255
-  // and the last is element 0.
 
-// __STRDUMP_DISABLE__
-  unreserved_char { std::string(
-      "00000000" "00000000" "00000000" "00000000"
-      "00000000" "00000000" "00000000" "00000000"
-      "00000000" "00000000" "00000000" "00000000"
-      "00000000" "00000000" "00000000" "00000000"
-      "01000111" "11111111" "11111111" "11111110"
-      "10000111" "11111111" "11111111" "11111110"
-      "00000011" "11111111" "01100000" "00000000"
-      "00000000" "00000000" "00000000" "00000000" ) },
-// __STRDUMP_ENABLE__
+  unreserved_char { default_unreserved_char },
 
   uri_char {
     CHAR_NORMAL,    CHAR_NORMAL,    CHAR_NORMAL,    CHAR_NORMAL,    CHAR_NORMAL,    CHAR_NORMAL,    CHAR_NORMAL,    CHAR_NORMAL,

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -146,10 +146,15 @@ bool MemoryCap::free_space(size_t n)
 }
 
 static size_t fudge_it(size_t n)
-{ return ((n >> 7) + 1) << 7; }
+{
+    return ((n >> 7) + 1) << 7;
+}
 
 void MemoryCap::update_allocations(size_t n)
 {
+    if (n == 0)
+        return;
+
     size_t k = n;
     n = fudge_it(n);
     mem_stats.total_fudge += (n - k);
@@ -162,6 +167,9 @@ void MemoryCap::update_allocations(size_t n)
 
 void MemoryCap::update_deallocations(size_t n)
 {
+    if (n == 0)
+      return;
+
     n = fudge_it(n);
     s_tracker.deallocate(n);
     mp_active_context.update_deallocs(n);
@@ -179,39 +187,13 @@ bool MemoryCap::over_threshold()
 // once reload is implemented for the memory manager, the configuration
 // model will need to be updated
 
-void MemoryCap::calculate(unsigned num_threads)
+void MemoryCap::calculate()
 {
     assert(!is_packet_thread());
     const MemoryConfig& config = *SnortConfig::get_conf()->memory;
 
-    auto main_thread_used = s_tracker.used();
-
-    if ( !config.cap )
-    {
-        thread_cap = preemptive_threshold = 0;
-        return;
-    }
-
-    if ( main_thread_used > config.cap )
-    {
-        ParseError("main thread memory usage (%zu) is greater than cap\n", main_thread_used);
-        return;
-    }
-
-    auto real_cap = config.cap - main_thread_used;
-    thread_cap = real_cap / num_threads;
-
-    // FIXIT-L do we want to add some fixed overhead to allow the packet threads to
-    // startup and preallocate flows and whatnot?
-
-    if ( !thread_cap )
-    {
-        ParseError("per-thread memory cap is 0");
-        return;
-    }
-
-    if ( config.threshold )
-        preemptive_threshold = memory::calculate_threshold(thread_cap, config.threshold);
+    thread_cap = config.cap;
+    preemptive_threshold = memory::calculate_threshold(thread_cap, config.threshold);
 }
 
 void MemoryCap::print()
@@ -219,15 +201,15 @@ void MemoryCap::print()
     if ( !MemoryModule::is_active() )
         return;
 
-    const MemoryConfig& config = *SnortConfig::get_conf()->memory;
+    bool verbose = SnortConfig::get_conf()->log_verbose();
 
-    if ( SnortConfig::log_verbose() or mem_stats.allocations )
+    if ( verbose or mem_stats.allocations )
         LogLabel("memory (heap)");
 
-    if ( SnortConfig::log_verbose() )
+    if ( verbose )
     {
-        LogMessage("    global cap: %zu\n", config.cap);
-        LogMessage("    global preemptive threshold percent: %u\n", config.threshold);
+        LogMessage("    thread cap: %zu\n", thread_cap);
+        LogMessage("    thread preemptive threshold: %zu\n", preemptive_threshold);
     }
 
     if ( mem_stats.allocations )
@@ -235,8 +217,6 @@ void MemoryCap::print()
         LogMessage("    main thread usage: %zu\n", s_tracker.used());
         LogMessage("    allocations: %" PRIu64 "\n", mem_stats.allocations);
         LogMessage("    deallocations: %" PRIu64 "\n", mem_stats.deallocations);
-        LogMessage("    thread cap: %zu\n", thread_cap);
-        LogMessage("    preemptive threshold: %zu\n", preemptive_threshold);
     }
 }
 

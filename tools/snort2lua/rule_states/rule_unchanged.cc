@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -22,8 +22,8 @@
 
 #include "conversion_state.h"
 #include "helpers/converter.h"
-#include "rule_states/rule_api.h"
 #include "helpers/s2l_util.h"
+#include "rule_api.h"
 
 namespace rules
 {
@@ -354,19 +354,6 @@ static const ConvertMap rule_session =
 };
 
 const ConvertMap* session_map = &rule_session;
-
-/************************************
- ************* REPLACE  *************
- ************************************/
-
-static const std::string replace = "replace";
-static const ConvertMap rule_replace =
-{
-    replace,
-    unchanged_rule_ctor<& replace>,
-};
-
-const ConvertMap* replace_map = &rule_replace;
 
 /************************************
  ******* DETECTION_FILETER  *********

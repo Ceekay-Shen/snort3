@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -30,15 +30,6 @@
 
 using namespace snort;
 
-#ifdef DEBUG_MSGS
-const char* const flush_policy_names[] =
-{
-    "ignore",
-    "on-ack",
-    "on-data"
-};
-#endif
-
 TcpStreamSession::TcpStreamSession(Flow* f)
     : Session(f), client(true), server(false)
 { }
@@ -54,7 +45,7 @@ void TcpStreamSession::init_new_tcp_session(TcpSegmentDescriptor& tsd)
     /* New session, previous was marked as reset.  Clear the reset flag. */
     flow->clear_session_flags(SSNFLAG_RESET);
 
-    flow->set_expire(tsd.get_pkt(), flow->default_session_timeout); 
+    flow->set_expire(tsd.get_pkt(), flow->default_session_timeout);
 
     update_perf_base_state(TcpStreamTracker::TCP_SYN_SENT);
 
@@ -118,7 +109,7 @@ void TcpStreamSession::update_session_on_server_packet(TcpSegmentDescriptor& tsd
 
 void TcpStreamSession::update_session_on_client_packet(TcpSegmentDescriptor& tsd)
 {
-    /* if we got here we had to see the SYN already... */
+    /* if we got here we have seen the SYN already... */
     flow->set_session_flags(SSNFLAG_SEEN_CLIENT);
     talker = &client;
     listener = &server;
@@ -136,6 +127,31 @@ void TcpStreamSession::update_session_on_client_packet(TcpSegmentDescriptor& tsd
 
     if (!flow->inner_client_ttl)
         flow->set_ttl(tsd.get_pkt(), true);
+}
+
+void TcpStreamSession::set_no_ack(bool b)
+{
+    if (
+        server.get_flush_policy() == STREAM_FLPOLICY_ON_DATA and
+        client.get_flush_policy() == STREAM_FLPOLICY_ON_DATA )
+    {
+        no_ack = b;
+    }
+}
+
+void TcpStreamSession::disable_reassembly(Flow* f)
+{
+    client.set_splitter((StreamSplitter*)nullptr);
+    server.set_splitter((StreamSplitter*)nullptr);
+
+    client.reassembler.purge_segment_list();
+    server.reassembler.purge_segment_list();
+
+    client.flush_policy = STREAM_FLPOLICY_IGNORE;
+    server.flush_policy = STREAM_FLPOLICY_IGNORE;
+
+    client.finalize_held_packet(f);
+    server.finalize_held_packet(f);
 }
 
 uint8_t TcpStreamSession::get_reassembly_direction()
@@ -213,8 +229,6 @@ bool TcpStreamSession::are_packets_missing(uint8_t dir)
     return false;
 }
 
-// FIXIT-H add alert and check alerted go away when we finish
-// packet / PDU split because PDU rules won't run on raw packets
 bool TcpStreamSession::add_alert(Packet* p, uint32_t gid, uint32_t sid)
 {
     TcpStreamTracker& st = p->ptrs.ip_api.get_src()->equals(flow->client_ip) ? server : client;
@@ -354,16 +368,6 @@ void TcpStreamSession::cleanup(Packet* p)
     clear_session(true, true, false, p);
     client.normalizer.reset();
     server.reassembler.reset();
-    if ( p )
-    {
-        client.finalize_held_packet(p);
-        server.finalize_held_packet(p);
-    }
-    else
-    {
-        client.finalize_held_packet(flow);
-        server.finalize_held_packet(flow);
-    }
 }
 
 void TcpStreamSession::clear()
@@ -408,26 +412,4 @@ void TcpStreamSession::start_proxy()
 {
     config->policy = StreamPolicy::OS_PROXY;
 }
-
-//-------------------------------------------------------------------------
-// tcp module stuff
-//-------------------------------------------------------------------------
-void TcpStreamSession::print()
-{
-    char buf[64];
-
-    LogMessage("TcpStreamSession:\n");
-    sfip_ntop(&flow->server_ip, buf, sizeof(buf));
-    LogMessage("    server IP:          %s\n", buf);
-    sfip_ntop(&flow->client_ip, buf, sizeof(buf));
-    LogMessage("    client IP:          %s\n", buf);
-    LogMessage("    server port:        %d\n", flow->server_port);
-    LogMessage("    client port:        %d\n", flow->client_port);
-    LogMessage("    flags:              0x%X\n", flow->get_session_flags());
-    LogMessage("Client Tracker:\n");
-    client.print();
-    LogMessage("Server Tracker:\n");
-    server.print();
-}
-
 

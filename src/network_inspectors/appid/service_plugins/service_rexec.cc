@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -24,6 +24,8 @@
 #endif
 
 #include "service_rexec.h"
+
+#include "detection/ips_context.h"
 
 #include "appid_debug.h"
 #include "appid_inspector.h"
@@ -105,7 +107,7 @@ static void rexec_free_state(void* data)
 
 void RexecServiceDetector::rexec_bail(ServiceREXECData* rd)
 {
-    if (!rd) 
+    if (!rd)
         return;
     rd->state = REXEC_STATE_BAIL;
     if(rd->child)
@@ -140,7 +142,7 @@ int RexecServiceDetector::validate(AppIdDiscoveryArgs& args)
     {
     case REXEC_STATE_PORT:
         if(rexec_snort_protocol_id == UNKNOWN_PROTOCOL_ID)
-            rexec_snort_protocol_id = SnortConfig::get_conf()->proto_ref->find("rexec");
+            rexec_snort_protocol_id = args.pkt->context->conf->proto_ref->find("rexec");
 
         if (args.dir != APP_ID_FROM_INITIATOR)
             goto bail;
@@ -166,7 +168,7 @@ int RexecServiceDetector::validate(AppIdDiscoveryArgs& args)
             dip = args.pkt->ptrs.ip_api.get_dst();
             sip = args.pkt->ptrs.ip_api.get_src();
             AppIdSession* pf = AppIdSession::create_future_session(args.pkt, dip, 0, sip, (uint16_t)port,
-                IpProtocol::TCP, rexec_snort_protocol_id, APPID_EARLY_SESSION_FLAG_FW_RULE);
+                IpProtocol::TCP, rexec_snort_protocol_id);
             if (pf)
             {
                 ServiceREXECData* tmp_rd = (ServiceREXECData*)snort_calloc(
@@ -184,7 +186,7 @@ int RexecServiceDetector::validate(AppIdDiscoveryArgs& args)
                 }
                 pf->service_disco_state = APPID_DISCO_STATE_STATEFUL;
                 pf->scan_flags |= SCAN_HOST_PORT_FLAG;
-                initialize_expected_session(args.asd, *pf, REXEC_EXPECTED_SESSION_FLAGS, APP_ID_FROM_RESPONDER);
+                args.asd.initialize_future_session(*pf, REXEC_EXPECTED_SESSION_FLAGS, APP_ID_FROM_RESPONDER);
                 pf->service_disco_state = APPID_DISCO_STATE_STATEFUL;
                 rd->child = tmp_rd;
                 rd->state = REXEC_STATE_SERVER_CONNECT;
@@ -292,7 +294,7 @@ int RexecServiceDetector::validate(AppIdDiscoveryArgs& args)
         }
         goto bail;
     case REXEC_STATE_STDERR_WAIT:
-        if(!size) 
+        if(!size)
             break;
         goto bail;
     case REXEC_STATE_STDERR_DONE:

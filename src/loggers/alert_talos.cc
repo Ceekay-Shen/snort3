@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2019-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2019-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -98,6 +98,9 @@ class TalosModule : public Module
 {
 public:
     TalosModule() : Module(S_NAME, s_help, s_params) { }
+
+    Usage get_usage() const override
+    { return GLOBAL; }
 };
 
 //-------------------------------------------------------------------------
@@ -205,7 +208,7 @@ static Module* mod_ctor()
 static void mod_dtor(Module* m)
 { delete m; }
 
-static Logger* talos_ctor(SnortConfig*, Module* mod)
+static Logger* talos_ctor(Module* mod)
 { return new TalosLogger((TalosModule*)mod); }
 
 static void talos_dtor(Logger* p)

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2007-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -41,7 +41,7 @@
 
 #include "framework/ips_option.h"
 #include "framework/module.h"
-#include "hash/hashfcn.h"
+#include "hash/hash_key_operations.h"
 #include "profiler/profiler.h"
 #include "protocols/packet.h"
 
@@ -332,7 +332,7 @@ static int CvsValidateEntry(const uint8_t* entry_arg, const uint8_t* end_arg)
         }
         if (*entry_arg != '/')
         {
-            entry_arg = (uint8_t*)memchr(entry_arg, '/', end_arg - entry_arg);
+            entry_arg = (const uint8_t*)memchr(entry_arg, '/', end_arg - entry_arg);
             if (entry_arg == nullptr)
                 break;
         }
@@ -359,7 +359,7 @@ static int CvsValidateEntry(const uint8_t* entry_arg, const uint8_t* end_arg)
 static void CvsGetEOL(const uint8_t* ptr, const uint8_t* end,
     const uint8_t** eol, const uint8_t** eolm)
 {
-    *eolm = (uint8_t*)memchr(ptr, CVS_COMMAND_DELIMITER, end - ptr);
+    *eolm = (const uint8_t*)memchr(ptr, CVS_COMMAND_DELIMITER, end - ptr);
     if (*eolm == nullptr)
     {
         *eolm = end;
@@ -401,7 +401,7 @@ public:
     { return DETECT; }
 
 public:
-    CvsRuleOption data;
+    CvsRuleOption data = {};
 };
 
 bool CvsModule::begin(const char*, int, SnortConfig*)

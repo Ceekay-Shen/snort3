@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -92,7 +92,6 @@ struct SO_PUBLIC Parameter
     double get_number() const;
     const char* get_string() const;
 
-    static const Parameter* find(const Parameter*, const Parameter*, const char*);
     static const Parameter* find(const Parameter*, const char*);
 
     // 0-based; -1 if not found; list is | delimited

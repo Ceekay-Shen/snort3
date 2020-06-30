@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -124,7 +124,7 @@ void MpseRegexOffload::put(Packet* p)
     assert(p->context->searches.items.size() > 0);
 
     RegexRequest* req = idle.front();
-    idle.pop_front();  // FIXIT-H use splice to move instead
+    idle.pop_front();
 
     busy.emplace_back(req);
     // Because a list is a doubly linked list we can store the iterator
@@ -182,9 +182,10 @@ bool MpseRegexOffload::get(Packet*& p)
 ThreadRegexOffload::ThreadRegexOffload(unsigned max) : RegexOffload(max)
 {
     unsigned i = ThreadConfig::get_instance_max();
+    const SnortConfig* sc = SnortConfig::get_conf();
 
     for ( auto* req : idle )
-        req->thread = new std::thread(worker, req, SnortConfig::get_conf(), i++);
+        req->thread = new std::thread(worker, req, sc, i++);
 }
 
 ThreadRegexOffload::~ThreadRegexOffload()
@@ -217,7 +218,7 @@ void ThreadRegexOffload::put(Packet* p)
     assert(p->context->searches.items.size() > 0);
 
     RegexRequest* req = idle.front();
-    idle.pop_front();  // FIXIT-H use splice to move instead
+    idle.pop_front();
 
     busy.emplace_back(req);
     p->context->regex_req_it = std::prev(busy.end());
@@ -266,7 +267,7 @@ bool ThreadRegexOffload::get(Packet*& p)
 }
 
 void ThreadRegexOffload::worker(
-    RegexRequest* req, SnortConfig* initial_config, unsigned id)
+    RegexRequest* req, const SnortConfig* initial_config, unsigned id)
 {
     set_instance_id(id);
     SnortConfig::set_conf(initial_config);

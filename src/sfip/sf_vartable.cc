@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 1998-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -293,7 +293,7 @@ SfIpRet sfvt_add_str(vartable_t* table, const char* str, sfip_var_t** ipret)
 
 /* Adds the variable described by "src" to the variable "dst",
  * using the vartable for looking variables used within "src".
- * If vartable is null variables are not supported. 
+ * If vartable is null variables are not supported.
  */
 SfIpRet sfvt_add_to_var(vartable_t* table, sfip_var_t* dst, const char* src)
 {

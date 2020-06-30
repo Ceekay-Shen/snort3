@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2018-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2018-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -27,6 +27,7 @@ namespace Http2Enums
 static const int MAX_OCTETS = 63780;
 static const int DATA_SECTION_SIZE = 16384;
 static const int FRAME_HEADER_LENGTH = 9;
+static const uint32_t NO_STREAM_ID = 0xFFFFFFFF;
 
 static const uint32_t HTTP2_GID = 121;
 
@@ -35,15 +36,17 @@ enum FrameType : uint8_t { FT_DATA=0, FT_HEADERS=1, FT_PRIORITY=2, FT_RST_STREAM
     FT_PUSH_PROMISE=5, FT_PING=6, FT_GOAWAY=7, FT_WINDOW_UPDATE=8, FT_CONTINUATION=9, FT__ABORT=254,
     FT__NONE=255 };
 
+enum StreamState { STATE_IDLE, STATE_OPEN, STATE_OPEN_DATA, STATE_CLOSED };
+
 // Message buffers available to clients
 // This enum must remain synchronized with Http2Api::classic_buffer_names[]
-enum HTTP2_BUFFER { HTTP2_BUFFER_FRAME_HEADER = 1, HTTP2_BUFFER_FRAME_DATA, HTTP2_BUFFER_DECODED_HEADER, 
-    HTTP2_BUFFER_MAX };
+enum HTTP2_BUFFER { HTTP2_BUFFER_FRAME_HEADER = 1, HTTP2_BUFFER_FRAME_DATA,
+    HTTP2_BUFFER_DECODED_HEADER, HTTP2_BUFFER__MAX };
 
 // Peg counts
 // This enum must remain synchronized with Http2Module::peg_names[] in http2_tables.cc
-enum PEG_COUNT { PEG_CONCURRENT_SESSIONS = 0, PEG_MAX_CONCURRENT_SESSIONS, PEG_FLOW,
-    PEG_COUNT_MAX };
+enum PEG_COUNT { PEG_FLOW = 0, PEG_CONCURRENT_SESSIONS, PEG_MAX_CONCURRENT_SESSIONS,
+    PEG_MAX_TABLE_ENTRIES, PEG_MAX_CONCURRENT_FILES, PEG_COUNT__MAX };
 
 enum EventSid
 {
@@ -60,6 +63,10 @@ enum EventSid
     EVENT_INVALID_HEADER = 10,
     EVENT_SETTINGS_FRAME_ERROR = 11,
     EVENT_SETTINGS_FRAME_UNKN_PARAM = 12,
+    EVENT_FRAME_SEQUENCE = 13,
+    EVENT_DYNAMIC_TABLE_OVERFLOW = 14,
+    EVENT_INVALID_STARTLINE = 15,
+    EVENT_PADDING_LEN = 16,
     EVENT__MAX_VALUE
 };
 
@@ -87,10 +94,19 @@ enum Infraction
     INF_HPACK_INDEX_OUT_OF_BOUNDS = 17,
     INF_INVALID_SETTINGS_FRAME = 18,
     INF_SETTINGS_FRAME_UNKN_PARAM = 19,
+    INF_FRAME_SEQUENCE = 20,
+    INF_INVALID_TABLE_SIZE_UPDATE = 21,
+    INF_DYNAMIC_TABLE_OVERFLOW = 22,
+    INF_TABLE_SIZE_UPDATE_WITHIN_HEADER = 23,
+    INF_TOO_MANY_TABLE_SIZE_UPDATES = 24,
+    INF_INVALID_STARTLINE = 25,
+    INF_INVALID_HEADER = 26,
+    INF_PADDING_LEN = 27,
+    INF_TRAILERS_AFTER_END_STREAM = 28,
     INF__MAX_VALUE
 };
 
-enum HeaderFrameFlags 
+enum HeaderFrameFlags
 {
     END_STREAM = 0x1,
     END_HEADERS = 0x4,
@@ -113,7 +129,7 @@ enum PseudoHeaders
 enum SettingsFrameIds
 {
     HEADER_TABLE_SIZE = 1,
-    ENABLE_PUSH, 
+    ENABLE_PUSH,
     MAX_CONCURRENT_STREAMS,
     INITIAL_WINDOW_SIZE,
     MAX_FRAME_SIZE,

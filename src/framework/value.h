@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -86,7 +86,7 @@ public:
     const char* get_name() const
     { return param ? param->name : nullptr; }
 
-    bool is(const char* s)
+    bool is(const char* s) const
     { return param ? !strcmp(param->name, s) : false; }
 
     bool get_bool() const

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -39,8 +39,9 @@
 #define SF_APPID_CSD_MIN        1000000
 #define SF_APPID_DYNAMIC_MIN    2000000
 
-class AppIdModuleConfig;
+class AppIdConfig;
 class ClientDetector;
+class OdpContext;
 class ServiceDetector;
 
 enum AppInfoFlags
@@ -55,14 +56,11 @@ enum AppInfoFlags
     APPINFO_FLAG_DEFER                = (1<<7),
 
     APPINFO_FLAG_IGNORE               = (1<<8),
-    APPINFO_FLAG_SSL_SQUELCH          = (1<<9),
-    APPINFO_FLAG_PERSISTENT           = (1<<10),
-    APPINFO_FLAG_TP_CLIENT            = (1<<11),
-    APPINFO_FLAG_DEFER_PAYLOAD        = (1<<12),
-    APPINFO_FLAG_SEARCH_ENGINE        = (1<<13),
-    APPINFO_FLAG_SUPPORTED_SEARCH     = (1<<14),
-    APPINFO_FLAG_CLIENT_DETECTOR_CALLBACK = (1<<15),
-    APPINFO_FLAG_SERVICE_DETECTOR_CALLBACK = (1<<16)
+    APPINFO_FLAG_PERSISTENT           = (1<<9),
+    APPINFO_FLAG_TP_CLIENT            = (1<<10),
+    APPINFO_FLAG_DEFER_PAYLOAD        = (1<<11),
+    APPINFO_FLAG_CLIENT_DETECTOR_CALLBACK = (1<<12),
+    APPINFO_FLAG_SERVICE_DETECTOR_CALLBACK = (1<<13)
 };
 
 class AppInfoTableEntry
@@ -91,12 +89,6 @@ typedef std::unordered_map<std::string, AppInfoTableEntry*> AppInfoNameTable;
 class AppInfoManager
 {
 public:
-    static inline AppInfoManager& get_instance()
-    {
-        static AppInfoManager instance;
-        return instance;
-    }
-
     AppInfoTableEntry* get_app_info_entry(AppId);
     AppInfoTableEntry* add_dynamic_app_entry(const char* app_name);
     AppId get_appid_by_service_id(uint32_t);
@@ -142,15 +134,26 @@ public:
         return entry ? entry->priority : 0;
     }
 
-    void init_appid_info_table(AppIdModuleConfig*, snort::SnortConfig*);
+    void init_appid_info_table(AppIdConfig&, snort::SnortConfig*, OdpContext& odp_ctxt);
     void cleanup_appid_info_table();
     void dump_app_info_table();
     SnortProtocolId add_appid_protocol_reference(const char* protocol, snort::SnortConfig*);
 
 private:
-    inline AppInfoManager() = default;
-    void load_appid_config(AppIdModuleConfig*, const char* path);
+    void load_odp_config(OdpContext&, const char* path);
     AppInfoTableEntry* get_app_info_entry(AppId appId, const AppInfoTable&);
+    bool is_existing_entry(AppInfoTableEntry* entry);
+    AppInfoTableEntry* find_app_info_by_name(const char* app_name);
+    bool add_entry_to_app_info_name_table(const char* app_name, AppInfoTableEntry* entry);
+    AppId get_static_app_info_entry(AppId appid);
+
+    AppInfoTable app_info_table;
+    AppInfoTable app_info_service_table;
+    AppInfoTable app_info_client_table;
+    AppInfoTable app_info_payload_table;
+    AppInfoNameTable app_info_name_table;
+    AppId next_custom_appid = SF_APPID_DYNAMIC_MIN;
+    AppInfoTable custom_app_info_table;
 };
 
 #endif

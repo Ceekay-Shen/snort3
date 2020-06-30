@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -73,16 +73,7 @@ bool Reputation::convert(std::istringstream& data_stream)
 
         else if (keyword == "blacklist")
         {
-            std::string file_name;
-            if( arg_stream >> file_name)
-            {
-                tmpval = table_api.add_option("blacklist", file_name);
-            }
-            else
-            {
-                data_api.failed_conversion(arg_stream, "reputation: blacklist <missing_arg>");
-                tmpval = false;
-            }
+            tmpval = parse_path_option("blacklist", arg_stream);
         }
         else if (keyword == "memcap")
         {
@@ -142,16 +133,7 @@ bool Reputation::convert(std::istringstream& data_stream)
         }
         else if (keyword == "whitelist")
         {
-            std::string file_name;
-            if( arg_stream >> file_name)
-            {
-                tmpval = table_api.add_option("whitelist", file_name);
-            }
-            else
-            {
-                data_api.failed_conversion(arg_stream, "reputation: whitelist <missing_arg>");
-                tmpval = false;
-            }
+            tmpval = parse_path_option("whitelist", arg_stream);
         }
         else
         {

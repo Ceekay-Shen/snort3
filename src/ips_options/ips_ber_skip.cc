@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2019-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2019-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -24,7 +24,7 @@
 #include "framework/cursor.h"
 #include "framework/ips_option.h"
 #include "framework/module.h"
-#include "hash/hashfcn.h"
+#include "hash/hash_key_operations.h"
 #include "profiler/profiler.h"
 #include "utils/util_ber.h"
 
@@ -139,8 +139,8 @@ public:
     { return DETECT; }
 
 public:
-    uint32_t type;
-    bool optional;
+    uint32_t type = 0;
+    bool optional = false;
 };
 
 bool BerSkipModule::begin(const char*, int, SnortConfig*)

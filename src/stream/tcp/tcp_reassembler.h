@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -41,6 +41,8 @@ public:
     virtual void trace_segments(TcpReassemblerState&);
     virtual void purge_alerts(TcpReassemblerState&);
 
+    uint32_t perform_partial_flush(TcpReassemblerState&, snort::Flow*);
+
 protected:
     TcpReassembler() = default;
 
@@ -79,12 +81,15 @@ protected:
     uint32_t get_reverse_packet_dir(TcpReassemblerState&, const snort::Packet*);
     uint32_t get_forward_packet_dir(TcpReassemblerState&, const snort::Packet*);
     int32_t flush_pdu_ips(TcpReassemblerState&, uint32_t*, snort::Packet*);
-    void fallback(TcpReassemblerState&);
+    void fallback(TcpStreamTracker&, bool server_side);
     int32_t flush_pdu_ackd(TcpReassemblerState&, uint32_t* flags, snort::Packet*);
     void purge_to_seq(TcpReassemblerState&, uint32_t flush_seq);
 
     bool next_no_gap(const TcpSegmentNode&);
     void update_next(TcpReassemblerState&, const TcpSegmentNode&);
+
+    uint32_t perform_partial_flush(TcpReassemblerState&, snort::Packet*, uint32_t flushed = 0);
+
 };
 
 #endif

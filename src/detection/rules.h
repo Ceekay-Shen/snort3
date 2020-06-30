@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 // Copyright (C) 1998-2002 Martin Roesch <roesch@sourcefire.com>
 //
@@ -56,8 +56,8 @@ struct ListHead
 {
     OutputSet* LogList;
     OutputSet* AlertList;
-    snort::IpsAction* action;
     struct RuleListNode* ruleListNode;
+    bool is_plugin_action = false;
 };
 
 // for top-level rule lists by type (alert, drop, etc.)
@@ -65,23 +65,22 @@ struct RuleListNode
 {
     ListHead* RuleList;   /* The rule list associated with this node */
     snort::Actions::Type mode;        /* the rule mode */
-    int evalIndex;        /* eval index for this rule set */
+    unsigned evalIndex;        /* eval index for this rule set */
     char* name;           /* name of this rule list */
     RuleListNode* next;   /* the next RuleListNode */
 };
 
 struct RuleKey
 {
+    unsigned policy_id;
     unsigned gid;
     unsigned sid;
 
-    friend bool operator< (const RuleKey& lhs, const RuleKey& rhs)
-    { return lhs.gid < rhs.gid ? true : (lhs.gid > rhs.gid ? false : (lhs.sid < rhs.sid)); }
+    friend bool operator< (const RuleKey&, const RuleKey&);
 };
 
 struct RuleState
 {
-    unsigned policy_id;
     snort::Actions::Type action;
     IpsPolicy::Enable enable;
 };

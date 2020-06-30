@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -21,6 +21,8 @@
 #include "config.h"
 #endif
 
+#include "packet_io/active.h"
+
 #include "http_common.h"
 #include "http_cutter.h"
 #include "http_enum.h"
@@ -28,7 +30,6 @@
 #include "http_module.h"
 #include "http_stream_splitter.h"
 #include "http_test_input.h"
-#include "stream/stream.h"
 
 using namespace snort;
 using namespace HttpCommon;
@@ -72,12 +73,23 @@ HttpCutter* HttpStreamSplitter::get_cutter(SectionType type,
     case SEC_TRAILER:
         return (HttpCutter*)new HttpHeaderCutter;
     case SEC_BODY_CL:
-        return (HttpCutter*)new HttpBodyClCutter(session_data->data_length[source_id],
-            session_data->detained_inspection[source_id]);
+        return (HttpCutter*)new HttpBodyClCutter(
+            session_data->data_length[source_id],
+            session_data->detained_inspection[source_id],
+            session_data->compression[source_id]);
     case SEC_BODY_CHUNK:
-        return (HttpCutter*)new HttpBodyChunkCutter(session_data->detained_inspection[source_id]);
+        return (HttpCutter*)new HttpBodyChunkCutter(
+            session_data->detained_inspection[source_id],
+            session_data->compression[source_id]);
     case SEC_BODY_OLD:
-        return (HttpCutter*)new HttpBodyOldCutter(session_data->detained_inspection[source_id]);
+        return (HttpCutter*)new HttpBodyOldCutter(
+            session_data->detained_inspection[source_id],
+            session_data->compression[source_id]);
+    case SEC_BODY_H2:
+        return (HttpCutter*)new HttpBodyH2Cutter(
+            session_data->data_length[source_id],
+            session_data->detained_inspection[source_id],
+            session_data->compression[source_id]);
     default:
         assert(false);
         return nullptr;
@@ -113,9 +125,16 @@ void HttpStreamSplitter::detain_packet(Packet* pkt)
         fprintf(HttpTestManager::get_output_file(), "Packet detain request\n");
         fflush(HttpTestManager::get_output_file());
     }
+
     if (!HttpTestManager::use_test_input(HttpTestManager::IN_HTTP))
+    {
 #endif
-    Stream::set_packet_action_to_hold(pkt);
+    pkt->active->hold_packet(pkt);
+#ifdef REG_TEST
+    }
+#endif
+
+    // Count attempted detains.
     HttpModule::increment_peg_counts(PEG_DETAINED);
 }
 
@@ -131,11 +150,11 @@ StreamSplitter::Status HttpStreamSplitter::scan(Packet* pkt, const uint8_t* data
     // This is the session state information we share with HttpInspect and store with stream. A
     // session is defined by a TCP connection. Since scan() is the first to see a new TCP
     // connection the new flow data object is created here.
-    HttpFlowData* session_data = (HttpFlowData*)flow->get_flow_data(HttpFlowData::inspector_id);
+    HttpFlowData* session_data = HttpInspect::http_get_flow_data(flow);
 
     if (session_data == nullptr)
     {
-        flow->set_flow_data(session_data = new HttpFlowData);
+        HttpInspect::http_set_flow_data(flow, session_data = new HttpFlowData);
         HttpModule::increment_peg_counts(PEG_FLOW);
     }
 
@@ -163,16 +182,41 @@ StreamSplitter::Status HttpStreamSplitter::scan(Packet* pkt, const uint8_t* data
     if (HttpTestManager::use_test_output(HttpTestManager::IN_HTTP) &&
         !HttpTestManager::use_test_input(HttpTestManager::IN_HTTP))
     {
-        printf("Scan from flow data %" PRIu64
+        fprintf(HttpTestManager::get_output_file(), "Scan from flow data %" PRIu64
             " direction %d length %u client port %hu server port %hu\n", session_data->seq_num,
             source_id, length, flow->client_port, flow->server_port);
-        fflush(stdout);
+        fflush(HttpTestManager::get_output_file());
         if (HttpTestManager::get_show_scan())
         {
-            Field(length, data).print(stdout, "Scan segment");
+            Field(length, data).print(HttpTestManager::get_output_file(), "Scan segment");
         }
     }
 #endif
+
+    // If the last request was a CONNECT and we have not yet seen the response, this is early C2S
+    // traffic. If there has been a pipeline overflow or underflow we cannot match requests to
+    // responses, so there is no attempt to track early C2S traffic.
+    if ((source_id == SRC_CLIENT) && (type == SEC_REQUEST) && !session_data->for_http2 &&
+        session_data->last_request_was_connect)
+    {
+        const uint64_t last_request_trans_num = session_data->expected_trans_num[SRC_CLIENT] - 1;
+        const bool server_behind_connect =
+            (session_data->expected_trans_num[SRC_SERVER] < last_request_trans_num);
+        const bool server_expecting_connect_status =
+            ((session_data->expected_trans_num[SRC_SERVER] == last_request_trans_num)
+            && (session_data->type_expected[SRC_SERVER] == SEC_STATUS));
+        const bool pipeline_valid = !session_data->pipeline_overflow &&
+            !session_data->pipeline_underflow;
+
+        if ((server_behind_connect || server_expecting_connect_status) && pipeline_valid)
+        {
+            *session_data->get_infractions(source_id) += INF_EARLY_C2S_TRAFFIC_AFTER_CONNECT;
+            session_data->events[source_id]->create_event(EVENT_EARLY_C2S_TRAFFIC_AFTER_CONNECT);
+            session_data->last_connect_trans_w_early_traffic =
+                session_data->expected_trans_num[SRC_CLIENT] - 1;
+        }
+        session_data->last_request_was_connect = false;
+    }
 
     assert(!session_data->tcp_close[source_id]);
 
@@ -214,9 +258,10 @@ StreamSplitter::Status HttpStreamSplitter::scan(Packet* pkt, const uint8_t* data
     }
     const uint32_t max_length = MAX_OCTETS - cutter->get_octets_seen();
     const ScanResult cut_result = cutter->cut(data, (length <= max_length) ? length :
-        max_length, session_data->get_infractions(source_id), session_data->get_events(source_id),
+        max_length, session_data->get_infractions(source_id), session_data->events[source_id],
         session_data->section_size_target[source_id],
-        session_data->stretch_section_to_packet[source_id]);
+        session_data->stretch_section_to_packet[source_id],
+        session_data->h2_body_finished[source_id]);
     switch (cut_result)
     {
     case SCAN_NOT_FOUND:
@@ -226,8 +271,8 @@ StreamSplitter::Status HttpStreamSplitter::scan(Packet* pkt, const uint8_t* data
             *session_data->get_infractions(source_id) += INF_ENDLESS_HEADER;
             // FIXIT-L the following call seems inappropriate for headers and trailers. Those cases
             // should be an unconditional EVENT_LOSS_OF_SYNC.
-            session_data->get_events(source_id)->generate_misformatted_http(data, length);
-            // FIXIT-H need to process this data not just discard it.
+            session_data->events[source_id]->generate_misformatted_http(data, length);
+            // FIXIT-E need to process this data not just discard it.
             session_data->type_expected[source_id] = SEC_ABORT;
             delete cutter;
             cutter = nullptr;

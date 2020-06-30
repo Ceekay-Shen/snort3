@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -67,6 +67,7 @@ bool TcpStateSynSent::ack_sent(TcpSegmentDescriptor& tsd, TcpStreamTracker& trk)
     Flow* flow = tsd.get_flow();
 
     // FIXIT-H verify ack being sent is valid...
+    // norm/drop + discard
     trk.update_tracker_ack_sent(tsd);
     flow->set_session_flags(SSNFLAG_ESTABLISHED);
     flow->session_state |= ( STREAM_STATE_ACK | STREAM_STATE_ESTABLISHED );
@@ -88,6 +89,7 @@ bool TcpStateSynSent::data_seg_sent(TcpSegmentDescriptor& tsd, TcpStreamTracker&
     Flow* flow = tsd.get_flow();
 
     // FIXIT-H verify ack being sent is valid...
+    // norm/drop + discard
     trk.update_tracker_ack_sent(tsd);
     flow->set_session_flags(SSNFLAG_ESTABLISHED);
     flow->session_state |= ( STREAM_STATE_ACK | STREAM_STATE_ESTABLISHED );

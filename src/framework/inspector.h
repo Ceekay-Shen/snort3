@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -69,7 +69,7 @@ public:
     // access external dependencies here
     // return verification status
     virtual bool configure(SnortConfig*) { return true; }
-    virtual void show(SnortConfig*) { }
+    virtual void show(const SnortConfig*) const { }
 
     // Specific to Binders to notify them of an inspector being removed from the policy
     // FIXIT-L Probably shouldn't be part of the base Inspector class
@@ -102,11 +102,9 @@ public:
     bool is_inactive();
 
     void set_service(SnortProtocolId snort_protocol_id_param)
-    {
-        snort_protocol_id = snort_protocol_id_param;
-    }
+    { snort_protocol_id = snort_protocol_id_param; }
 
-    SnortProtocolId get_service() { return snort_protocol_id; }
+    SnortProtocolId get_service() const { return snort_protocol_id; }
 
     // for well known buffers
     // well known buffers may be included among generic below,
@@ -134,7 +132,22 @@ public:
     const InspectApi* get_api()
     { return api; }
 
-    const char* get_name();
+    const char* get_name() const;
+
+    void set_alias_name(const char* name)
+    { alias_name = name; }
+
+    const char* get_alias_name() const
+    { return alias_name; }
+
+    virtual bool is_control_channel() const
+    { return false; }
+
+    virtual bool can_carve_files() const
+    { return false; }
+
+    virtual bool can_start_tls() const
+    { return false; }
 
 public:
     static unsigned max_slots;
@@ -145,24 +158,11 @@ protected:
     Inspector();  // internal init only at this point
 
 private:
-    const InspectApi* api;
+    const InspectApi* api = nullptr;
     std::atomic_uint* ref_count;
-    SnortProtocolId snort_protocol_id;
-};
-
-template <typename T>
-class InspectorData : public Inspector
-{
-public:
-    InspectorData(T* t)
-    { data = t; }
-
-    ~InspectorData() override
-    { delete data; }
-
-    void eval(Packet*) override { }
-
-    T* data;
+    SnortProtocolId snort_protocol_id = 0;
+    // FIXIT-E Use std::string to avoid storing a pointer to external std::string buffers
+    const char* alias_name = nullptr;
 };
 
 // at present there is no sequencing among like types except that appid
@@ -205,7 +205,7 @@ struct InspectApi
     InspectFunc reset;     // clear stats
 };
 
-inline const char* Inspector::get_name()
+inline const char* Inspector::get_name() const
 { return api->base.name; }
 }
 

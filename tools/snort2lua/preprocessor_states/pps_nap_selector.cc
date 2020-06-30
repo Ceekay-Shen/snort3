@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2017-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2017-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -58,21 +58,21 @@ public:
             std::string protocol;
             std::string ips_policy;
 
-            TRY_FIELD(action);   // ignore since nap rules don't drop
-            TRY_FIELD(src_zone);
-            TRY_FIELD(src_net);
+            TRY_FIELD(action)   // ignore since nap rules don't drop
+            TRY_FIELD(src_zone)
+            TRY_FIELD(src_net)
             if ( src_net != "any" )
-                TRY_FIELD(src_netmask);
+                TRY_FIELD(src_netmask)
 
-            TRY_FIELD(src_port);
-            TRY_FIELD(dst_zone);
-            TRY_FIELD(dst_net);
+            TRY_FIELD(src_port)
+            TRY_FIELD(dst_zone)
+            TRY_FIELD(dst_net)
             if ( dst_net != "any" )
-                TRY_FIELD(dst_netmask);
+                TRY_FIELD(dst_netmask)
 
-            TRY_FIELD(dst_port);
-            TRY_FIELD(vlan);
-            TRY_FIELD(protocol);
+            TRY_FIELD(dst_port)
+            TRY_FIELD(vlan)
+            TRY_FIELD(protocol)
 
             for ( std::string s; data_stream >> s; ips_policy += " " + s );
 

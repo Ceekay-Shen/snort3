@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -29,6 +29,8 @@
 #include "detection/detection_util.h"
 #include "file_api/file_api.h"
 #include "main/snort.h"
+#include "main/snort_debug.h"
+#include "network_inspectors/packet_tracer/packet_tracer.h"
 #include "packet_io/active.h"
 #include "utils/util.h"
 
@@ -837,9 +839,8 @@ void DCE2_SmbInsertTid(DCE2_SmbSsnData* ssd,
     if ( !is_ipc and
         ssd->max_file_depth == -1 and DCE2_ScSmbFileDepth((dce2SmbProtoConf*)ssd->sd.config) == -1 )
     {
-        trace_logf(dce_smb, "Not inserting TID (%hu) "
-            "because it's not IPC and not inspecting normal file "
-            "data.\n", tid);
+        debug_logf(dce_smb_trace, nullptr, "Not inserting TID (%hu) "
+            "because it's not IPC and not inspecting normal file data.\n", tid);
         return;
     }
 
@@ -1344,8 +1345,10 @@ void DCE2_SmbAbortFileAPI(DCE2_SmbSsnData* ssd)
 static FileContext* DCE2_get_main_file_context()
 {
     FileFlows* file_flows = FileFlows::get_file_flows(DetectionEngine::get_current_packet()->flow);
-    assert(file_flows);
-    return file_flows->get_current_file_context();
+    if (file_flows)
+        return file_flows->get_current_file_context();
+    else
+        return nullptr;
 }
 
 FileVerdict DCE2_get_file_verdict()
@@ -1444,6 +1447,7 @@ static void DCE2_SmbFinishFileBlockVerdict(DCE2_SmbSsnData* ssd)
     if ((verdict == FILE_VERDICT_BLOCK) || (verdict == FILE_VERDICT_REJECT))
     {
         DCE2_SmbInjectDeletePdu(ssd->fb_ftracker);
+        DetectionEngine::get_current_packet()->active->set_drop_reason("smb");
     }
 
     ssd->fb_ftracker = nullptr;
@@ -1475,7 +1479,12 @@ static void DCE2_SmbFinishFileAPI(DCE2_SmbSsnData* ssd)
                     FileVerdict verdict = DCE2_get_file_verdict();
 
                     if ((verdict == FILE_VERDICT_BLOCK) || (verdict == FILE_VERDICT_REJECT))
+                    {
                         ssd->fb_ftracker = ftracker;
+                        if (PacketTracer::is_active())
+                            PacketTracer::log("Dce2_smb: smb file verdict %s\n",
+                                verdict == FILE_VERDICT_BLOCK ? "block" : "reject");
+                    }
                 }
             }
             dce2_smb_stats.smb_files_processed++;
@@ -1531,11 +1540,15 @@ static DCE2_Ret DCE2_SmbFileAPIProcess(DCE2_SmbSsnData* ssd,
 
     Packet* p = DetectionEngine::get_current_packet();
     FileFlows* file_flows = FileFlows::get_file_flows(p->flow);
+
+    if (!file_flows)
+        return DCE2_RET__ERROR;
+
     if (!file_flows->file_process(p, data_ptr, (int)data_len, position, upload,
         DCE2_SmbIsVerdictSuspend(upload, position)))
     {
-        trace_logf(dce_smb, "File API returned FAILURE "
-            "for (0x%02X) %s\n", ftracker->fid_v1, upload ? "UPLOAD" : "DOWNLOAD");
+        debug_logf(dce_smb_trace, nullptr, "File API returned FAILURE for (0x%02X) %s\n",
+            ftracker->fid_v1, upload ? "UPLOAD" : "DOWNLOAD");
 
         // Failure.  Abort tracking this file under file API
         return DCE2_RET__ERROR;
@@ -1558,6 +1571,11 @@ static DCE2_Ret DCE2_SmbFileAPIProcess(DCE2_SmbSsnData* ssd,
                     || (verdict == FILE_VERDICT_PENDING))
                 {
                     ssd->fb_ftracker = ftracker;
+                    if (verdict != FILE_VERDICT_PENDING and PacketTracer::is_active())
+                    {
+                        PacketTracer::log("Dce2_smb: smb file verdict %s\n",
+                            verdict == FILE_VERDICT_BLOCK ? "block" : "reject");
+                    }
                 }
             }
             ftracker->ff_sequential_only = false;
@@ -1781,7 +1799,7 @@ void DCE2_SmbProcessFileData(DCE2_SmbSsnData* ssd,
             }
             else if (ftracker->ff_file_offset < ftracker->ff_bytes_processed)
             {
-                trace_logf(dce_smb, "File offset %" PRIu64 " is "
+                debug_logf(dce_smb_trace, nullptr, "File offset %" PRIu64 " is "
                     "less than bytes processed %" PRIu64 " - aborting.\n",
                     ftracker->ff_file_offset, ftracker->ff_bytes_processed);
 
@@ -1824,7 +1842,7 @@ void DCE2_SmbProcessFileData(DCE2_SmbSsnData* ssd,
             || ((file_data_depth != 0)
             && (ftracker->ff_bytes_processed >= (uint64_t)file_data_depth)))
         {
-	    // Bytes processed is at or beyond file data depth - finished.
+            // Bytes processed is at or beyond file data depth - finished.
             DCE2_SmbRemoveFileTracker(ssd, ftracker);
             return;
         }

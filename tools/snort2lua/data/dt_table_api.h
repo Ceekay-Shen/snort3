@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -150,7 +150,7 @@ private:
     template<typename T>
     bool do_add_option(const std::string& opt_name, const T val, const std::string& s_val);
 
-    template<typename T> 
+    template<typename T>
     void do_append_option(const std::string& opt_name, const T val, const std::string& s_val);
 
     void create_append_data(std::string& fqn, Table*& t);

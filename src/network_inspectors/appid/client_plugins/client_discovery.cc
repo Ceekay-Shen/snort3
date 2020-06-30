@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -40,7 +40,6 @@
 #include "client_app_timbuktu.h"
 #include "client_app_tns.h"
 #include "client_app_vnc.h"
-#include "detector_plugins/detector_http.h"
 #include "detector_plugins/detector_imap.h"
 #include "detector_plugins/detector_kerberos.h"
 #include "detector_plugins/detector_pattern.h"
@@ -52,56 +51,14 @@ using namespace snort;
 
 #define MAX_CANDIDATE_CLIENTS 10
 
-ClientDiscovery* ClientDiscovery::discovery_manager = nullptr;
-THREAD_LOCAL ClientAppMatch* match_free_list = nullptr;
-
-ClientDiscovery::ClientDiscovery()
-{
-    initialize();
-}
-
-ClientDiscovery::~ClientDiscovery()
-{
-    release_thread_resources();
-}
-
-void ClientDiscovery::release_thread_resources()
-{
-    ClientAppMatch* match;
-    while ((match = match_free_list) != nullptr)
-    {
-        match_free_list = match->next;
-        snort_free(match);
-    }
-}
-
-ClientDiscovery& ClientDiscovery::get_instance()
-{
-    if (!discovery_manager)
-    {
-        discovery_manager = new ClientDiscovery();
-    }
-
-    return *discovery_manager;
-}
-
-void ClientDiscovery::release_instance()
-{
-    assert(discovery_manager);
-    delete discovery_manager;
-    discovery_manager = nullptr;
-
-}
 void ClientDiscovery::initialize()
 {
     new AimClientDetector(this);
     new BitClientDetector(this);
     new BitTrackerClientDetector(this);
-    new HttpClientDetector(this);
     new ImapClientDetector(this);
     new KerberosClientDetector(this);
     new MsnClientDetector(this);
-    new PatternClientDetector(this);
     new Pop3ClientDetector(this);
     new RtpClientDetector(this);
     new SipTcpClientDetector(this);
@@ -121,12 +78,6 @@ void ClientDiscovery::initialize()
 
 void ClientDiscovery::finalize_client_plugins()
 {
-    for ( auto kv : tcp_detectors )
-        kv.second->finalize_patterns();
-
-    for ( auto kv : udp_detectors )
-        kv.second->finalize_patterns();
-
     if ( tcp_patterns )
         tcp_patterns->prep();
 
@@ -162,13 +113,7 @@ static int pattern_match(void* id, void* /*unused_tree*/, int match_end_pos, voi
             cam->count++;
         else
         {
-            if (match_free_list)
-            {
-                cam = match_free_list;
-                match_free_list = cam->next;
-            }
-            else
-                cam = (ClientAppMatch*)snort_alloc(sizeof(ClientAppMatch));
+            cam = (ClientAppMatch*)snort_alloc(sizeof(ClientAppMatch));
 
             cam->count = 1;
             cam->detector =  static_cast<const ClientDetector*>(pd->service);
@@ -214,9 +159,9 @@ static const ClientDetector* get_next_detector(ClientAppMatch** match_list)
         else
             max_prev->next = max_curr->next;
 
-        max_curr->next = match_free_list;
-        match_free_list = max_curr;
-        return max_curr->detector;
+        const ClientDetector* detector = max_curr->detector;
+        snort_free(max_curr);
+        return detector;
     }
     else
         return nullptr;
@@ -232,22 +177,21 @@ static void free_matched_list(ClientAppMatch** match_list)
     {
         tmp = cam;
         cam = tmp->next;
-        tmp->next = match_free_list;
-        match_free_list = tmp;
+        snort_free(tmp);
     }
 
     *match_list = nullptr;
 }
 
-ClientAppMatch* ClientDiscovery::find_detector_candidates(const Packet* pkt, IpProtocol protocol)
+ClientAppMatch* ClientDiscovery::find_detector_candidates(const Packet* pkt, AppIdSession& asd)
 {
     ClientAppMatch* match_list = nullptr;
     SearchTool* patterns;
 
-    if (protocol == IpProtocol::TCP)
-        patterns = ClientDiscovery::get_instance().tcp_patterns;
+    if (asd.protocol == IpProtocol::TCP)
+        patterns = asd.ctxt.get_odp_ctxt().get_client_disco_mgr().tcp_patterns;
     else
-        patterns = ClientDiscovery::get_instance().udp_patterns;
+        patterns = asd.ctxt.get_odp_ctxt().get_client_disco_mgr().udp_patterns;
 
     if ( patterns )
         patterns->find_all((const char*)pkt->data, pkt->dsize, &pattern_match, false, (void*)&match_list);
@@ -262,7 +206,7 @@ void ClientDiscovery::create_detector_candidates_list(AppIdSession& asd, Packet*
     if ( !p->dsize || asd.client_detector != nullptr || !asd.client_candidates.empty() )
         return;
 
-    match_list = find_detector_candidates(p, asd.protocol);
+    match_list = find_detector_candidates(p, asd);
     while ( asd.client_candidates.size() < MAX_CANDIDATE_CLIENTS )
     {
         ClientDetector* cd = const_cast<ClientDetector*>(get_next_detector(&match_list));
@@ -288,7 +232,7 @@ int ClientDiscovery::get_detector_candidates_list(AppIdSession& asd, Packet* p, 
         && asd.get_session_flags(APPID_SESSION_CLIENT_GETS_SERVER_PACKETS) )
         create_detector_candidates_list(asd, p);
 
-    return APPID_SESSION_SUCCESS;
+    return 0;
 }
 
 // This function sets the client discovery state to APPID_DISCO_STATE_FINISHED
@@ -351,7 +295,6 @@ bool ClientDiscovery::do_client_discovery(AppIdSession& asd, Packet* p,
     bool isTpAppidDiscoveryDone = false;
     AppInfoTableEntry* entry;
     uint32_t prevRnaClientState = asd.client_disco_state;
-    bool was_http2 = asd.is_http2;
     bool was_service = asd.is_service_detected();
     AppId tp_app_id = asd.get_tp_app_id();
 
@@ -364,7 +307,7 @@ bool ClientDiscovery::do_client_discovery(AppIdSession& asd, Packet* p,
         {
             // Third party has positively identified appId; Dig deeper only if our
             // detector identifies additional information
-            entry = asd.app_info_mgr->get_app_info_entry(tp_app_id);
+            entry = asd.ctxt.get_odp_ctxt().get_app_info_mgr().get_app_info_entry(tp_app_id);
             if ( entry && entry->client_detector
                 && ( ( entry->flags & ( APPINFO_FLAG_CLIENT_ADDITIONAL |
                 APPINFO_FLAG_CLIENT_USER ) )
@@ -393,7 +336,7 @@ bool ClientDiscovery::do_client_discovery(AppIdSession& asd, Packet* p,
          !asd.get_session_flags(APPID_SESSION_NO_TPI)  and
          asd.is_tp_appid_available() )
     {
-        entry = asd.app_info_mgr->get_app_info_entry(tp_app_id);
+        entry = asd.ctxt.get_odp_ctxt().get_app_info_mgr().get_app_info_entry(tp_app_id);
         if ( !( entry && entry->client_detector
             && entry->client_detector == asd.client_detector
             && (entry->flags & (APPINFO_FLAG_CLIENT_ADDITIONAL | APPINFO_FLAG_CLIENT_USER) ) ) )
@@ -439,10 +382,6 @@ bool ClientDiscovery::do_client_discovery(AppIdSession& asd, Packet* p,
             asd.client_disco_state = APPID_DISCO_STATE_FINISHED;
         }
     }
-
-    if ( appidDebug->is_active() )
-        if ( !was_http2 && asd.is_http2 )
-            LogMessage("AppIdDbg %s Got a preface for HTTP/2\n", appidDebug->get_debug_session());
 
     if ( !was_service && asd.is_service_detected() )
         asd.sync_with_snort_protocol_id(asd.service.get_id(), p);

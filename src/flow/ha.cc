@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -658,10 +658,10 @@ Flow* HighAvailability::process_daq_import(Packet& p, FlowKey& key)
             // Validate that the imported flow matches up with the given flow key.
             if (flow)
             {
-                if (FlowKey::compare(&key, flow->key, 0) == 0)
+                if (FlowKey::is_equal(&key, flow->key, 0))
                 {
-                    if (flow->flow_state == Flow::FlowState::BLOCK) 
-                    {   
+                    if (flow->flow_state == Flow::FlowState::BLOCK)
+                    {
                         flow->disable_inspection();
                         p.disable_inspect = true;
                     }

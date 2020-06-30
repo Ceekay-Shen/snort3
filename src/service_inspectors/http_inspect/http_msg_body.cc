@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -121,7 +121,7 @@ void HttpMsgBody::do_file_decompression(const Field& input, Field& output)
     }
     uint8_t* buffer = new uint8_t[MAX_OCTETS];
     session_data->fd_alert_context.infractions = transaction->get_infractions(source_id);
-    session_data->fd_alert_context.events = transaction->get_events(source_id);
+    session_data->fd_alert_context.events = session_data->events[source_id];
     session_data->fd_state->Next_In = input.start();
     session_data->fd_state->Avail_In = (uint32_t)input.length();
     session_data->fd_state->Next_Out = buffer;
@@ -196,7 +196,7 @@ void HttpMsgBody::do_js_normalization(const Field& input, Field& output)
     }
 
     params->js_norm_param.js_norm->normalize(input, output,
-        transaction->get_infractions(source_id), transaction->get_events(source_id));
+        transaction->get_infractions(source_id), session_data->events[source_id]);
 }
 
 void HttpMsgBody::do_file_processing(const Field& file_data)
@@ -224,7 +224,10 @@ void HttpMsgBody::do_file_processing(const Field& file_data)
     if (!session_data->mime_state[source_id])
     {
         FileFlows* file_flows = FileFlows::get_file_flows(flow);
-        const bool download = (source_id == SRC_SERVER);
+        if (!file_flows)
+            return;
+
+        const FileDirection dir = source_id == SRC_SERVER ? FILE_DOWNLOAD : FILE_UPLOAD;
 
         size_t file_index = 0;
 
@@ -233,8 +236,8 @@ void HttpMsgBody::do_file_processing(const Field& file_data)
             file_index = request->get_http_uri()->get_file_proc_hash();
         }
 
-        if (file_flows->file_process(p, file_data.start(), fp_length,
-            file_position, !download, file_index))
+        if (file_flows->file_process(p, file_index, file_data.start(), fp_length, body_octets, dir,
+            transaction->get_file_processing_id(source_id), file_position))
         {
             session_data->file_depth_remaining[source_id] -= fp_length;
 
@@ -274,13 +277,15 @@ void HttpMsgBody::do_file_processing(const Field& file_data)
 
 const Field& HttpMsgBody::get_classic_client_body()
 {
-    return classic_normalize(detect_data, classic_client_body, params->uri_param);
+    return classic_normalize(detect_data, classic_client_body, false, params->uri_param);
 }
 
 #ifdef REG_TEST
 // Common elements of print_section() for body sections
-void HttpMsgBody::print_body_section(FILE* output)
+void HttpMsgBody::print_body_section(FILE* output, const char* body_type_str)
 {
+    HttpMsgSection::print_section_title(output, body_type_str);
+    fprintf(output, "octets seen %" PRIi64 "\n", body_octets);
     detect_data.print(output, "Detect data");
     get_classic_buffer(HTTP_BUFFER_CLIENT_BODY, 0, 0).print(output,
         HttpApi::classic_buffer_names[HTTP_BUFFER_CLIENT_BODY-1]);

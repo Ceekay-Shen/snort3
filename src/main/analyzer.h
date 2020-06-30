@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -104,7 +104,7 @@ public:
     void pause();
     void resume(uint64_t msg_cnt);
     void reload_daq();
-    void reinit(snort::SnortConfig*);
+    void reinit(const snort::SnortConfig*);
     void rotate();
     snort::SFDAQInstance* get_daq_instance() { return daq_instance; }
 

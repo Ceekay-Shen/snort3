@@ -201,8 +201,7 @@ ftp_command_specs =
     { command = 'PORT', length = 400, format = '< host_port >' },
     { command = 'PROT', format = '< char CSEP >' },
     { command = 'STRU', format = '< char FRPO [ string ] >' },
-    { command = 'TYPE', 
-      format = '< { char AE [ char NTC ] | char I | char L [ number ] } >' }
+    { command = 'TYPE', format = '< { char AE [ char NTC ] | char I | char L [ number ] } >' }
 }
 
 default_ftp_server =
@@ -240,20 +239,68 @@ smtp_default_data_cmds =
 
 smtp_default_normalize_cmds =
 [[
-    RCPT VRFY EXPN
+    ATRN AUTH BDAT CHUNKING DATA DEBUG EHLO EMAL ESAM ESND ESOM ETRN EVFY EXPN
+    HELO HELP IDENT MAIL NOOP ONEX QUEU QUIT RCPT RSET SAML SEND SOML STARTTLS
+    TICK TIME TURN TURNME VERB VRFY X-ADAT XADR XAUTH XCIR X-DRCP X-ERCP XEXCH50
+    X-EXCH50 X-EXPS XGEN XLICENSE X-LINK2STATE XQUE XSTA XTRN XUSR
 ]]
 
-smtp_default_valid_cmds =
-[[
-    ATRN AUTH BDAT DATA DEBUG EHLO EMAL ESAM ESND ESOM ETRN EVFY EXPN HELO
-    HELP IDENT MAIL NOOP ONEX QUEU QUIT RCPT RSET SAML SEND SIZE SOML
-    STARTTLS TICK TIME TURN TURNME VERB VRFY X-EXPS X-LINK2STATE XADR XAUTH
-    XCIR XEXCH50 XGEN XLICENSE XQUE XSTA XTRN XUSR
-]]
+smtp_default_valid_cmds = smtp_default_normalize_cmds
+
+smtp_default_alt_max_command_lines =
+{
+    { command = 'ATRN', length = 255, },
+    { command = 'AUTH', length = 246, },
+    { command = 'BDAT', length = 255, },
+    { command = 'DATA', length = 246, },
+    { command = 'DEBUG', length = 255, },
+    { command = 'EHLO', length = 500, },
+    { command = 'EMAL', length = 255, },
+    { command = 'ESAM', length = 255, },
+    { command = 'ESND', length = 255, },
+    { command = 'ESOM', length = 255, },
+    { command = 'ETRN', length = 500, },
+    { command = 'EVFY', length = 255, },
+    { command = 'EXPN', length = 255, },
+    { command = 'HELO', length = 500, },
+    { command = 'HELP', length = 500, },
+    { command = 'IDENT', length = 255, },
+    { command = 'MAIL', length = 260, },
+    { command = 'NOOP', length = 255, },
+    { command = 'ONEX', length = 246, },
+    { command = 'QUEU', length = 246, },
+    { command = 'QUIT', length = 246, },
+    { command = 'RCPT', length = 300, },
+    { command = 'RSET', length = 255, },
+    { command = 'SAML', length = 246, },
+    { command = 'SEND', length = 246, },
+    { command = 'SIZE', length = 255, },
+    { command = 'SOML', length = 246, },
+    { command = 'STARTTLS', length = 246, },
+    { command = 'TICK', length = 246, },
+    { command = 'TIME', length = 246, },
+    { command = 'TURN', length = 246, },
+    { command = 'TURNME', length = 246, },
+    { command = 'VERB', length = 246, },
+    { command = 'VRFY', length = 255, },
+    { command = 'XADR', length = 246, },
+    { command = 'XAUTH', length = 246, },
+    { command = 'XCIR', length = 246, },
+    { command = 'XEXCH50', length = 246, },
+    { command = 'X-EXPS', length = 246, },
+    { command = 'XGEN', length = 246, },
+    { command = 'XLICENSE', length = 246, },
+    { command = 'X-LINK2STATE', length = 246, },
+    { command = 'XQUE', length = 246, },
+    { command = 'XSTA', length = 246, },
+    { command = 'XTRN', length = 246, },
+    { command = 'XUSR', length = 246, }
+}
 
 default_smtp =
 {
     -- params not specified here get internal defaults
+    alt_max_command_line_len = smtp_default_alt_max_command_lines,
     auth_cmds = smtp_default_auth_cmds,
     binary_data_cmds = smtp_default_binary_data_cmds,
     data_cmds = smtp_default_data_cmds,
@@ -1109,4 +1156,26 @@ default_low_port_scan =
 
     icmp_sweep = icmp_low_sweep,
 }
+
+---------------------------------------------------------------------------
+-- default whitelist
+---------------------------------------------------------------------------
+default_whitelist =
+[[
+    ftp_command_specs default_ftp_server smtp_default_alt_max_command_lines
+    default_smtp http_methods sip_methods telnet_commands default_wizard
+    default_references default_classifications gtp_v0_msg gtp_v1_msg gtp_v2_msg
+    gtp_v0_info gtp_v1_info gtp_v2_info default_gtp tcp_low_ports
+    tcp_low_decoy tcp_low_sweep tcp_low_dist tcp_med_ports
+    tcp_med_decoy tcp_med_sweep tcp_med_dist tcp_hi_ports tcp_hi_decoy
+    tcp_hi_sweep tcp_hi_dist udp_low_ports udp_low_decoy udp_low_sweep
+    udp_low_dist udp_med_ports udp_med_decoy udp_med_sweep udp_med_dist
+    udp_hi_ports udp_hi_decoy udp_hi_sweep udp_hi_dist ip_low_proto
+    ip_low_decoy ip_low_sweep ip_low_dist ip_med_proto ip_med_decoy
+    ip_med_sweep ip_med_dist ip_hi_proto ip_hi_decoy ip_hi_sweep
+    ip_hi_dist icmp_low_sweep icmp_med_sweep icmp_hi_sweep
+    default_hi_port_scan default_med_port_scan default_low_port_scan
+]]
+
+snort_whitelist_append(default_whitelist)
 

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -25,6 +25,7 @@
 
 #include "service_rshell.h"
 
+#include "detection/ips_context.h"
 #include "protocols/packet.h"
 
 #include "app_info_table.h"
@@ -155,12 +156,12 @@ int RshellServiceDetector::validate(AppIdDiscoveryArgs& args)
         if (port)
         {
             if(rsh_error_snort_protocol_id == UNKNOWN_PROTOCOL_ID)
-                rsh_error_snort_protocol_id = SnortConfig::get_conf()->proto_ref->find("rsh-error");
+                rsh_error_snort_protocol_id = args.pkt->context->conf->proto_ref->find("rsh-error");
 
             const SfIp* dip = args.pkt->ptrs.ip_api.get_dst();
             const SfIp* sip = args.pkt->ptrs.ip_api.get_src();
             AppIdSession* pf = AppIdSession::create_future_session(args.pkt, dip, 0, sip,
-                (uint16_t)port, IpProtocol::TCP, rsh_error_snort_protocol_id, APPID_EARLY_SESSION_FLAG_FW_RULE);
+                (uint16_t)port, IpProtocol::TCP, rsh_error_snort_protocol_id);
             if (pf)
             {
                 ServiceRSHELLData* tmp_rd = (ServiceRSHELLData*)snort_calloc(
@@ -177,10 +178,10 @@ int RshellServiceDetector::validate(AppIdDiscoveryArgs& args)
                     return APPID_ENOMEM;
                 }
                 pf->scan_flags |= SCAN_HOST_PORT_FLAG;
-                initialize_expected_session(args.asd, *pf,
-                    APPID_SESSION_CONTINUE | APPID_SESSION_REXEC_STDERR | APPID_SESSION_NO_TPI |
+                args.asd.initialize_future_session(*pf, APPID_SESSION_CONTINUE | APPID_SESSION_REXEC_STDERR | APPID_SESSION_NO_TPI |
                     APPID_SESSION_NOT_A_SERVICE | APPID_SESSION_PORT_SERVICE_DONE,
                     APP_ID_FROM_RESPONDER);
+
                 pf->service_disco_state = APPID_DISCO_STATE_STATEFUL;
                 rd->child = tmp_rd;
                 rd->state = RSHELL_STATE_SERVER_CONNECT;
@@ -267,7 +268,7 @@ int RshellServiceDetector::validate(AppIdDiscoveryArgs& args)
             goto fail;
         if (size == 1 || *data == 0x01)
         {
-            if(size !=1) 
+            if(size !=1)
             {
                 data++;
                 size--;
@@ -278,12 +279,12 @@ int RshellServiceDetector::validate(AppIdDiscoveryArgs& args)
                 }
             }
             if(rd->child)
-            { 
+            {
                 if(rd->child->state == RSHELL_STATE_STDERR_WAIT)
                     rd->child->state = RSHELL_STATE_STDERR_DONE;
                 else
                     goto fail;
-            } 
+            }
             args.asd.clear_session_flags(APPID_SESSION_CONTINUE);
             goto success;
         }

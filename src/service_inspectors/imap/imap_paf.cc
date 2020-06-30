@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -455,7 +455,7 @@ static StreamSplitter::Status imap_paf_client(const uint8_t* data, uint32_t len,
 {
     const char* pch;
 
-    pch = (char *)memchr (data, '\n', len);
+    pch = (const char *)memchr (data, '\n', len);
 
     if (pch != nullptr)
     {

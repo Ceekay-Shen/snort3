@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2019-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2019-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -94,7 +94,7 @@ bool Http2HpackDecoder::decode_indexed_name(const uint8_t* encoded_header_buffer
 
     if (!entry)
     {
-        infractions += INF_HPACK_INDEX_OUT_OF_BOUNDS;
+        *infractions += INF_HPACK_INDEX_OUT_OF_BOUNDS;
         events->create_event(EVENT_MISFORMATTED_HTTP2);
         return false;
     }
@@ -121,6 +121,8 @@ bool Http2HpackDecoder::decode_literal_header_line(const uint8_t* encoded_header
     uint32_t partial_bytes_consumed;
     uint32_t partial_bytes_written;
     Field name, value;
+
+    table_size_update_allowed = false;
 
     // Indexed field name
     if (encoded_header_buffer[0] & name_index_mask)
@@ -192,8 +194,16 @@ bool Http2HpackDecoder::decode_literal_header_line(const uint8_t* encoded_header
     }
 
     if (with_indexing)
-        decode_table.add_index(name, value);
-
+    {
+        // Adding the entry to the dynamic table fails if the number of entries in the dynamic
+        // table exceeds the Snort hard-coded limit of 512
+        if (!decode_table.add_index(name, value))
+        {
+            *infractions += INF_DYNAMIC_TABLE_OVERFLOW;
+            events->create_event(EVENT_DYNAMIC_TABLE_OVERFLOW);
+            return false;
+        }
+    }
     return true;
 }
 
@@ -206,6 +216,8 @@ bool Http2HpackDecoder::decode_indexed_header(const uint8_t* encoded_header_buff
     bytes_written = 0;
     bytes_consumed = 0;
 
+    table_size_update_allowed = false;
+
     if (!decode_int.translate(encoded_header_buffer, encoded_header_length, bytes_consumed,
             index, events, infractions))
         return false;
@@ -214,14 +226,14 @@ bool Http2HpackDecoder::decode_indexed_header(const uint8_t* encoded_header_buff
 
     if (!entry)
     {
-        infractions += INF_HPACK_INDEX_OUT_OF_BOUNDS;
+        *infractions += INF_HPACK_INDEX_OUT_OF_BOUNDS;
         events->create_event(EVENT_MISFORMATTED_HTTP2);
         return false;
     }
 
     if (entry->value.length() <= 0)
     {
-        infractions += INF_LOOKUP_EMPTY_VALUE;
+        *infractions += INF_LOOKUP_EMPTY_VALUE;
         events->create_event(EVENT_MISFORMATTED_HTTP2);
     }
 
@@ -258,7 +270,6 @@ bool Http2HpackDecoder::decode_indexed_header(const uint8_t* encoded_header_buff
     return true;
 }
 
-// FIXIT-M Will be updated to actually update dynamic table size. For now just skips over
 bool Http2HpackDecoder::handle_dynamic_size_update(const uint8_t* encoded_header_buffer,
     const uint32_t encoded_header_length, const Http2HpackIntDecode &decode_int,
     uint32_t &bytes_consumed, uint32_t &bytes_written)
@@ -273,15 +284,28 @@ bool Http2HpackDecoder::handle_dynamic_size_update(const uint8_t* encoded_header
     {
         return false;
     }
-#ifdef REG_TEST
-    //FIXIT-M remove when dynamic size updates are handled
-    if (HttpTestManager::use_test_output(HttpTestManager::IN_HTTP2))
-    {
-            fprintf(HttpTestManager::get_output_file(),
-                "Skipping HPACK dynamic size update: %lu\n", decoded_int);
-    }
-#endif
     bytes_consumed += encoded_bytes_consumed;
+
+    if (!table_size_update_allowed)
+    {
+        *infractions += INF_TABLE_SIZE_UPDATE_WITHIN_HEADER;
+        events->create_event(EVENT_MISFORMATTED_HTTP2);
+        return true;
+    }
+    if (num_table_size_updates >= 2)
+    {
+        *infractions += INF_TOO_MANY_TABLE_SIZE_UPDATES;
+        events->create_event(EVENT_MISFORMATTED_HTTP2);
+        return true;
+    }
+
+    if (!decode_table.hpack_table_size_update(decoded_int))
+    {
+        *infractions += INF_INVALID_TABLE_SIZE_UPDATE;
+        events->create_event(EVENT_MISFORMATTED_HTTP2);
+    }
+
+    num_table_size_updates++;
 
     return true;
 }
@@ -318,7 +342,6 @@ bool Http2HpackDecoder::decode_header_line(const uint8_t* encoded_header_buffer,
             LITERAL_NO_INDEX_NAME_INDEX_MASK, decode_int4, false, bytes_consumed,
             decoded_header_buffer, decoded_header_length, bytes_written);
     else
-        // FIXIT-M dynamic table size update not yet supported, just skip
         return handle_dynamic_size_update(encoded_header_buffer,
             encoded_header_length, decode_int5, bytes_consumed, bytes_written);
 }
@@ -329,40 +352,45 @@ bool Http2HpackDecoder::decode_header_line(const uint8_t* encoded_header_buffer,
 // not output the start line or decoded headers - this function must be followed by calls to
 // get_start_line() and get_decoded_headers() to generate and obtain these fields.
 bool Http2HpackDecoder::decode_headers(const uint8_t* encoded_headers,
-    const uint32_t encoded_headers_length, uint8_t* decoded_headers, uint32_t* decoded_headers_len,
-    Http2StartLine *start_line_generator, Http2EventGen* stream_events,
-    Http2Infractions* stream_infractions)
+    const uint32_t encoded_headers_length, uint8_t* decoded_headers,
+    Http2StartLine *start_line_generator)
 {
     uint32_t total_bytes_consumed = 0;
     uint32_t line_bytes_consumed = 0;
     uint32_t line_bytes_written = 0;
     bool success = true;
     start_line = start_line_generator;
-    decoded_headers_size = decoded_headers_len;
-    events = stream_events;
-    infractions = stream_infractions;
+    decoded_headers_size = 0;
     pseudo_headers_fragment_size = 0;
+    decode_error = false;
+
+    // A maximum of two table size updates are allowed, and must be at the start of the header block
+    table_size_update_allowed = true;
+    num_table_size_updates = 0;
 
     while (success and total_bytes_consumed < encoded_headers_length)
     {
         success = decode_header_line(encoded_headers + total_bytes_consumed,
             encoded_headers_length - total_bytes_consumed, line_bytes_consumed,
-            decoded_headers + *decoded_headers_size, MAX_OCTETS - *decoded_headers_size,
+            decoded_headers + decoded_headers_size, MAX_OCTETS - decoded_headers_size,
             line_bytes_written);
         total_bytes_consumed  += line_bytes_consumed;
-        *decoded_headers_size += line_bytes_written;
+        decoded_headers_size += line_bytes_written;
     }
 
     // If there were only pseudo-headers, finalize never got called, so create the start-line
     if (!start_line->is_finalized())
         success &= finalize_start_line();
 
-    // write the last CRLF to end the header
+    /* Write the last CRLF to end the header
+
+       Adding artificial chunked header to end of HTTP/1.1 decoded header block for H2I to communicate
+       frame boundaries to http_inspect and http_inspect can expect chunked data during inspection */
     if (success)
     {
         success = write_decoded_headers((const uint8_t*)"\r\n", 2, decoded_headers +
-            *decoded_headers_size, MAX_OCTETS - *decoded_headers_size, line_bytes_written);
-        *decoded_headers_size += line_bytes_written;
+            decoded_headers_size, MAX_OCTETS - decoded_headers_size, line_bytes_written);
+        decoded_headers_size += line_bytes_written;
     }
     else
         decode_error = true;
@@ -373,7 +401,7 @@ bool Http2HpackDecoder::finalize_start_line()
 {
     // Save the current position in the decoded buffer so we can set the pointer to the start
     // of the regular headers
-    pseudo_headers_fragment_size = *decoded_headers_size;
+    pseudo_headers_fragment_size = decoded_headers_size;
 
     return start_line->finalize();
 }
@@ -388,6 +416,6 @@ const Field* Http2HpackDecoder::get_decoded_headers(const uint8_t* const decoded
     if (decode_error)
         return new Field(STAT_NO_SOURCE);
     else
-        return new Field(*decoded_headers_size - pseudo_headers_fragment_size, decoded_headers +
+        return new Field(decoded_headers_size - pseudo_headers_fragment_size, decoded_headers +
             pseudo_headers_fragment_size, false);
 }

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 1998-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -94,7 +94,7 @@ struct SO_PUBLIC SfIp
     const char* ntop(char* buf, int bufsize) const;
     const char* ntop(SfIpString) const;
 
-    void obfuscate(SfCidr* ob);
+    void obfuscate(const SfCidr* ob);
 
 private:
     int cidr_mask(int val);

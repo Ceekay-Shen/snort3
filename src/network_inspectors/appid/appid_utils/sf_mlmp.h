@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -24,6 +24,12 @@
 
 #include <cstddef>
 #include <cstdint>
+
+struct tMlpPattern
+{
+    const uint8_t* pattern;
+    size_t patternSize;
+};
 
 struct tMlmpPattern
 {

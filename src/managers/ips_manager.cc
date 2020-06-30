@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -130,7 +130,7 @@ static bool set_arg(
         if ( p->is_wild_card() )
             val = opt;
 
-        long n = (long)strtod(val, &end);
+        long n = (long)strtoll(val, &end, 0);
 
         if ( !*end )
             v.set(n);
@@ -176,6 +176,15 @@ const char* IpsManager::get_option_keyword()
     return current_keyword.c_str();
 }
 
+const IpsApi* IpsManager::get_option_api(const char* keyword)
+{
+    Option* opt = get_opt(keyword);
+    if ( opt )
+        return opt->api;
+    else
+        return nullptr;
+}
+
 bool IpsManager::option_begin(
     SnortConfig* sc, const char* key, SnortProtocolId)
 {
@@ -201,7 +210,7 @@ bool IpsManager::option_begin(
         return false;
     }
 
-    // FIXIT-H allow service too
+    // FIXIT-M allow service too
     //if ( opt->api->protos && !(proto & opt->api->protos) )
     //{
     //    ParseError("%s not allowed with given rule protocol", opt->api->base.name);
@@ -311,8 +320,6 @@ bool IpsManager::option_end(
     if ( ips->is_relative() )
         fpl->isRelative = 1;
 
-    otn_set_plugin(otn, ips->get_type());
-
     if ( ips->is_agent() and !otn_set_agent(otn, ips) )
     {
         // FIXIT-L support multiple actions (eg replaces) per rule
@@ -324,11 +331,11 @@ bool IpsManager::option_end(
 
 //-------------------------------------------------------------------------
 
-void IpsManager::global_init(SnortConfig*)
+void IpsManager::global_init(const SnortConfig*)
 {
 }
 
-void IpsManager::global_term(SnortConfig* sc)
+void IpsManager::global_term(const SnortConfig* sc)
 {
     for ( auto& p : s_options )
         if ( p.second->init && p.second->api->pterm )
@@ -347,18 +354,18 @@ void IpsManager::reset_options()
     IpsOption::set_buffer("pkt_data");
 }
 
-void IpsManager::setup_options()
+void IpsManager::setup_options(const SnortConfig* sc)
 {
     for ( auto& p : s_options )
         if ( p.second->init && p.second->api->tinit )
-            p.second->api->tinit(SnortConfig::get_conf());
+            p.second->api->tinit(sc);
 }
 
-void IpsManager::clear_options()
+void IpsManager::clear_options(const SnortConfig* sc)
 {
     for ( auto& p : s_options )
         if ( p.second->init && p.second->api->tterm )
-            p.second->api->tterm(SnortConfig::get_conf());
+            p.second->api->tterm(sc);
 }
 
 bool IpsManager::verify(SnortConfig* sc)

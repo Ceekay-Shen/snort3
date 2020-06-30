@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -80,6 +80,7 @@ static THREAD_LOCAL POPSearchInfo pop_search_info;
 const PegInfo pop_peg_names[] =
 {
     { CountType::SUM, "packets", "total packets processed" },
+    { CountType::SUM, "total_bytes", "total number of bytes processed" },
     { CountType::SUM, "sessions", "total pop sessions" },
     { CountType::NOW, "concurrent_sessions", "total concurrent pop sessions" },
     { CountType::MAX, "max_concurrent_sessions", "maximum concurrent pop sessions" },
@@ -193,7 +194,7 @@ static void POP_GetEOL(const uint8_t* ptr, const uint8_t* end,
     const uint8_t* tmp_eol;
     const uint8_t* tmp_eolm;
 
-    tmp_eol = (uint8_t*)memchr(ptr, '\n', end - ptr);
+    tmp_eol = (const uint8_t*)memchr(ptr, '\n', end - ptr);
     if (tmp_eol == nullptr)
     {
         tmp_eol = end;
@@ -218,19 +219,6 @@ static void POP_GetEOL(const uint8_t* ptr, const uint8_t* end,
 
     *eol = tmp_eol;
     *eolm = tmp_eolm;
-}
-
-static void PrintPopConf(POP_PROTO_CONF* config)
-{
-    if (config == nullptr)
-        return;
-
-    LogMessage("POP config: \n");
-
-    config->decode_conf.print_decode_conf();
-
-    LogMessage("\n");
-
 }
 
 static inline int InspectPacket(Packet* p)
@@ -523,6 +511,7 @@ static void snort_pop(POP_PROTO_CONF* config, Packet* p)
         }
     }
 
+    popstats.total_bytes += p->dsize;
     int pkt_dir = POP_Setup(p, pop_ssn);
 
     if (pkt_dir == POP_PKT_FROM_CLIENT)
@@ -646,11 +635,17 @@ public:
     ~Pop() override;
 
     bool configure(SnortConfig*) override;
-    void show(SnortConfig*) override;
+    void show(const SnortConfig*) const override;
     void eval(Packet*) override;
 
     StreamSplitter* get_splitter(bool c2s) override
     { return new PopSplitter(c2s); }
+
+    bool can_carve_files() const override
+    { return true; }
+
+    bool can_start_tls() const override
+    { return true; }
 
 private:
     POP_PROTO_CONF* config;
@@ -678,9 +673,10 @@ bool Pop::configure(SnortConfig* )
     return true;
 }
 
-void Pop::show(SnortConfig*)
+void Pop::show(const SnortConfig*) const
 {
-    PrintPopConf(config);
+    if ( config )
+        config->decode_conf.show();
 }
 
 void Pop::eval(Packet* p)

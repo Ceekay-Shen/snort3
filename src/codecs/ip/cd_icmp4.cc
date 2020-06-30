@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -90,10 +90,10 @@ static const RuleMap icmp4_rules[] =
     { 0, nullptr }
 };
 
-class Icmp4Module : public CodecModule
+class Icmp4Module : public BaseCodecModule
 {
 public:
-    Icmp4Module() : CodecModule(CD_ICMP4_NAME, CD_ICMP4_HELP) { }
+    Icmp4Module() : BaseCodecModule(CD_ICMP4_NAME, CD_ICMP4_HELP) { }
 
     const RuleMap* get_rules() const override
     { return icmp4_rules; }
@@ -156,7 +156,7 @@ bool Icmp4Codec::decode(const RawData& raw, CodecData& codec,DecodeData& snort)
     const ICMPHdr* const icmph = reinterpret_cast<const ICMPHdr*>(raw.data);
     uint16_t len = 0;
 
-    if (SnortConfig::icmp_checksums() && !valid_checksum_from_daq(raw))
+    if (snort::get_network_policy()->icmp_checksums() && !valid_checksum_from_daq(raw))
     {
         uint16_t csum = checksum::cksum_add((const uint16_t*)icmph, raw.len);
 

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -37,10 +37,10 @@ static const RuleMap erspan3_rules[] =
     { 0, nullptr }
 };
 
-class Erspan3Module : public CodecModule
+class Erspan3Module : public BaseCodecModule
 {
 public:
-    Erspan3Module() : CodecModule(CD_ERSPAN3_NAME, CD_ERSPAN3_HELP) { }
+    Erspan3Module() : BaseCodecModule(CD_ERSPAN3_NAME, CD_ERSPAN3_HELP) { }
 
     const RuleMap* get_rules() const override
     { return erspan3_rules; }

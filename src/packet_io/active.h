@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -24,13 +24,13 @@
 
 // manages packet processing verdicts returned to the DAQ.  action (what to
 // do) is separate from status (whether we can actually do it or not).
-
 #include "protocols/packet_manager.h"
 
 namespace snort
 {
 struct Packet;
 struct SnortConfig;
+class ActiveAction;
 
 class SO_PUBLIC Active
 {
@@ -39,17 +39,27 @@ public:
     struct Counts
     {
         PegCount injects;
+        PegCount failed_injects;
+        PegCount direct_injects;
+        PegCount failed_direct_injects;
+        PegCount holds_denied;
+        PegCount holds_canceled;
+        PegCount holds_allowed;
     };
 
     enum ActiveStatus : uint8_t
     { AST_ALLOW, AST_CANT, AST_WOULD, AST_FORCE, AST_MAX };
 
-    enum ActiveAction : uint8_t
-    { ACT_PASS, ACT_HOLD, ACT_RETRY, ACT_DROP, ACT_BLOCK, ACT_RESET, ACT_MAX };
+    // FIXIT-M: these are only used in set_delayed_action and
+    // apply_delayed_action, in a big switch(action). Do away with these and
+    // use the actual (Base)Action objects.
+    enum ActiveActionType : uint8_t
+    { ACT_TRUST, ACT_ALLOW, ACT_HOLD, ACT_RETRY, ACT_DROP, ACT_BLOCK, ACT_RESET, ACT_MAX };
 
 public:
+
     static void init(SnortConfig*);
-    static bool thread_init(SnortConfig*);
+    static bool thread_init(const SnortConfig*);
     static void thread_term();
 
     static void set_enabled(bool on_off = true)
@@ -63,13 +73,13 @@ public:
 
     void send_reset(Packet*, EncodeFlags);
     void send_unreach(Packet*, snort::UnreachResponse);
-    bool send_data(Packet*, EncodeFlags, const uint8_t* buf, uint32_t len);
+    uint32_t send_data(Packet*, EncodeFlags, const uint8_t* buf, uint32_t len);
     void inject_data(Packet*, EncodeFlags, const uint8_t* buf, uint32_t len);
 
     bool is_reset_candidate(const Packet*);
     bool is_unreachable_candidate(const Packet*);
 
-    ActiveAction get_action() const
+    ActiveActionType get_action() const
     { return active_action; }
 
     ActiveStatus get_status() const
@@ -87,10 +97,16 @@ public:
     void daq_drop_packet(const Packet*);
     bool retry_packet(const Packet*);
     bool hold_packet(const Packet*);
+    void cancel_packet_hold();
 
-    void allow_session(Packet*);
+    void trust_session(Packet*, bool force = false);
     void block_session(Packet*, bool force = false);
     void reset_session(Packet*, bool force = false);
+    void reset_session(Packet*, snort::ActiveAction* r, bool force = false);
+
+    static void queue(snort::ActiveAction* a, snort::Packet* p);
+    static void clear_queue(snort::Packet*);
+    static void execute(Packet* p);
 
     void block_again()
     { active_action = ACT_BLOCK; }
@@ -106,6 +122,9 @@ public:
 
     bool packet_retry_requested() const
     { return active_action == ACT_RETRY; }
+
+    bool session_was_trusted() const
+    { return active_action == ACT_TRUST; }
 
     bool session_was_blocked() const
     { return active_action >= ACT_BLOCK; }
@@ -125,10 +144,25 @@ public:
     bool get_tunnel_bypass() const
     { return active_tunnel_bypass > 0; }
 
-    void set_delayed_action(ActiveAction, bool force = false);
+    void set_prevent_trust_action()
+    { prevent_trust_action = true; }
+
+    bool get_prevent_trust_action() const
+    { return prevent_trust_action; }
+
+    void set_delayed_action(ActiveActionType, bool force = false);
+    void set_delayed_action(ActiveActionType, ActiveAction* act, bool force = false);
     void apply_delayed_action(Packet*);
 
     void reset();
+
+    static void set_default_drop_reason(uint8_t reason_id);
+    static void map_drop_reason_id(const char* verdict_reason, uint8_t id);
+    void set_drop_reason(const char*);
+    void send_reason_to_daq(Packet&);
+
+    const char* get_drop_reason() 
+    { return drop_reason; }
 
 private:
     static bool open(const char*);
@@ -139,10 +173,11 @@ private:
     void update_status(const Packet*, bool force = false);
     void daq_update_status(const Packet*);
 
-    void block_session(const Packet*, ActiveAction, bool force = false);
+    void block_session(const Packet*, ActiveActionType, bool force = false);
 
     void cant_drop();
 
+    int get_drop_reason_id();
 
 private:
     static const char* act_str[ACT_MAX][AST_MAX];
@@ -151,13 +186,17 @@ private:
     static THREAD_LOCAL bool s_suspend;
 
     int active_tunnel_bypass;
+    const char* drop_reason;
+
+    bool prevent_trust_action;
 
     // these can't be pkt flags because we do the handling
     // of these flags following all processing and the drop
     // or response may have been produced by a pseudopacket.
     ActiveStatus active_status;
-    ActiveAction active_action;
-    ActiveAction delayed_active_action;
+    ActiveActionType active_action;
+    ActiveActionType delayed_active_action;
+    ActiveAction* delayed_reject;    // set with set_delayed_action()
 };
 
 struct ActiveSuspendContext

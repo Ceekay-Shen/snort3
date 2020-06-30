@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -21,6 +21,9 @@
 #include "config.h"
 #endif
 
+#include <iomanip>
+#include <sstream>
+
 #include "flow/flow.h"
 #include "flow/flow_key.h"
 #include "framework/data_bus.h"
@@ -35,7 +38,7 @@
 #include "pub_sub/assistant_gadget_event.h"
 #include "stream/stream.h"
 #include "stream/stream_splitter.h"
-#include "target_based/sftarget_reader.h"
+#include "target_based/host_attributes.h"
 #include "target_based/snort_protocols.h"
 
 #include "bind_module.h"
@@ -82,7 +85,6 @@ Binding::Binding()
 
     use.inspection_index = 0;
     use.ips_index = 0;
-    use.network_index = 0;
     use.action = BindUse::BA_INSPECT;
 
     use.what = BindUse::BW_NONE;
@@ -274,7 +276,7 @@ inline Binding::DirResult Binding::check_split_addr(
 
     if ( !when.src_nets && !when.dst_nets )
         return dr;
-    
+
     const SfIp* src_ip;
     const SfIp* dst_ip;
 
@@ -299,14 +301,14 @@ inline Binding::DirResult Binding::check_split_port(
 {
     if ( !when.split_ports )
         return dr;
-    
+
     uint16_t src_port;
     uint16_t dst_port;
 
     if ( !p )
     {
-        src_port = flow->client_port; 
-        dst_port = flow->server_port; 
+        src_port = flow->client_port;
+        dst_port = flow->server_port;
     }
     else if ( p->is_tcp() or p->is_udp() )
     {
@@ -399,7 +401,7 @@ bool Binding::check_all(const Flow* flow, Packet* p, const char* service) const
     {
         if (!check_service(service))
             return false;
-    } 
+    }
     else if ( !check_service(flow) )
         return false;
 
@@ -445,14 +447,202 @@ static Inspector* get_gadget(Flow* flow)
 
     const char* s = SnortConfig::get_conf()->proto_ref->get_name(flow->ssn_state.snort_protocol_id);
 
-    return InspectorManager::get_inspector(s);
+    return InspectorManager::get_inspector_by_service(s);
 }
 
 static Inspector* get_gadget_by_id(const char* service)
 {
-    const SnortProtocolId id = SnortConfig::get_conf()->proto_ref->find(service);
-    const char* s = SnortConfig::get_conf()->proto_ref->get_name(id);
-    return InspectorManager::get_inspector(s);
+    const SnortConfig* sc = SnortConfig::get_conf();
+    const SnortProtocolId id = sc->proto_ref->find(service);
+    const char* s = sc->proto_ref->get_name(id);
+    return InspectorManager::get_inspector_by_service(s);
+}
+
+static std::string to_string(const sfip_var_t* list)
+{
+    std::string ipset;
+
+    if ( !list or !list->head )
+        return "";
+
+    for (auto node = list->head; node; node = node->next)
+    {
+        SfIpString ip_str;
+        auto ip = node->ip;
+
+        ip->get_addr()->ntop(ip_str);
+        ipset += std::string(ip_str);
+
+        if ( ((ip->get_family() == AF_INET6) and (ip->get_bits() != 128)) or
+            ((ip->get_family() == AF_INET ) and (ip->get_bits() != 32 )) )
+        {
+            auto bits = ip->get_bits();
+            bits -= (ip->get_family() == AF_INET and bits) ? 96 : 0;
+            ipset += "/" + std::to_string(bits);
+        }
+
+        ipset += ", ";
+    }
+
+    if ( !ipset.empty() )
+        ipset.erase(ipset.end() - 2, ipset.end());
+
+    return ipset;
+}
+
+template <unsigned N>
+static std::string to_string(const std::bitset<N>& bitset)
+{
+    std::stringstream ss;
+
+    if ( bitset.none() or bitset.all() )
+        return "";
+
+    for (unsigned i = 0; i < bitset.size(); ++i)
+        if ( bitset[i] )
+            ss << i << " ";
+
+    auto str = ss.str();
+    if ( !str.empty() )
+        str.pop_back();
+
+    return str;
+}
+
+static std::string to_string(const BindWhen::Role& role)
+{
+    switch( role )
+    {
+    case BindWhen::BR_CLIENT:
+        return "client";
+    case BindWhen::BR_SERVER:
+        return "server";
+    default:
+        return "";
+    }
+}
+
+static std::string proto_to_string(unsigned proto)
+{
+    switch( proto )
+    {
+    case PROTO_BIT__IP:
+        return "ip";
+    case PROTO_BIT__ICMP:
+        return "icmp";
+    case PROTO_BIT__TCP:
+        return "tcp";
+    case PROTO_BIT__UDP:
+        return "udp";
+    case PROTO_BIT__PDU:
+        return "user";
+    case PROTO_BIT__FILE:
+        return "file";
+    default:
+        return "";
+    }
+}
+
+static std::string to_string(const BindUse::Action& action)
+{
+    switch( action )
+    {
+    case BindUse::BA_RESET:
+        return "reset";
+    case BindUse::BA_BLOCK:
+        return "block";
+    case BindUse::BA_ALLOW:
+        return "allow";
+    default:
+        return "";
+    }
+}
+
+static std::string to_string(const BindWhen& bw)
+{
+    std::string when;
+
+    when += "{";
+
+    if ( bw.ips_id_user )
+        when += " ips_policy_id = " + std::to_string(bw.ips_id_user) + ",";
+
+    if ( !bw.svc.empty() )
+        when += " service = " + bw.svc + ",";
+
+    auto role = to_string(bw.role);
+    if ( !role.empty() )
+        when += " role = " + role + ",";
+
+    auto proto = proto_to_string(bw.protos);
+    if ( !proto.empty() )
+        when += " proto = " + proto + ",";
+
+    auto src_nets = to_string(bw.src_nets);
+    auto dst_nets = to_string(bw.dst_nets);
+
+    if ( !src_nets.empty() )
+        when += (bw.split_nets ? " src_nets = " : " nets = ") + src_nets + ",";
+    if ( bw.split_nets and !dst_nets.empty() )
+        when += " dst_nets = " + dst_nets + ",";
+
+    auto src_ports = to_string<65536>(bw.src_ports);
+    auto dst_ports = to_string<65536>(bw.dst_ports);
+
+    if ( !src_ports.empty() )
+        when += (bw.split_ports ? " src_ports = " : " ports = ") + src_ports + ",";
+    if ( bw.split_ports and !dst_ports.empty() )
+        when += " dst_ports = " + dst_ports + ",";
+
+    auto src_zones = to_string<64>(bw.src_zones);
+    auto dst_zones = to_string<64>(bw.dst_zones);
+
+    if ( !src_zones.empty() )
+        when += (bw.split_zones ? " src_zones = " : " zones = ") + src_zones + ",";
+    if ( bw.split_zones and !dst_zones.empty() )
+        when += " dst_zones = " + dst_zones + ",";
+
+    auto ifaces = to_string<256>(bw.ifaces);
+    if ( !ifaces.empty() )
+        when += " ifaces = " + ifaces + ",";
+
+    auto vlans = to_string<4096>(bw.vlans);
+    if ( !vlans.empty() )
+        when += " vlans = " + vlans + ",";
+
+    if ( when.length() > 1 )
+        when.pop_back();
+
+    when += " }";
+
+    return when;
+}
+
+static std::string to_string(const BindUse& bu)
+{
+    std::string use;
+
+    use += "{";
+
+    auto action = to_string(bu.action);
+    if ( !action.empty() )
+        use += " action = " + action + ",";
+
+    if ( !bu.svc.empty() )
+        use += " service = " + bu.svc + ",";
+
+    if ( !bu.type.empty() )
+        use += " type = " + ((bu.type.at(0) == '.') ? bu.type.substr(1) : bu.type) + ",";
+
+    if ( !bu.name.empty() and (bu.type != bu.name) )
+        use += " name = " + bu.name + ",";
+
+    if ( use.length() > 1 )
+        use.pop_back();
+
+    use += " }";
+
+    return use;
 }
 
 //-------------------------------------------------------------------------
@@ -633,12 +823,10 @@ public:
     Binder(vector<Binding*>&);
     ~Binder() override;
 
-    void show(SnortConfig*) override
-    { LogMessage("Binder\n"); }
-
     void remove_inspector_binding(SnortConfig*, const char*) override;
 
     bool configure(SnortConfig*) override;
+    void show(const SnortConfig*) const override;
 
     void eval(Packet*) override { }
 
@@ -710,7 +898,7 @@ public:
     {
         Binder* binder = InspectorManager::get_binder();
         AssistantGadgetEvent* assistant_event = (AssistantGadgetEvent*)&event;
-	
+
         if (binder)
             binder->handle_assistant_gadget(assistant_event->get_service(),
                 assistant_event->get_packet());
@@ -746,7 +934,7 @@ bool Binder::configure(SnortConfig* sc)
                 ParseError("can't bind. ips_policy_id %u does not exist", pb->when.ips_id);
         }
 
-        if ( !pb->use.ips_index and !pb->use.inspection_index and !pb->use.network_index )
+        if ( !pb->use.ips_index and !pb->use.inspection_index )
             set_binding(sc, pb);
     }
 
@@ -756,6 +944,24 @@ bool Binder::configure(SnortConfig* sc)
     DataBus::subscribe(FLOW_ASSISTANT_GADGET_EVENT, new AssistantGadgetHandler());
 
     return true;
+}
+
+void Binder::show(const SnortConfig*) const
+{
+    std::once_flag once;
+
+    if ( !bindings.size() )
+        return;
+
+    for (const auto& b : bindings)
+    {
+        std::call_once(once, []{ ConfigLogger::log_option("bindings"); });
+
+        auto bind_when = "{ when = " + to_string(b->when) + ",";
+        auto bind_use = "use = " + to_string(b->use) + " }";
+        ConfigLogger::log_list("", bind_when.c_str(), "   ");
+        ConfigLogger::log_list("", bind_use.c_str(), "   ", true);
+    }
 }
 
 void Binder::remove_inspector_binding(SnortConfig*, const char* name)
@@ -821,7 +1027,7 @@ void Binder::handle_flow_service_change( Flow* flow )
         for ( unsigned i = 0; i < sz; i++ )
         {
             Binding* pb = bindings[i];
-            if ( pb->use.ips_index or pb->use.inspection_index or pb->use.network_index )
+            if ( pb->use.ips_index or pb->use.inspection_index )
                 continue;
 
             if ( pb->use.what == BindUse::BW_WIZARD )
@@ -878,7 +1084,7 @@ void Binder::handle_assistant_gadget(const char* service, Packet* p)
     Profile profile(bindPerfStats);
     Stuff stuff;
     Flow* flow = p->flow;
-    
+
     get_bindings(flow, stuff, p, service);
     apply_assistant(flow, stuff, service);
 }
@@ -892,15 +1098,13 @@ void Binder::set_binding(SnortConfig* sc, Binding* pb)
     if ( pb->use.action != BindUse::BA_INSPECT )
         return;
 
-    const char* key;
-    if ( pb->use.svc.empty() )
-        key = pb->use.name.c_str();
-    else
-        key = pb->use.svc.c_str();
-
+    const char* key = pb->use.name.c_str();
     Module* m = ModuleManager::get_module(key);
     bool is_global = m ? m->get_usage() == Module::GLOBAL : false;
-    if ( (pb->use.object = InspectorManager::get_inspector(key, is_global, sc)) )
+
+    pb->use.object = InspectorManager::get_inspector(key, is_global, sc);
+
+    if ( pb->use.object )
     {
         switch ( ((Inspector*)pb->use.object)->get_api()->type )
         {
@@ -930,15 +1134,16 @@ void Binder::get_bindings(Flow* flow, Stuff& stuff, Packet* p, const char* servi
     // FIXIT-L This will select the first policy ID of each type that it finds and ignore the rest.
     //          It gets potentially hairy if people start specifying overlapping policy types in
     //          overlapping rules.
-    bool inspection_set = false, ips_set = false, network_set = false;
+    bool inspection_set = false, ips_set = false;
+    const SnortConfig* sc = SnortConfig::get_conf();
+
     for ( unsigned i = 0; i < sz; i++ )
     {
         Binding* pb = bindings[i];
 
         // Skip any rules that don't contain an ID for a policy type we haven't set yet.
         if ( (!pb->use.inspection_index or inspection_set) and
-             (!pb->use.ips_index or ips_set) and
-             (!pb->use.network_index or network_set) )
+             (!pb->use.ips_index or ips_set) )
             continue;
 
         if ( !pb->check_all(flow, p, service) )
@@ -946,7 +1151,7 @@ void Binder::get_bindings(Flow* flow, Stuff& stuff, Packet* p, const char* servi
 
         if ( pb->use.inspection_index and !inspection_set )
         {
-            set_inspection_policy(SnortConfig::get_conf(), pb->use.inspection_index - 1);
+            set_inspection_policy(sc, pb->use.inspection_index - 1);
             if (!service)
                 flow->inspection_policy_id = pb->use.inspection_index - 1;
             inspection_set = true;
@@ -954,19 +1159,12 @@ void Binder::get_bindings(Flow* flow, Stuff& stuff, Packet* p, const char* servi
 
         if ( pb->use.ips_index and !ips_set )
         {
-            set_ips_policy(SnortConfig::get_conf(), pb->use.ips_index - 1);
+            set_ips_policy(sc, pb->use.ips_index - 1);
             if (!service)
                 flow->ips_policy_id = pb->use.ips_index - 1;
             ips_set = true;
         }
 
-        if ( pb->use.network_index and !network_set )
-        {
-            set_network_policy(SnortConfig::get_conf(), pb->use.network_index - 1);
-            if (!service)
-                flow->network_policy_id = pb->use.network_index - 1;
-            network_set = true;
-        }
     }
 
     Binder* sub = InspectorManager::get_binder();
@@ -984,7 +1182,7 @@ void Binder::get_bindings(Flow* flow, Stuff& stuff, Packet* p, const char* servi
     {
         Binding* pb = bindings[i];
 
-        if ( pb->use.ips_index or pb->use.inspection_index or pb->use.network_index )
+        if ( pb->use.ips_index or pb->use.inspection_index )
             continue;
 
         if ( !pb->check_all(flow, p, service) )
@@ -1008,7 +1206,7 @@ void Binder::apply(Flow* flow, Stuff& stuff)
     if ( !stuff.apply_action(flow) )
         return;
 
-    const HostAttributeEntry* host = SFAT_LookupHostEntryByIP(&flow->server_ip);
+    const HostAttributeEntry* host = HostAttributes::find_host(&flow->server_ip);
 
     // setup session
     stuff.apply_session(flow, host);

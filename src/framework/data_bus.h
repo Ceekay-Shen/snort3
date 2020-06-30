@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -93,13 +93,19 @@ public:
     DataBus();
     ~DataBus();
 
+    // configure time methods - main thread only
     void clone(DataBus& from);
     void add_mapped_module(const char*);
 
+    // FIXIT-L ideally these would not be static or would take an inspection policy*
     static void subscribe(const char* key, DataHandler*);
     static void subscribe_global(const char* key, DataHandler*, SnortConfig*);
+
+    // FIXIT-L these should be called during cleanup
     static void unsubscribe(const char* key, DataHandler*);
     static void unsubscribe_global(const char* key, DataHandler*, SnortConfig*);
+
+    // runtime methods
     static void publish(const char* key, DataEvent&, Flow* = nullptr);
 
     // convenience methods
@@ -125,6 +131,9 @@ private:
 #define FLOW_STATE_EVENT "flow.state_change"
 #define THREAD_IDLE_EVENT "thread.idle"
 #define THREAD_ROTATE_EVENT "thread.rotate"
+
+// A packet is being detained.
+#define DETAINED_PACKET_EVENT "analyzer.detained.packet"
 
 // A flow changed its service
 #define FLOW_SERVICE_CHANGE_EVENT "flow.service_change_event"

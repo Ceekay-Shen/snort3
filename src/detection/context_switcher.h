@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -51,7 +51,7 @@ class IpsContext;
 class IpsContextData;
 }
 
-// FIXIT-H add the hold to catch offloads that don't return
+// FIXIT-E add the hold to catch offloads that don't return
 class ContextSwitcher
 {
 public:

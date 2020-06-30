@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -112,6 +112,8 @@ static const PegInfo dce2_tcp_pegs[] =
     { CountType::SUM, "server_frags_reassembled",
         "total connection-oriented server fragments reassembled" },
     { CountType::SUM, "tcp_sessions", "total tcp sessions" },
+    { CountType::SUM, "tcp_expected_sessions", "total tcp dynamic endpoint expected sessions" },
+    { CountType::SUM, "tcp_expected_realized", "total tcp dynamic endpoint expected realized sessions" },
     { CountType::SUM, "tcp_packets", "total tcp packets" },
     { CountType::NOW, "concurrent_sessions", "total concurrent sessions" },
     { CountType::MAX, "max_concurrent_sessions", "maximum concurrent sessions" },
@@ -155,9 +157,8 @@ void Dce2TcpModule::get_data(dce2TcpProtoConf& dce2_tcp_config)
     dce2_tcp_config = config;
 }
 
-void print_dce2_tcp_conf(dce2TcpProtoConf& config)
+void print_dce2_tcp_conf(const dce2TcpProtoConf& config)
 {
-    LogMessage("DCE TCP config: \n");
     print_dce2_co_config(config.common);
 }
 

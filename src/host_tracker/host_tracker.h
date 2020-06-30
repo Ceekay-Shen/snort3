@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -53,13 +53,13 @@ extern const uint8_t zero_mac[MAC_SIZE];
 
 struct HostMac
 {
-    HostMac(u_int8_t p_ttl, const u_int8_t* p_mac, u_int8_t p_primary, uint32_t p_last_seen)
+    HostMac(uint8_t p_ttl, const uint8_t* p_mac, uint8_t p_primary, uint32_t p_last_seen)
         : ttl(p_ttl), primary(p_primary), last_seen (p_last_seen) { memcpy(mac, p_mac, MAC_SIZE); }
 
     // the type and order below should match logger's serialization
-    u_int8_t ttl;
-    u_int8_t mac[MAC_SIZE];
-    u_int8_t primary;
+    uint8_t ttl;
+    uint8_t mac[MAC_SIZE];
+    uint8_t primary;
     uint32_t last_seen;
 };
 
@@ -98,7 +98,7 @@ public:
     }
 
     // Returns true if a new mac entry is added, false otherwise
-    bool add_mac(const u_int8_t* mac, u_int8_t ttl, u_int8_t primary);
+    bool add_mac(const uint8_t* mac, uint8_t ttl, uint8_t primary);
 
     // The caller owns and deletes the copied list of mac addresses
     void copy_data(uint8_t& p_hops, uint32_t& p_last_seen, std::list<HostMac>*& p_macs);

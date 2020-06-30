@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2017-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2017-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -26,6 +26,7 @@
 #include <cstring>
 #include <vector>
 
+#include "framework/packet_constraints.h"
 #include "main/snort_types.h"
 #include "main/thread.h"
 #include "protocols/ipv6.h"
@@ -36,45 +37,6 @@
 // IPv6 Port -> IPv6 Port Proto AS=ASNum ID=InstanceNum
 #define PT_DEBUG_SESSION_ID_SIZE ((39+1+5+1+2+1+39+1+5+1+3+1+2+1+10+1+2+1+10)+1)
 
-struct PTSessionConstraints
-{
-    snort::SfIp sip;
-    int sip_flag = 0;
-    snort::SfIp dip;
-    int dip_flag = 0;
-    uint16_t sport;
-    uint16_t dport;
-    IpProtocol protocol = IpProtocol::PROTO_NOT_SET;
-
-    bool proto_match(const IpProtocol& proto) const
-    {
-        return (protocol == IpProtocol::PROTO_NOT_SET or protocol == proto);
-    }
-    bool port_match(uint16_t p1, uint16_t p2) const
-    {
-        return (!sport or sport == p1) and (!dport or dport == p2);
-    }
-    bool ip_match(const uint32_t* ip1, const uint32_t* ip2) const
-    {
-        return
-            ((!sip_flag or !memcmp(sip.get_ip6_ptr(), ip1, sizeof(snort::ip::snort_in6_addr))) and
-             (!dip_flag or !memcmp(dip.get_ip6_ptr(), ip2, sizeof(snort::ip::snort_in6_addr))));
-    }
-
-    void set(const PTSessionConstraints& src);
-};
-
-inline void PTSessionConstraints::set(const PTSessionConstraints& src)
-{
-    if ((sip_flag = src.sip_flag))
-        sip = src.sip;
-    if ((dip_flag = src.dip_flag))
-        dip = src.dip;
-    sport = src.sport;
-    dport = src.dport;
-    protocol = src.protocol;
-}
-
 namespace snort
 {
 struct Packet;
@@ -82,20 +44,13 @@ struct Packet;
 class PacketTracer
 {
 public:
-    enum VerdictPriority : uint8_t
-    {
-        PRIORITY_UNSET = 0,
-        PRIORITY_LOW = 1,
-        PRIORITY_HIGH = 2
-    };
-
-    PacketTracer();
+    PacketTracer() = default;
     virtual ~PacketTracer();
 
     typedef uint8_t TracerMute;
     static const int max_buff_size = 2048;
 
-    // static functions 
+    // static functions
     static void set_log_file(const std::string&);
     static void thread_init();
     static void thread_term();
@@ -104,18 +59,16 @@ public:
     static void dump(Packet*);
 
     static void configure(bool status, const std::string& file_name);
-    static void set_constraints(const PTSessionConstraints* constraints);
+    static void set_constraints(const PacketConstraints* constraints);
     static void activate(const snort::Packet&);
-    
+
     static SO_PUBLIC void pause();
     static SO_PUBLIC void unpause();
     static SO_PUBLIC bool is_paused();
     static SO_PUBLIC bool is_active();
-    
+
     static SO_PUBLIC TracerMute get_mute();
 
-    static SO_PUBLIC void register_verdict_reason(uint8_t reason_code, uint8_t priority);
-    static SO_PUBLIC void set_reason(uint8_t);
     static SO_PUBLIC void log(const char* format, ...) __attribute__((format (printf, 1, 2)));
     static SO_PUBLIC void log(TracerMute, const char* format, ...) __attribute__((format (printf, 2, 3)));
 
@@ -127,7 +80,6 @@ protected:
     std::vector<bool> mutes;
     char buffer[max_buff_size];
     unsigned buff_len = 0;
-    uint8_t reason;
 
     unsigned pause_count = 0;
     bool user_enabled = false;
@@ -136,8 +88,8 @@ protected:
     bool active = false;
 
     char debug_session[PT_DEBUG_SESSION_ID_SIZE];
-    PTSessionConstraints info;
-    
+    PacketConstraints constraints;
+
     // static functions
     template<typename T = PacketTracer> static void _thread_init();
 
@@ -146,7 +98,7 @@ protected:
     void add_ip_header_info(const snort::Packet&);
     void add_eth_header_info(const snort::Packet&);
     void add_packet_type_info(const snort::Packet&);
-    void update_constraints(const PTSessionConstraints* constraints);
+    void update_constraints(const PacketConstraints* constraints);
     const char *get_debug_session() { return debug_session; }
 
     virtual void open_file();
@@ -157,9 +109,9 @@ protected:
 
 SO_PUBLIC extern THREAD_LOCAL PacketTracer* s_pkt_trace;
 
-inline bool PacketTracer::is_active() 
+inline bool PacketTracer::is_active()
 { return s_pkt_trace ? s_pkt_trace->active : false; }
 
 }
-  
+
 #endif

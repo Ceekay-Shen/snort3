@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2004-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -116,6 +116,7 @@ static int snort_ftp(Packet* p)
      */
     SetSiInput(&SiInput, p);
 
+    ftstats.total_bytes += p->dsize;
     if (p->flow)
     {
         FtpFlowData* fd = (FtpFlowData*)p->flow->get_flow_data(FtpFlowData::inspector_id);
@@ -185,7 +186,25 @@ static int snort_ftp(Packet* p)
 // class stuff
 //-------------------------------------------------------------------------
 
-typedef InspectorData<FTP_CLIENT_PROTO_CONF> FtpClient;
+class FtpClient : public Inspector
+{
+public:
+    FtpClient(FTP_CLIENT_PROTO_CONF* client) : ftp_client(client) { }
+
+    ~FtpClient() override
+    { delete ftp_client; }
+
+    void show(const SnortConfig*) const override;
+    void eval(Packet*) override { }
+
+    FTP_CLIENT_PROTO_CONF* ftp_client;
+};
+
+void FtpClient::show(const SnortConfig*) const
+{
+    if ( ftp_client )
+        print_conf_client(ftp_client);
+}
 
 class FtpServer : public Inspector
 {
@@ -194,17 +213,22 @@ public:
     ~FtpServer() override;
 
     bool configure(SnortConfig*) override;
-    void show(SnortConfig*) override;
+    void show(const SnortConfig*) const override;
     void eval(Packet*) override;
     StreamSplitter* get_splitter(bool) override;
+
+    bool is_control_channel() const override
+    { return true; }
+
+    bool can_start_tls() const override
+    { return true; }
 
     FTP_SERVER_PROTO_CONF* ftp_server;
 };
 
-FtpServer::FtpServer(FTP_SERVER_PROTO_CONF* server)
-{
-    ftp_server = server;
-}
+FtpServer::FtpServer(FTP_SERVER_PROTO_CONF* server) :
+    ftp_server(server)
+{}
 
 FtpServer::~FtpServer ()
 {
@@ -218,9 +242,10 @@ bool FtpServer::configure(SnortConfig* sc)
     return !FTPCheckConfigs(sc, ftp_server);
 }
 
-void FtpServer::show(SnortConfig*)
+void FtpServer::show(const SnortConfig*) const
 {
-    PrintFTPServerConf(ftp_server);
+    if ( ftp_server )
+        print_conf_server(ftp_server);
 }
 
 StreamSplitter* FtpServer::get_splitter(bool c2s)
@@ -250,7 +275,7 @@ FTP_CLIENT_PROTO_CONF* get_ftp_client(Packet* p)
         assert(client);
         p->flow->set_data(client);
     }
-    return client->data;
+    return client->ftp_client;
 }
 
 FTP_SERVER_PROTO_CONF* get_ftp_server(Packet* p)

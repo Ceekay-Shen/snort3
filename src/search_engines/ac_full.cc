@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2013-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -37,11 +37,8 @@ private:
     ACSM_STRUCT2* obj;
 
 public:
-    AcfMpse(SnortConfig*, const MpseAgent* agent)
-        : Mpse("ac_full")
-    {
-        obj = acsmNew2(agent, ACF_FULL);
-    }
+    AcfMpse(const MpseAgent* agent) : Mpse("ac_full")
+    { obj = acsmNew2(agent, ACF_FULL); }
 
     ~AcfMpse() override
     { acsmFree2(obj); }
@@ -53,8 +50,7 @@ public:
     }
 
     int add_pattern(
-        SnortConfig*, const uint8_t* P, unsigned m,
-        const PatternDescriptor& desc, void* user) override
+        const uint8_t* P, unsigned m, const PatternDescriptor& desc, void* user) override
     {
         return acsmAddPattern2(obj, P, m, desc.no_case, desc.negated, user);
     }
@@ -94,9 +90,9 @@ public:
 //-------------------------------------------------------------------------
 
 static Mpse* acf_ctor(
-    SnortConfig* sc, class Module*, const MpseAgent* agent)
+    const SnortConfig*, class Module*, const MpseAgent* agent)
 {
-    return new AcfMpse(sc, agent);
+    return new AcfMpse(agent);
 }
 
 static void acf_dtor(Mpse* p)

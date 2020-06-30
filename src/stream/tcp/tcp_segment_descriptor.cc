@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -53,18 +53,20 @@ TcpSegmentDescriptor::TcpSegmentDescriptor(Flow* flow_, Packet* pkt_, TcpEventLo
 
 uint32_t TcpSegmentDescriptor::init_mss(uint16_t* value)
 {
-    tcp::TcpOptIterator iter(tcph, pkt);
-    for ( const tcp::TcpOption& opt : iter )
+    if ( pkt->ptrs.decode_flags & DECODE_TCP_MSS )
     {
-        if ( opt.code == tcp::TcpOptCode::MAXSEG )
+        tcp::TcpOptIterator iter(tcph, pkt);
+
+        for ( const tcp::TcpOption& opt : iter )
         {
-            *value = extract_16bits(opt.data);
-            return TF_MSS;
+            if ( opt.code == tcp::TcpOptCode::MAXSEG )
+            {
+                *value = extract_16bits(opt.data);
+                return TF_MSS;
+            }
         }
     }
-
     *value = 0;
-
     return TF_NONE;
 }
 
@@ -97,7 +99,7 @@ bool TcpSegmentDescriptor::has_wscale()
 {
     uint16_t wscale;
 
-    if ( !(pkt->ptrs.decode_flags & DECODE_WSCALE) )
+    if ( !(pkt->ptrs.decode_flags & DECODE_TCP_WS) )
         return false;
 
     return ( init_wscale(&wscale) & TF_WSCALE ) != TF_NONE;

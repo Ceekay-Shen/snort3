@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2018-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2018-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -19,6 +19,10 @@
 
 #ifndef DETECTOR_PLUGINS_MOCK_H
 #define DETECTOR_PLUGINS_MOCK_H
+#include "appid_detector.h"
+#include "appid_module.h"
+#include "appid_peg_counts.h"
+#include "utils/stats.h"
 
 namespace snort
 {
@@ -93,13 +97,13 @@ public:
     ~AppIdInspector() override = default;
     void eval(Packet*) override { }
     bool configure(snort::SnortConfig*) override { return true; }
-    void show(snort::SnortConfig*) override { }
+    void show(const SnortConfig*) const override { }
     void tinit() override { }
     void tterm() override { }
 };
 
 // Stubs for modules, config
-AppIdModuleConfig::~AppIdModuleConfig() = default;
+AppIdConfig::~AppIdConfig() = default;
 AppIdModule::AppIdModule()
     : Module("a", "b") { }
 AppIdModule::~AppIdModule() = default;
@@ -138,24 +142,25 @@ snort::ProfileStats* AppIdModule::get_profile() const
     return nullptr;
 }
 
+void AppIdModule::set_trace(const Trace*) const { }
+const TraceOption* AppIdModule::get_trace_options() const { return nullptr; }
+
 // Stubs for inspectors
 unsigned AppIdSession::inspector_id = 0;
+AppIdConfig stub_config;
+AppIdContext stub_ctxt(stub_config);
 AppIdSession::AppIdSession(IpProtocol, const SfIp*, uint16_t, AppIdInspector& inspector)
-    : snort::FlowData(inspector_id, (snort::Inspector*)&inspector) { }
+    : snort::FlowData(inspector_id, (snort::Inspector*)&inspector), ctxt(stub_ctxt) { }
 AppIdSession::~AppIdSession() = default;
-AppIdHttpSession::AppIdHttpSession(AppIdSession& asd)
-    : asd(asd)
+AppIdHttpSession::AppIdHttpSession(AppIdSession& asd, uint32_t http2_stream_id)
+  : asd(asd), http2_stream_id(http2_stream_id)
 {
-    http_matchers = HttpPatternMatchers::get_instance();
-
     for ( int i = 0; i < NUM_METADATA_FIELDS; i++)
         meta_data[i] = nullptr;
 }
 
 AppIdHttpSession::~AppIdHttpSession()
 {
-    delete xff_addr;
-
     for ( int i = 0; i < NUM_METADATA_FIELDS; i++)
     {
         if ( meta_data[i] )
@@ -203,5 +208,19 @@ bool AppIdReloadTuner::tune_resources(unsigned int)
 {
     return true;
 }
+void ApplicationDescriptor::set_id(AppId){}
+void ServiceAppDescriptor::set_id(AppId, OdpContext&){}
+void ServiceAppDescriptor::update_stats(AppId){}
+void ClientAppDescriptor::update_user(AppId, const char*){}
+void ClientAppDescriptor::update_stats(AppId) {}
+void PayloadAppDescriptor::update_stats(AppId) {}
+void ServiceDiscovery::initialize()
+{ }
+
+int ServiceDiscovery::add_service_port(AppIdDetector*, const ServiceDetectorPort&)
+{ return 0; }
+
+OdpContext::OdpContext(AppIdConfig&, snort::SnortConfig*)
+{ }
 
 #endif

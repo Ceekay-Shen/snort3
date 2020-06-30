@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -35,7 +35,7 @@
 namespace snort
 {
 struct SnortConfig;
-struct GHash;
+class GHash;
 }
 struct PortGroup;
 
@@ -53,7 +53,7 @@ srmm_table_t* ServicePortGroupMapNew();
 void ServicePortGroupMapFree(srmm_table_t*);
 
 void fpPrintServicePortGroupSummary(snort::SnortConfig*);
-int fpCreateServiceMaps(snort::SnortConfig*);
+void fpCreateServiceMaps(snort::SnortConfig*);
 
 //  Service/Protocol Ordinal To PortGroup table
 typedef std::vector<PortGroup*> PortGroupVector;

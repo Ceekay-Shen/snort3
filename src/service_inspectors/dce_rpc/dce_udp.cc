@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -109,7 +109,7 @@ class Dce2Udp : public Inspector
 {
 public:
     Dce2Udp(const dce2UdpProtoConf&);
-    void show(SnortConfig*) override;
+    void show(const SnortConfig*) const override;
     void eval(Packet*) override;
     void clear(Packet*) override;
 
@@ -122,7 +122,7 @@ Dce2Udp::Dce2Udp(const dce2UdpProtoConf& pc)
     config = pc;
 }
 
-void Dce2Udp::show(SnortConfig*)
+void Dce2Udp::show(const SnortConfig*) const
 {
     print_dce2_udp_conf(config);
 }

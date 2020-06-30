@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -994,6 +994,7 @@ static int _bnfa_conv_list_to_csparse_array(bnfa_struct_t* bnfa)
         if ( pi[k] >= nps )
         {
             /* Fatal */
+            BNFA_FREE(pi,bnfa->bnfaNumStates*sizeof(bnfa_state_t),bnfa->nextstate_memory);
             return -1;
         }
 
@@ -1094,11 +1095,11 @@ void bnfaPrint(bnfa_struct_t* bnfa)
             ps_index++; /* skip state number */
 
             cw = ps[ps_index]; /* control word  */
-            fb = (cw &  BNFA_SPARSE_FULL_BIT)>>BNFA_SPARSE_VALUE_SHIFT;  /* full storage bit */
-            mb = (cw &  BNFA_SPARSE_MATCH_BIT)>>BNFA_SPARSE_VALUE_SHIFT; /* matching state bit */
+            fb = (cw &  BNFA_SPARSE_FULL_BIT)>>BNFA_SPARSE_VALUE_SHIFT;   /* full storage bit */
+            mb = (cw &  BNFA_SPARSE_MATCH_BIT)>>BNFA_SPARSE_VALUE_SHIFT;  /* matching state bit */
             nt = (cw &  BNFA_SPARSE_COUNT_BITS)>>BNFA_SPARSE_VALUE_SHIFT; /* number of transitions
                                                                             0-63 */
-            fs = (cw &  BNFA_SPARSE_MAX_STATE)>>BNFA_SPARSE_VALUE_SHIFT; /* fail state */
+            fs = (cw &  BNFA_SPARSE_MAX_STATE);                           /* fail state */
 
             ps_index++;  /* skip control word */
 
@@ -1277,7 +1278,7 @@ void bnfaFree(bnfa_struct_t* bnfa)
         bnfa->matchlist_memory);
     BNFA_FREE(bnfa->bnfaNextState,bnfa->bnfaNumStates*sizeof(bnfa_state_t*),
         bnfa->nextstate_memory);
-    BNFA_FREE(bnfa->bnfaTransList,(2*bnfa->bnfaNumStates+bnfa->bnfaNumTrans)*sizeof(bnfa_state_t*),
+    BNFA_FREE(bnfa->bnfaTransList,(2*bnfa->bnfaNumStates+bnfa->bnfaNumTrans)*sizeof(bnfa_state_t),
         bnfa->nextstate_memory);
     snort_free(bnfa);   /* cannot update memory tracker when deleting bnfa so just 'free' it !*/
 }

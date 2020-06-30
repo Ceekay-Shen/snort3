@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2018-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2018-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -19,6 +19,9 @@
 
 #ifndef MPSE_BATCH_H
 #define MPSE_BATCH_H
+
+#include <unordered_map>
+#include <vector>
 
 #include "framework/mpse.h"
 #include "main/snort_types.h"
@@ -47,11 +50,11 @@ public:
     Mpse* get_offload_mpse() const
     { return offload_mpse ? offload_mpse : normal_mpse; }
 
-    bool create_normal_mpse(SnortConfig*, const MpseAgent* agent);
-    bool create_normal_mpse(SnortConfig*, const char*);
+    bool create_normal_mpse(const SnortConfig*, const MpseAgent* agent);
+    bool create_normal_mpse(const SnortConfig*, const char*);
 
-    bool create_offload_mpse(SnortConfig*, const MpseAgent* agent);
-    bool create_offload_mpse(SnortConfig*);
+    bool create_offload_mpse(const SnortConfig*, const MpseAgent* agent);
+    bool create_offload_mpse(const SnortConfig*);
 
     inline bool can_fallback() const
     { return get_offload_mpse() != normal_mpse; }

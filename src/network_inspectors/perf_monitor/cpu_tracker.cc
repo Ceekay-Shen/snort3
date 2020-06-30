@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -155,8 +155,7 @@ TEST_CASE("timeval to scalar", "[cpu_tracker]")
     t.tv_usec = 0;
     CHECK(get_microseconds(t) == 0);
 
-    //integer overflow
-    t.tv_sec = 0xFFFFFFFF;
+    t.tv_sec = std::numeric_limits<std::int32_t>::max();
     t.tv_usec = 999999;
     auto ms = get_microseconds(t);
     t2.tv_sec = ms / 1000000;

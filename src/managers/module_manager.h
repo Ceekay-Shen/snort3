@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -24,8 +24,9 @@
 // Modules are strictly used during parse time.
 
 #include <cstdint>
-#include <set>
 #include <list>
+#include <mutex>
+#include <set>
 
 #include "main/snort_types.h"
 
@@ -51,6 +52,7 @@ public:
     SO_PUBLIC static std::list<Module*> get_all_modules();
 
     static const char* get_lua_bootstrap();
+    static const char* get_lua_finalize();
     static const char* get_lua_coreinit();
 
     static void list_modules(const char* = nullptr);
@@ -67,7 +69,6 @@ public:
     static void show_pegs(const char* = nullptr, bool exact = false);
     static void show_rules(const char* = nullptr, bool exact = false);
 
-    static void dump_msg_map(const char* = nullptr);
     static void dump_rules(const char* = nullptr);
     static void dump_defaults(const char* = nullptr);
 
@@ -82,13 +83,14 @@ public:
     static void reset_errors();
     static unsigned get_errors();
 
-    static void dump_stats(SnortConfig*, const char* skip = nullptr, bool dynamic = false);
- 
-    static void accumulate(SnortConfig*);
+    static void dump_stats(const char* skip = nullptr, bool dynamic = false);
+
+    static void accumulate();
     static void accumulate_offload(const char* name);
     static void reset_stats(SnortConfig*);
 
     static std::set<uint32_t> gids;
+    SO_PUBLIC static std::mutex stats_mutex;
 };
 }
 

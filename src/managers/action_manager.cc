@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -25,7 +25,6 @@
 
 #include <vector>
 
-#include "actions/act_replace.h"
 #include "log/messages.h"
 #include "main/snort_config.h"
 #include "packet_io/active.h"
@@ -163,9 +162,15 @@ void ActionManager::instantiate(const ActionApi* api, Module* mod, SnortConfig* 
         if ( !sc->ips_actions_config->reject && !strcmp(act->get_name(), "reject") )
             sc->ips_actions_config->reject = act;
 
-        ListHead* lh = CreateRuleType(sc, api->base.name, api->type);
-        assert(lh);
-        lh->action = act;
+        RuleListNode* rln = CreateRuleType(sc, api->base.name, api->type, true);
+
+        // The plugin actions (e.g. reject, react, etc.) are per policy, per mode.
+        // At logging time, they have to be retrieved the way we store them here.
+        IpsPolicy* ips = get_ips_policy();
+        Actions::Type idx = rln->mode;
+        assert(ips->action[idx] == nullptr);
+        ips->action[idx] = act;
+
     }
 }
 
@@ -183,7 +188,7 @@ static ActionClass& get_thread_local_action_class(const ActionApi* api)
     return s_tl_actors->back();
 }
 
-void ActionManager::thread_init(SnortConfig* sc)
+void ActionManager::thread_init(const SnortConfig* sc)
 {
     // Initial build out of this thread's configured plugin registry
     s_tl_actors = new ACList;
@@ -196,7 +201,7 @@ void ActionManager::thread_init(SnortConfig* sc)
     }
 }
 
-void ActionManager::thread_reinit(SnortConfig* sc)
+void ActionManager::thread_reinit(const SnortConfig* sc)
 {
     // Update this thread's configured plugin registry with any newly configured inspectors
     for ( auto& p : sc->ips_actions_config->clist )
@@ -212,7 +217,7 @@ void ActionManager::thread_reinit(SnortConfig* sc)
     Active::thread_init(sc);
 }
 
-void ActionManager::thread_term(SnortConfig*)
+void ActionManager::thread_term()
 {
     if (s_tl_actors)
     {
@@ -225,33 +230,6 @@ void ActionManager::thread_term(SnortConfig*)
         delete s_tl_actors;
         s_tl_actors = nullptr;
     }
-}
-
-void ActionManager::execute(Packet* p)
-{
-    if ( *p->action )
-    {
-        (*p->action)->exec(p);
-        *p->action = nullptr;
-    }
-}
-
-void ActionManager::queue(IpsAction* a, Packet* p)
-{
-    if ( !(*p->action) || a->get_action() > (*p->action)->get_action() )
-        *p->action = a;
-}
-
-void ActionManager::queue_reject(SnortConfig* sc, Packet* p)
-{
-    if ( sc->ips_actions_config->reject )
-        queue(sc->ips_actions_config->reject, p);
-}
-
-void ActionManager::reset_queue(Packet* p)
-{
-    *p->action = nullptr;
-    Replace_ResetQueue();
 }
 
 #ifdef PIGLET

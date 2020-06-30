@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -145,9 +145,9 @@ private:
     Comments* errors;
     Comments* unsupported;
 
-    bool curr_data_bad;  // keep track whether current 'conversion' is already bad
-    const std::string* current_file;
-    unsigned current_line;
+    bool curr_data_bad = false;  // keep track whether current 'conversion' is already bad
+    const std::string* current_file = nullptr;
+    unsigned current_line = 0;
 
     std::string get_file_line();
 };

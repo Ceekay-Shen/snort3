@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -23,69 +23,29 @@
 #include "config.h"
 #endif
 
-#include "host_port_app_cache.h"
-
 #include <map>
-#include <cstring>
 
+#include "host_port_app_cache.h"
 #include "log/messages.h"
 #include "main/thread.h"
-#include "sfip/sf_ip.h"
-#include "utils/cpp_macros.h"
+#include "managers/inspector_manager.h"
+#include "appid_config.h"
+#include "appid_inspector.h"
 
 using namespace snort;
 
-PADDING_GUARD_BEGIN
-struct HostPortKey
-{
-    HostPortKey()
-    {
-        ip.clear();
-        port = 0;
-        proto = IpProtocol::PROTO_NOT_SET;
-        padding = 0;
-    }
-
-    bool operator<(const HostPortKey& right) const
-    {
-        return memcmp((const uint8_t*) this, (const uint8_t*) &right, sizeof(*this)) < 0;
-    }
-
-    SfIp ip;
-    uint16_t port;
-    IpProtocol proto;
-    char padding;
-};
-PADDING_GUARD_END
-
-static std::map<HostPortKey, HostPortVal>* host_port_cache = nullptr;
-
-void HostPortCache::initialize()
-{
-    host_port_cache = new std::map<HostPortKey, HostPortVal>;
-}
-
-void HostPortCache::terminate()
-{
-    if (host_port_cache)
-    {
-        host_port_cache->clear();
-        delete host_port_cache;
-        host_port_cache = nullptr;
-    }
-}
-
-HostPortVal* HostPortCache::find(const SfIp* ip, uint16_t port, IpProtocol protocol)
+HostPortVal* HostPortCache::find(const SfIp* ip, uint16_t port, IpProtocol protocol,
+    OdpContext& odp_ctxt)
 {
     HostPortKey hk;
 
     hk.ip = *ip;
-    hk.port = port;
+    hk.port = (odp_ctxt.allow_port_wildcard_host_cache)? 0 : port;
     hk.proto = protocol;
 
     std::map<HostPortKey, HostPortVal>::iterator it;
-    it = host_port_cache->find(hk);
-    if (it != host_port_cache->end())
+    it = cache.find(hk);
+    if (it != cache.end())
         return &it->second;
     else
         return nullptr;
@@ -98,20 +58,23 @@ bool HostPortCache::add(const SfIp* ip, uint16_t port, IpProtocol proto, unsigne
     HostPortVal hv;
 
     hk.ip = *ip;
-    hk.port = port;
+    AppIdInspector* inspector = (AppIdInspector*) InspectorManager::get_inspector(MOD_NAME);
+    assert(inspector);
+    AppIdContext& ctxt = inspector->get_ctxt();
+    hk.port = (ctxt.get_odp_ctxt().allow_port_wildcard_host_cache)? 0 : port;
     hk.proto = proto;
 
     hv.appId = appId;
     hv.type = type;
 
-    (*host_port_cache)[ hk ] = hv;
+    cache[ hk ] = hv;
 
     return true;
 }
 
 void HostPortCache::dump()
 {
-    for ( auto& kv : *host_port_cache )
+    for ( auto& kv : cache )
     {
         char inet_buffer[INET6_ADDRSTRLEN];
 

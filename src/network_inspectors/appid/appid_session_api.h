@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -36,7 +36,7 @@ namespace snort
 #define APPID_SESSION_RESPONDER_MONITORED   (1ULL << 0)
 #define APPID_SESSION_INITIATOR_MONITORED   (1ULL << 1)
 #define APPID_SESSION_SPECIAL_MONITORED     (1ULL << 2)
-#define APPID_SESSION_IGNORE_FLOW_LOGGED    (1ULL << 3)
+#define APPID_SESSION_FUTURE_FLOW           (1ULL << 3)
 #define APPID_SESSION_EXPECTED_EVALUATE     (1ULL << 4)
 #define APPID_SESSION_DISCOVER_USER         (1ULL << 5)
 #define APPID_SESSION_HAS_DHCP_FP           (1ULL << 6)
@@ -83,73 +83,19 @@ namespace snort
 #define APPID_SESSION_STICKY_SERVICE        (1ULL << 36)
 #define APPID_SESSION_APP_REINSPECT_SSL     (1ULL << 37)
 #define APPID_SESSION_NO_TPI                (1ULL << 38)
-#define APPID_SESSION_IGNORE_FLOW           (1ULL << 39)
-#define APPID_SESSION_IGNORE_FLOW_IDED      (1ULL << 40)
-#define APPID_SESSION_OOO_CHECK_TP          (1ULL << 41)
-#define APPID_SESSION_PAYLOAD_SEEN          (1ULL << 42)
-#define APPID_SESSION_HOST_CACHE_MATCHED    (1ULL << 43)
+#define APPID_SESSION_FUTURE_FLOW_IDED      (1ULL << 39)
+#define APPID_SESSION_OOO_CHECK_TP          (1ULL << 40)
+#define APPID_SESSION_PAYLOAD_SEEN          (1ULL << 41)
+#define APPID_SESSION_HOST_CACHE_MATCHED    (1ULL << 42)
+#define APPID_SESSION_DECRYPT_MONITOR       (1ULL << 43)
+#define APPID_SESSION_HTTP_TUNNEL           (1ULL << 44)
 #define APPID_SESSION_IGNORE_ID_FLAGS \
-    (APPID_SESSION_IGNORE_FLOW | \
+    (APPID_SESSION_FUTURE_FLOW | \
     APPID_SESSION_NOT_A_SERVICE | \
     APPID_SESSION_NO_TPI | \
     APPID_SESSION_SERVICE_DETECTED | \
     APPID_SESSION_PORT_SERVICE_DONE)
 const uint64_t APPID_SESSION_ALL_FLAGS = 0xFFFFFFFFFFFFFFFFULL;
-
-enum APPID_FLOW_TYPE
-{
-    APPID_FLOW_TYPE_IGNORE,
-    APPID_FLOW_TYPE_NORMAL,
-    APPID_FLOW_TYPE_TMP
-};
-
-struct AppIdServiceSubtype
-{
-    AppIdServiceSubtype* next;
-    const char* service;
-    const char* vendor;
-    const char* version;
-};
-
-#define DHCP_OP55_MAX_SIZE  64
-#define DHCP_OP60_MAX_SIZE  64
-
-struct DHCPData
-{
-    DHCPData* next;
-    unsigned op55_len;
-    unsigned op60_len;
-    uint8_t op55[DHCP_OP55_MAX_SIZE];
-    uint8_t op60[DHCP_OP60_MAX_SIZE];
-    uint8_t eth_addr[6];
-};
-
-struct DHCPInfo
-{
-    DHCPInfo* next;
-    uint32_t ipAddr;
-    uint8_t eth_addr[6];
-    uint32_t subnetmask;
-    uint32_t leaseSecs;
-    uint32_t router;
-};
-
-struct FpSMBData
-{
-    FpSMBData* next;
-    unsigned major;
-    unsigned minor;
-    uint32_t flags;
-};
-
-enum SEARCH_SUPPORT_TYPE
-{
-    NOT_A_SEARCH_ENGINE,
-    SUPPORTED_SEARCH_ENGINE,
-    UNSUPPORTED_SEARCH_ENGINE,
-    UNKNOWN_SEARCH_ENGINE,
-};
-
 
 class SO_PUBLIC AppIdSessionApi
 {
@@ -157,37 +103,20 @@ public:
     AppIdSessionApi(AppIdSession* asd) : asd(asd) {}
     bool refresh(const Flow& flow);
     AppId get_service_app_id();
-    AppId get_port_service_app_id();
-    AppId get_only_service_app_id();
-    AppId get_misc_app_id();
-    AppId get_client_app_id();
-    AppId get_payload_app_id();
-    AppId get_referred_app_id();
-    void get_app_id(AppId& service, AppId& client, AppId& payload, AppId& misc, AppId& referred);
-    void get_app_id(AppId* service, AppId* client, AppId* payload, AppId* misc, AppId* referred);
-    bool is_ssl_session_decrypted();
+    AppId get_misc_app_id(uint32_t stream_index = 0);
+    AppId get_client_app_id(uint32_t stream_index = 0);
+    AppId get_payload_app_id(uint32_t stream_index = 0);
+    AppId get_referred_app_id(uint32_t stream_index = 0);
+    void get_app_id(AppId& service, AppId& client, AppId& payload, AppId& misc, AppId& referred, uint32_t stream_index = 0);
+    void get_app_id(AppId* service, AppId* client, AppId* payload, AppId* misc, AppId* referred, uint32_t stream_index = 0);
     bool is_appid_inspecting_session();
     bool is_appid_available();
-    const char* get_user_name(AppId* service, bool* isLoginSuccessful);
-    const char* get_client_version();
+    const char* get_client_version(uint32_t stream_index = 0);
     uint64_t get_appid_session_attribute(uint64_t flag);
-    APPID_FLOW_TYPE get_flow_type();
-    void get_service_info(const char** vendor, const char** version,
-        AppIdServiceSubtype**);
-    short get_service_port();
-    SfIp* get_service_ip();
     SfIp* get_initiator_ip();
     AppIdDnsSession* get_dns_session();
-    AppIdHttpSession* get_http_session();
-    SEARCH_SUPPORT_TYPE get_http_search();
-    char* get_tls_host();
-    DHCPData* get_dhcp_fp_data();
-    void free_dhcp_fp_data(DHCPData*);
-    DHCPInfo* get_dhcp_info();
-    void free_dhcp_info(DHCPInfo*);
-    FpSMBData* get_smb_fp_data();
-    void free_smb_fp_data(FpSMBData*);
-    const char* get_netbios_name();
+    AppIdHttpSession* get_http_session(uint32_t stream_index = 0);
+    const char* get_tls_host();
     bool is_http_inspection_done();
 
 private:

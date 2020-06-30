@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -122,7 +122,7 @@ static void exit_handler(int signal)
 
 static void dirty_handler(int signal)
 {
-    SnortConfig::get_conf()->dirty_pig = true;
+    SnortConfig::get_main_conf()->dirty_pig = true;
     exit_handler(signal);
 }
 
@@ -356,7 +356,7 @@ void daemonize()
     if ( errno )
         FatalError("failed to setsid - %s", get_error(errno));
 
-    if ( SnortConfig::log_quiet() or SnortConfig::log_syslog() )
+    if ( SnortConfig::get_conf()->log_quiet() or SnortConfig::get_conf()->log_syslog() )
         snuff_stdio();
 
     pid_t ppid = getppid();

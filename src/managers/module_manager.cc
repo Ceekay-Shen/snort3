@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -29,7 +29,6 @@
 #include <algorithm>
 #include <cassert>
 #include <iostream>
-#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -53,6 +52,7 @@
 // "Lua" includes
 #include "lua_bootstrap.h"
 #include "lua_coreinit.h"
+#include "lua_finalize.h"
 
 using namespace snort;
 using namespace std;
@@ -74,7 +74,8 @@ static std::unordered_map<std::string, const Parameter*> s_pmap;
 
 static unsigned s_errors = 0;
 
-std::set<uint32_t> ModuleManager::gids;
+set<uint32_t> ModuleManager::gids;
+mutex ModuleManager::stats_mutex;
 
 static string s_current;
 static string s_name;
@@ -82,8 +83,6 @@ static string s_type;
 
 // for callbacks from Lua
 static SnortConfig* s_config = nullptr;
-
-static std::mutex stats_mutex;
 
 // forward decls
 extern "C"
@@ -98,6 +97,8 @@ extern "C"
 
     const char* push_include_path(const char* file);
     void pop_include_path();
+    void snort_whitelist_append(const char*);
+    void snort_whitelist_add_prefix(const char*);
 }
 
 //-------------------------------------------------------------------------
@@ -106,6 +107,9 @@ extern "C"
 
 const char* ModuleManager::get_lua_bootstrap()
 { return lua_bootstrap; }
+
+const char* ModuleManager::get_lua_finalize()
+{ return lua_finalize; }
 
 const char* ModuleManager::get_lua_coreinit()
 { return lua_coreinit; }
@@ -508,9 +512,6 @@ static bool set_value(const char* fqn, Value& v)
         // now we must traverse the mod params to get the leaf
         string s = fqn;
         p = get_params(s, mod, mod->get_parameters());
-
-        if ( !p )
-            p = get_params(s, mod, mod->get_default_parameters());
     }
 
     if ( !p )
@@ -705,6 +706,16 @@ SO_PUBLIC bool set_alias(const char* from, const char* to)
     return true;
 }
 
+SO_PUBLIC void snort_whitelist_append(const char* s)
+{
+    Shell::whitelist_append(s, false);
+}
+
+SO_PUBLIC void snort_whitelist_add_prefix(const char* s)
+{
+    Shell::whitelist_append(s, true);
+}
+
 SO_PUBLIC bool open_table(const char* s, int idx)
 {
     const char* orig = s;
@@ -721,7 +732,11 @@ SO_PUBLIC bool open_table(const char* s, int idx)
     ModHook* h = get_hook(key.c_str());
 
     if ( !h || (h->api && h->api->type == PT_IPS_OPTION) )
+    {
+        if ( !Shell::is_whitelisted(key) )
+            ParseWarning(WARN_CONF_STRICT, "unknown table %s", key.c_str());
         return false;
+    }
 
     // FIXIT-M only basic modules, inspectors and ips actions can be reloaded at present
     if ( ( Snort::is_reloading() ) and h->api
@@ -740,9 +755,6 @@ SO_PUBLIC bool open_table(const char* s, int idx)
         p = get_params(sfqn, m, m->get_parameters(), idx);
 
         if ( !p )
-            p = get_params(sfqn, m, m->get_default_parameters(), idx);
-
-        if ( !p )
         {
             ParseError("can't find %s", s);
             return false;
@@ -754,13 +766,17 @@ SO_PUBLIC bool open_table(const char* s, int idx)
         }
     }
 
-    if ( s_current != key )
+    string unique_key = key;
+    if ( !s_name.empty() )
+        unique_key = s_name;
+
+    if ( s_current != unique_key )
     {
         if ( fqn != orig )
             LogMessage("\t%s (%s)\n", key.c_str(), orig);
         else
             LogMessage("\t%s\n", key.c_str());
-        s_current = key;
+        s_current = unique_key;
     }
 
     if ( !begin(m, p, s, idx, 0) )
@@ -1039,10 +1055,7 @@ void ModuleManager::show_module(const char* name)
         cout << endl << "Usage: "  << mod_use(m->get_usage()) << endl;
 
         const Parameter* params = m->get_parameters();
-        const Parameter* def_params = m->get_default_parameters();
-
-        if ( ( params and params->type < Parameter::PT_MAX ) ||
-             ( def_params and def_params->type < Parameter::PT_MAX ) )
+        if ( params and params->type < Parameter::PT_MAX )
         {
             cout << endl << "Configuration: " << endl << endl;
             show_configs(name, true);
@@ -1141,11 +1154,6 @@ void ModuleManager::show_configs(const char* pfx, bool exact)
         {
             dump_field(s, pfx, m->params);
         }
-
-        s = m->name;
-
-        if ( m->default_params )
-            dump_table(s, pfx, m->default_params);
 
         if ( !pfx )
             cout << endl;
@@ -1349,7 +1357,7 @@ void ModuleManager::load_rules(SnortConfig* sc)
     }
 }
 
-void ModuleManager::dump_stats(SnortConfig*, const char* skip, bool dynamic)
+void ModuleManager::dump_stats(const char* skip, bool dynamic)
 {
     auto mod_hooks = get_all_modhooks();
     mod_hooks.sort(comp_mods);
@@ -1358,7 +1366,7 @@ void ModuleManager::dump_stats(SnortConfig*, const char* skip, bool dynamic)
     {
         if ( !skip || !strstr(skip, mh->mod->get_name()) )
         {
-            std::lock_guard<std::mutex> lock(stats_mutex);
+            lock_guard<mutex> lock(stats_mutex);
             if ( dynamic )
                 mh->mod->show_dynamic_stats();
             else
@@ -1367,13 +1375,13 @@ void ModuleManager::dump_stats(SnortConfig*, const char* skip, bool dynamic)
     }
 }
 
-void ModuleManager::accumulate(SnortConfig*)
+void ModuleManager::accumulate()
 {
     auto mod_hooks = get_all_modhooks();
 
     for ( auto* mh : mod_hooks )
     {
-        std::lock_guard<std::mutex> lock(stats_mutex);
+        lock_guard<mutex> lock(stats_mutex);
         mh->mod->prep_counts();
         mh->mod->sum_stats(true);
     }
@@ -1384,7 +1392,7 @@ void ModuleManager::accumulate_offload(const char* name)
     ModHook* mh = get_hook(name);
     if ( mh )
     {
-        std::lock_guard<std::mutex> lock(stats_mutex);
+        lock_guard<mutex> lock(stats_mutex);
         mh->mod->prep_counts();
         mh->mod->sum_stats(true);
     }
@@ -1396,7 +1404,7 @@ void ModuleManager::reset_stats(SnortConfig*)
 
     for ( auto* mh : mod_hooks )
     {
-        std::lock_guard<std::mutex> lock(stats_mutex);
+        lock_guard<mutex> lock(stats_mutex);
         mh->mod->reset_stats();
     }
 }
@@ -1461,11 +1469,6 @@ void ModuleManager::load_params()
         {
             load_field(s, m->params);
         }
-
-        s = m->name;
-
-        if ( m->default_params )
-            load_table(s, m->default_params);
     }
 }
 
@@ -1494,7 +1497,7 @@ struct RulePtr
 
     RulePtr(const Module* m, const RuleMap* r) : mod(m), rule(r) { }
 
-    bool operator< (RulePtr& rhs) const
+    bool operator< (const RulePtr& rhs) const
     {
         if ( mod->get_gid() != rhs.mod->get_gid() )
             return mod->get_gid() < rhs.mod->get_gid();
@@ -1551,21 +1554,6 @@ void ModuleManager::show_rules(const char* pfx, bool exact)
         cout << " (" << rp.mod->get_name() << ")";
         cout << " " << rp.rule->msg;
         cout << endl;
-    }
-    if ( !rule_set.size() )
-        cout << "no match" << endl;
-}
-
-void ModuleManager::dump_msg_map(const char* pfx)
-{
-    std::vector<RulePtr> rule_set = get_rules(pfx);
-
-    for ( auto rp : rule_set )
-    {
-        cout << rp.mod->get_gid() << " || ";
-        cout << rp.rule->sid << " || ";
-        cout << rp.mod->get_name() << ": ";
-        cout << rp.rule->msg << endl;
     }
     if ( !rule_set.size() )
         cout << "no match" << endl;

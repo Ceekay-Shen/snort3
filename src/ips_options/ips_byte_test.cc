@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -78,7 +78,7 @@
  *      msg: "got DEADBEEF!";)
  *
  * alert tcp any any -> any any \
- *      (byte_test:2, =, 568, 0, bitmask 0x3FF0;	  \
+ *      (byte_test:2, =, 568, 0, bitmask 0x3FF0;      \
  *      msg:"got 568 after applying bitmask 0x3FF0 on 2 bytes extracted";)
  *
  * Effect:
@@ -97,7 +97,7 @@
 #include "framework/endianness.h"
 #include "framework/ips_option.h"
 #include "framework/module.h"
-#include "hash/hashfcn.h"
+#include "hash/hash_key_operations.h"
 #include "log/messages.h"
 #include "profiler/profiler.h"
 #include "protocols/packet.h"
@@ -478,7 +478,7 @@ public:
     { return DETECT; }
 
 public:
-    ByteTestData data;
+    ByteTestData data = {};
     string cmp_var;
     string off_var;
 };

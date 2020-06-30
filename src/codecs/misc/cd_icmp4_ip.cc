@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -151,7 +151,7 @@ void Icmp4IpCodec::log(TextLog* const text_log, const uint8_t* raw_pkt,
     //      the two are not necessarily the same.
 
     // FIXIT-RC this does NOT obfuscate correctly
-    if (SnortConfig::obfuscate())
+    if (SnortConfig::get_conf()->obfuscate())
     {
         TextLog_Print(text_log, "xxx.xxx.xxx.xxx -> xxx.xxx.xxx.xxx");
     }

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -30,10 +30,6 @@
 #include "appid_types.h"
 #include "client_plugins/client_detector.h"
 #include "service_plugins/service_detector.h"
-
-#include "main/snort_debug.h"
-
-extern Trace TRACE_NAME(appid_module);
 
 namespace snort
 {
@@ -107,9 +103,9 @@ public:
 
 // FIXIT-M: RELOAD - Don't use this class, required now to store LSD objects
 class LuaObject {
-   
+
 public:
-    LuaObject() = default;
+    LuaObject(OdpContext& odp_ctxt) : odp_ctxt(odp_ctxt) { }
     virtual ~LuaObject() = default;
     LuaObject(const LuaObject&) = delete;
     LuaObject& operator=(const LuaObject&) = delete;
@@ -130,27 +126,33 @@ public:
     void set_running(bool is_running)
     { running = is_running; }
 
+    OdpContext& get_odp_ctxt() const
+    { return odp_ctxt; }
+
 private:
     std::string cb_fn_name;
     bool running = false;
+    OdpContext& odp_ctxt;
 };
 
 class LuaServiceObject: public LuaObject
-{ 
+{
 public:
     ServiceDetector* sd;
     LuaServiceObject(AppIdDiscovery* sdm, const std::string& detector_name,
-        const std::string& log_name, bool is_custom, IpProtocol protocol, lua_State* L);
+        const std::string& log_name, bool is_custom, IpProtocol protocol, lua_State* L,
+        OdpContext& odp_ctxt);
     ServiceDetector* get_detector()
     { return sd; }
 };
 
 class LuaClientObject : public LuaObject
-{ 
+{
 public:
     ClientDetector* cd;
-    LuaClientObject(AppIdDiscovery* cdm, const std::string& detector_name,
-        const std::string& log_name, bool is_custom, IpProtocol protocol, lua_State* L);
+    LuaClientObject(const std::string& detector_name,
+        const std::string& log_name, bool is_custom, IpProtocol protocol, lua_State* L,
+        OdpContext& odp_ctxt);
     ClientDetector* get_detector()
     { return cd; }
 };

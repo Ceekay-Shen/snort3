@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2013-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -390,11 +390,6 @@ FileCaptureState FileCapture::reserve_file(const FileInfo* file)
 
         file_counts.files_buffered_total++;
         head = last = fileBlock;
-    }
-
-    if (!fileBlock)
-    {
-        return error_capture(FILE_CAPTURE_MEMCAP);
     }
 
     /*Copy the last piece of file to file buffer*/

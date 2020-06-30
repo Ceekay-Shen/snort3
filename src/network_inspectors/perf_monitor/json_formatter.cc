@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2016 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -48,7 +48,7 @@ void JSONFormatter::write(FILE* fh, time_t cur_time)
     for( unsigned i = 0; i < values.size(); i++ )
     {
         bool head = false;
-        
+
         for( unsigned j = 0; j < values[i].size(); j++ )
         {
             switch( types[i][j] )
@@ -56,7 +56,7 @@ void JSONFormatter::write(FILE* fh, time_t cur_time)
                 case FT_PEG_COUNT:
                     if( *values[i][j].pc != 0 )
                     {
-                        if( !head ) 
+                        if( !head )
                         {
                             ss << ",\"" << section_names[i] << "\":{";
                             head = true;
@@ -133,7 +133,7 @@ void JSONFormatter::finalize_output(FILE* fh)
 #include "catch/catch.hpp"
 
 std::string cooked = R"g([{"timestamp":1234567890,"name":{"one":1},"str":{"five":"hellothere"},)g"
-                R"g("vec":{"vector":{"0":50,"2":70}}},{"timestamp":2345678901}])g" "\n";
+    R"g("vec":{"vector":{"0":50,"2":70}}},{"timestamp":2145678903}])g" "\n";
 
 TEST_CASE("json output", "[JSONFormatter]")
 {
@@ -159,13 +159,13 @@ TEST_CASE("json output", "[JSONFormatter]")
     kvp.emplace_back(50);
     kvp.emplace_back(0);
     kvp.emplace_back(70);
-    
+
     f.write(fh, (time_t)1234567890);
 
     one = 0;
     five[0] = '\0';
     kvp.clear();
-    f.write(fh, (time_t)2345678901);
+    f.write(fh, (time_t)2145678903);
     f.finalize_output(fh);
 
     auto size = ftell(fh);

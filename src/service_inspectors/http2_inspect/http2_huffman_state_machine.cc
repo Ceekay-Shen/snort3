@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2019-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2019-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -330,7 +330,7 @@ const HuffmanEntry huffman_decode[HUFFMAN_LOOKUP_MAX+1] [UINT8_MAX+1] =
         // 00000
         {5, (char)176, HUFFMAN_MATCH}, {5, (char)176, HUFFMAN_MATCH}, {5, (char)176, HUFFMAN_MATCH}, {5, (char)176, HUFFMAN_MATCH},
         {5, (char)176, HUFFMAN_MATCH}, {5, (char)176, HUFFMAN_MATCH}, {5, (char)176, HUFFMAN_MATCH}, {5, (char)176, HUFFMAN_MATCH},
-        // 00001 
+        // 00001
         {5, (char)177, HUFFMAN_MATCH}, {5, (char)177, HUFFMAN_MATCH}, {5, (char)177, HUFFMAN_MATCH}, {5, (char)177, HUFFMAN_MATCH},
         {5, (char)177, HUFFMAN_MATCH}, {5, (char)177, HUFFMAN_MATCH}, {5, (char)177, HUFFMAN_MATCH}, {5, (char)177, HUFFMAN_MATCH},
         // 00010

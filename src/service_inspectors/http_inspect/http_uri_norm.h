@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -38,10 +38,10 @@ public:
         HttpEventGen* events);
     static void normalize(const Field& input, Field& result, bool do_path, uint8_t* buffer,
         const HttpParaList::UriParam& uri_param, HttpInfractions* infractions,
-        HttpEventGen* events);
+        HttpEventGen* events, bool own_the_buffer = false);
     static bool classic_need_norm(const Field& uri_component, bool do_path,
         const HttpParaList::UriParam& uri_param);
-    static void classic_normalize(const Field& input, Field& result,
+    static void classic_normalize(const Field& input, Field& result, bool do_path,
         const HttpParaList::UriParam& uri_param);
     static void load_default_unicode_map(uint8_t map[65536]);
     static void load_unicode_map(uint8_t map[65536], const char* filename, int code_page);

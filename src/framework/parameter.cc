@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -115,7 +115,11 @@ static int64_t get_int(const char* r)
         if ( !strncmp(r, "max53", 5) )
             return 9007199254740992;
     }
-    return (int64_t)strtod(r, nullptr);
+    char* end = nullptr;
+    int64_t i = (int64_t)strtoll(r, &end, 0);
+    assert(!*end or *end == ':');
+
+    return i;
 }
 
 //--------------------------------------------------------------------------
@@ -506,16 +510,6 @@ const char* Parameter::get_string() const
     return deflt ? deflt : "";
 }
 
-const Parameter* Parameter::find(const Parameter* p, const Parameter* d, const char* s)
-{
-    auto ret = find(p, s);
-
-    if ( !ret )
-        ret = find(d, s);
-
-    return ret;
-}
-
 const Parameter* Parameter::find(const Parameter* p, const char* s)
 {
     if ( !p )
@@ -580,20 +574,23 @@ num_tests[] =
     { true, valid_int, 1, "0:" },
     { false, valid_int, 1, ":0" },
 
+    { false, valid_int, 1.5, ":0" },
+
     { true, valid_int, -10, "-11:-9" },
     { true, valid_int, 10, "9:11" },
     { true, valid_int, 10, "0xA:11" },
 
     { true, valid_interval, 0, nullptr },
 
-    { true, valid_real, 0, nullptr },
-    { true, valid_real, 0, "" },
-    { true, valid_real, 0, "0.0" },
-    { true, valid_real, 0, "0:" },
-    { true, valid_real, 0, ":0" },
-    { true, valid_real, 0, ":0.9" },
-    { true, valid_real, 0, "-0.9:0.9" },
-    { true, valid_real, 0, "-0.9:" },
+    { true, valid_real, 0.0, nullptr },
+    { true, valid_real, 0.0, "" },
+    { true, valid_real, 0.0, "0.0" },
+    { true, valid_real, 0.0, ":0" },
+
+    { true, valid_real, 0.1, "0:" },
+    { true, valid_real, 0.1, ":0.9" },
+    { true, valid_real, 0.1, "-0.9:0.9" },
+    { true, valid_real, 0.1, "-0.9:" },
 
     { false, valid_real, 1, "0.9" },
     { true, valid_real, 1, "0.9:" },

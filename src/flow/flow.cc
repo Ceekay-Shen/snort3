@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2013-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -27,60 +27,25 @@
 #include "flow/ha.h"
 #include "flow/session.h"
 #include "framework/data_bus.h"
+#include "helpers/bitop.h"
 #include "ips_options/ips_flowbits.h"
 #include "memory/memory_cap.h"
 #include "protocols/packet.h"
 #include "sfip/sf_ip.h"
-#include "utils/bitop.h"
 #include "utils/stats.h"
 #include "utils/util.h"
 
 using namespace snort;
 
-unsigned FlowData::flow_data_id = 0;
-
-FlowData::FlowData(unsigned u, Inspector* ph)
-{
-    assert(u > 0);
-    id = u;
-    handler = ph;
-    prev = next = nullptr;
-    if ( handler )
-        handler->add_ref();
-}
-
-FlowData::~FlowData()
-{
-    if ( handler )
-        handler->rem_ref();
-
-    assert(mem_in_use == 0);
-}
-
-void FlowData::update_allocations(size_t n)
-{
-    memory::MemoryCap::free_space(n);
-    memory::MemoryCap::update_allocations(n);
-    mem_in_use += n;
-}
-
-void FlowData::update_deallocations(size_t n)
-{
-    assert(mem_in_use >= n);
-    memory::MemoryCap::update_deallocations(n);
-    mem_in_use -= n;
-}
-
-size_t FlowData::size_of()
-{ return 1024; }  // FIXIT-H remove this default impl
-
 Flow::Flow()
 {
+    memory::MemoryCap::update_allocations(sizeof(*this) + sizeof(FlowStash));
     memset(this, 0, sizeof(*this));
 }
 
 Flow::~Flow()
 {
+    memory::MemoryCap::update_deallocations(sizeof(*this) + sizeof(FlowStash));
     term();
 }
 
@@ -108,7 +73,8 @@ void Flow::term()
     delete session;
     session = nullptr;
 
-    assert(!flow_data);
+    if ( flow_data )
+        free_flow_data();
 
     if ( mpls_client.length )
         delete[] mpls_client.start;
@@ -139,7 +105,10 @@ void Flow::term()
 
     if (assistant_gadget)
         assistant_gadget->rem_ref();
-    
+
+    if ( data )
+        clear_data();
+
     if ( ha_state )
         delete ha_state;
 
@@ -167,6 +136,7 @@ inline void Flow::clean()
         delete bitop;
         bitop = nullptr;
     }
+    filtering_state.clear();
 }
 
 void Flow::reset(bool do_cleanup)
@@ -530,7 +500,16 @@ bool Flow::is_pdu_inorder(uint8_t dir)
 }
 
 void Flow::set_service(Packet* pkt, const char* new_service)
-{   
+{
     service = new_service;
     DataBus::publish(FLOW_SERVICE_CHANGE_EVENT, pkt);
-}   
+}
+
+void Flow::swap_roles()
+{
+    flags.client_initiated = !flags.client_initiated;
+    std::swap(client_ip, server_ip);
+    std::swap(client_port, server_port);
+    std::swap(flowstats.client_pkts, flowstats.server_pkts);
+    std::swap(flowstats.client_bytes, flowstats.server_bytes);
+}

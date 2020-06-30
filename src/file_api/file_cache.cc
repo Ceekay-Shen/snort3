@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -23,6 +23,7 @@
 
 #include "file_cache.h"
 
+#include "hash/hash_defs.h"
 #include "hash/xhash.h"
 #include "log/messages.h"
 #include "main/snort_config.h"
@@ -37,35 +38,39 @@
 
 using namespace snort;
 
-static int file_cache_anr_free_func(void*, void* data)
+class ExpectedFileCache : public XHash
 {
-    FileCache::FileNode* node = (FileCache::FileNode*)data;
+public:
+    ExpectedFileCache(unsigned rows, unsigned key_len, unsigned datasize)
+        : XHash(rows, key_len, datasize, 0)
+    { }
 
-    if (!node)
-        return 0;
-
-    struct timeval now;
-    packet_gettimeofday(&now);
-
-    // only recycle expired nodes
-    if (timercmp(&node->cache_expire_time, &now, <))
+    ~ExpectedFileCache() override
     {
-        delete node->file;
-        return 0;
+        delete_hash_table();
     }
-    else
-        return 1;
-}
 
-static int file_cache_free_func(void*, void* data)
-{
-    FileCache::FileNode* node = (FileCache::FileNode*)data;
-    if (node)
+    bool is_node_recovery_ok(HashNode* hnode) override
     {
-        delete node->file;
+        FileCache::FileNode* node = (FileCache::FileNode*)hnode->data;
+        if ( !node )
+            return true;
+
+        struct timeval now;
+        packet_gettimeofday(&now);
+        if ( timercmp(&node->cache_expire_time, &now, <) )
+           return true;
+        else
+            return false;
     }
-    return 0;
-}
+
+    void free_user_data(HashNode* hnode) override
+    {
+        FileCache::FileNode* node = (FileCache::FileNode*)hnode->data;
+        if ( node )
+            delete node->file;
+    }
+};
 
 // Return the time in ms since we started waiting for pending file lookup.
 static int64_t time_elapsed_ms(struct timeval* now, struct timeval* expire_time, int64_t lookup_timeout)
@@ -79,19 +84,13 @@ static int64_t time_elapsed_ms(struct timeval* now, struct timeval* expire_time,
 FileCache::FileCache(int64_t max_files_cached)
 {
     max_files = max_files_cached;
-    fileHash = xhash_new(max_files, sizeof(FileHashKey), sizeof(FileNode),
-        0, 1, file_cache_anr_free_func, file_cache_free_func, 1);
-    if (!fileHash)
-        FatalError("Failed to create the expected channel hash table.\n");
-    xhash_set_max_nodes(fileHash, max_files);
+    fileHash = new ExpectedFileCache(max_files, sizeof(FileHashKey), sizeof(FileNode));
+    fileHash->set_max_nodes(max_files);
 }
 
 FileCache::~FileCache()
 {
-    if (fileHash)
-    {
-        xhash_delete(fileHash);
-    }
+    delete fileHash;
 }
 
 void FileCache::set_block_timeout(int64_t timeout)
@@ -119,7 +118,7 @@ void FileCache::set_max_files(int64_t max)
     }
     else
         max_files = max;
-    xhash_set_max_nodes(fileHash, max_files);
+    fileHash->set_max_nodes(max_files);
 }
 
 FileContext* FileCache::add(const FileHashKey& hashKey, int64_t timeout)
@@ -141,7 +140,7 @@ FileContext* FileCache::add(const FileHashKey& hashKey, int64_t timeout)
 
     std::lock_guard<std::mutex> lock(cache_mutex);
 
-    if (xhash_add(fileHash, (void*)&hashKey, &new_node) != XHASH_OK)
+    if (fileHash->insert((void*)&hashKey, &new_node) != HASH_OK)
     {
         /* Uh, shouldn't get here...
          * There is already a node or couldn't alloc space
@@ -160,29 +159,26 @@ FileContext* FileCache::find(const FileHashKey& hashKey, int64_t timeout)
 {
     std::lock_guard<std::mutex> lock(cache_mutex);
 
-    if (!xhash_count(fileHash))
-    {
+    if ( !fileHash->get_num_nodes() )
         return nullptr;
-    }
 
-    XHashNode* hash_node = xhash_find_node(fileHash, &hashKey);
-
-    if (!hash_node)
+    HashNode* hash_node = fileHash->find_node(&hashKey);
+    if ( !hash_node )
         return nullptr;
 
     FileNode* node = (FileNode*)hash_node->data;
-    if (!node)
+    if ( !node )
     {
-        xhash_free_node(fileHash, hash_node);
+        fileHash->release_node(hash_node);
         return nullptr;
     }
 
     struct timeval now;
     packet_gettimeofday(&now);
 
-    if (timercmp(&node->cache_expire_time, &now, <))
+    if ( timercmp(&node->cache_expire_time, &now, <) )
     {
-        xhash_free_node(fileHash, hash_node);
+        fileHash->release_node(hash_node);
         return nullptr;
     }
 
@@ -223,16 +219,14 @@ FileVerdict FileCache::check_verdict(Packet* p, FileInfo* file,
     assert(file);
 
     FileVerdict verdict = policy->type_lookup(p, file);
-
-    if ( file->get_file_sig_sha256() and
-        ((verdict == FILE_VERDICT_UNKNOWN) or (verdict == FILE_VERDICT_STOP_CAPTURE)))
+    if (verdict == FILE_VERDICT_STOP_CAPTURE)
     {
-        verdict = policy->signature_lookup(p, file);
+        verdict = FILE_VERDICT_UNKNOWN;
     }
 
-    if ((verdict == FILE_VERDICT_UNKNOWN) or (verdict == FILE_VERDICT_STOP_CAPTURE))
+    if ( file->get_file_sig_sha256() and verdict == FILE_VERDICT_UNKNOWN )
     {
-        verdict = file->verdict;
+        verdict = policy->signature_lookup(p, file);
     }
 
     return verdict;
@@ -276,13 +270,15 @@ bool FileCache::apply_verdict(Packet* p, FileContext* file_ctx, FileVerdict verd
             policy->log_file_action(flow, file_ctx, FILE_RESUME_LOG);
         return false;
     case FILE_VERDICT_BLOCK:
-         // can't block session inside a session
-         act->set_delayed_action(Active::ACT_BLOCK, true);
-         break;
+        // can't block session inside a session
+        act->set_delayed_action(Active::ACT_BLOCK, true);
+        act->set_drop_reason("file");
+        break;
 
     case FILE_VERDICT_REJECT:
         // can't reset session inside a session
         act->set_delayed_action(Active::ACT_RESET, true);
+        act->set_drop_reason("file");
         break;
     case FILE_VERDICT_STOP_CAPTURE:
         file_ctx->stop_file_capture();
@@ -294,7 +290,7 @@ bool FileCache::apply_verdict(Packet* p, FileContext* file_ctx, FileVerdict verd
             timercmp(&file_ctx->pending_expire_time, &now, <))
         {
             //  Timed out while waiting for pending verdict.
-            FileConfig* fc = get_file_config(SnortConfig::get_conf());
+            FileConfig* fc = get_file_config(p->context->conf);
 
             //  Block session on timeout if configured, otherwise use the
             //  current action.

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2009-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -26,6 +26,7 @@
 
 #include "rate_filter.h"
 
+#include "detection/ips_context.h"
 #include "detection/rules.h"
 #include "detection/treenodes.h"
 #include "hash/ghash.h"
@@ -53,8 +54,8 @@ void RateFilter_ConfigFree(RateFilterConfig* config)
 
     for (i = 0; i < SFRF_MAX_GENID; i++)
     {
-        if (config->genHash[i] != nullptr)
-            ghash_delete(config->genHash[i]);
+        if ( config->genHash[i] )
+            delete config->genHash[i];
     }
 
     snort_free(config);
@@ -124,12 +125,7 @@ int RateFilter_Test(const OptTreeNode* otn, Packet* p)
         dip = &cleared;
     }
 
-    if ((SnortConfig::get_conf() == nullptr) ||
-        (SnortConfig::get_conf()->rate_filter_config == nullptr))
-    {
-        /* this should not happen, see the create fcn */
-        return -1;
-    }
+    RateFilterConfig* rfc = p->context->conf->rate_filter_config;
 
     if ( EventIsInternal(gid) )
     {
@@ -137,12 +133,12 @@ int RateFilter_Test(const OptTreeNode* otn, Packet* p)
         // events and these require: src -> client, dst -> server.
         if ( p->is_from_server() )
         {
-            return SFRF_TestThreshold(SnortConfig::get_conf()->rate_filter_config, gid, sid,
-                dip, sip, p->pkth->ts.tv_sec, SFRF_COUNT_INCREMENT);
+            return SFRF_TestThreshold(
+                rfc, gid, sid, dip, sip, p->pkth->ts.tv_sec, SFRF_COUNT_INCREMENT);
         }
     }
 
-    return SFRF_TestThreshold(SnortConfig::get_conf()->rate_filter_config, gid, sid,
-        sip, dip, p->pkth->ts.tv_sec, SFRF_COUNT_INCREMENT);
+    return SFRF_TestThreshold(
+        rfc, gid, sid, sip, dip, p->pkth->ts.tv_sec, SFRF_COUNT_INCREMENT);
 }
 

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -255,7 +255,7 @@ static void bind_wizard(const char* /*key*/, const char* /*val*/)
 { Converter::set_bind_wizard(true); }
 
 static void bind_port(const char* /*key*/, const char* /*val*/)
-{ 
+{
     Converter::set_bind_port(true);
     Converter::set_bind_wizard(false);
 }
@@ -530,5 +530,6 @@ static void help_args(const char* /*pfx*/, const char* /*val*/)
         }
         ++p;
     }
+    std::cout << std::resetiosflags(std::ios::adjustfield);
 }
 } // namespace parser

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -109,28 +109,6 @@ static void free_cip_data(void* data)
         snort_free(css->global_data.unconnected_list.list);
         css->global_data.unconnected_list.list = nullptr;
     }
-}
-
-static void print_cip_conf(CipProtoConf* config)
-{
-    if (config == nullptr)
-        return;
-    LogMessage("CIP config: \n");
-    LogMessage("    Embedded Enabled: %s\n",
-        config->embedded_cip_enabled ? "ENABLED" : "DISABLED");
-    if (config->embedded_cip_enabled)
-    {
-        LogMessage("    Embedded Class: 0x%x\n", config->embedded_cip_class_id);
-        LogMessage("    Embedded Service: 0x%x\n", config->embedded_cip_service_id);
-    }
-
-    LogMessage("    Unconnected Timeout: %d (seconds)\n", config->unconnected_timeout);
-    LogMessage("    Max CIP connections per TCP connection: %d\n",
-        static_cast<int>(config->max_cip_connections));
-    LogMessage("    Max unconnected messages per TCP connection: %d\n",
-        static_cast<int>(config->max_unconnected_messages));
-
-    LogMessage("\n");
 }
 
 static CipPacketDirection get_packet_direction(Packet* p)
@@ -274,13 +252,14 @@ public:
     Cip(CipProtoConf*);
     ~Cip() override;
 
-    void show(SnortConfig*) override;
+    void show(const SnortConfig*) const override;
     void eval(Packet*) override;
 
     class StreamSplitter* get_splitter(bool c2s) override
-    {
-        return new CipSplitter(c2s);
-    }
+    { return new CipSplitter(c2s); }
+
+    bool is_control_channel() const override
+    { return true; }
 
 private:
     CipProtoConf* config;
@@ -299,10 +278,22 @@ Cip::~Cip()
     }
 }
 
-void Cip::show(SnortConfig*)
+void Cip::show(const SnortConfig*) const
 {
-    /* defined in module.cc */
-    print_cip_conf(config);
+    if (!config)
+        return;
+
+    if (config->embedded_cip_enabled)
+    {
+        std::string cip_path = std::to_string(config->embedded_cip_class_id);
+        cip_path += " ";
+        cip_path += std::to_string(config->embedded_cip_service_id);
+        ConfigLogger::log_value("embedded_cip_path", cip_path.c_str());
+    }
+
+    ConfigLogger::log_value("unconnected_timeout", config->unconnected_timeout);
+    ConfigLogger::log_value("max_cip_connections", config->max_cip_connections);
+    ConfigLogger::log_value("max_unconnected_messages", config->max_unconnected_messages);
 }
 
 void Cip::eval(Packet* p)

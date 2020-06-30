@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -29,7 +29,6 @@
 
 #include "tcp_stream_session.h"
 #include "tcp_stream_tracker.h"
-
 
 using namespace snort;
 
@@ -102,6 +101,7 @@ bool TcpNormalizer::packet_dropper(
     {
         Packet* p = tsd.get_pkt();
         p->active->drop_packet(p);
+        p->active->set_drop_reason("stream");
         return true;
     }
 
@@ -190,34 +190,36 @@ uint32_t TcpNormalizer::get_stream_window(
 uint32_t TcpNormalizer::get_tcp_timestamp(
     TcpNormalizerState& tns, TcpSegmentDescriptor& tsd, bool strip)
 {
-    tcp::TcpOptIterator iter(tsd.get_tcph(), tsd.get_pkt() );
-
-    // using const because non-const is not supported
-    for ( const tcp::TcpOption& opt : iter )
+    if ( tsd.get_pkt()->ptrs.decode_flags & DECODE_TCP_TS )
     {
-        if ( opt.code == tcp::TcpOptCode::TIMESTAMP )
+        tcp::TcpOptIterator iter(tsd.get_tcph(), tsd.get_pkt() );
+
+        // using const because non-const is not supported
+        for ( const tcp::TcpOption& opt : iter )
         {
-            bool stripped = false;
-
-            if (strip)
-                stripped = strip_tcp_timestamp(tns, tsd, &opt, (NormMode)tns.opt_block);
-
-            if (!stripped)
+            if ( opt.code == tcp::TcpOptCode::TIMESTAMP )
             {
-                tsd.set_ts(extract_32bits(opt.data) );
-                return TF_TSTAMP;
+                bool stripped = false;
+
+                if (strip)
+                    stripped = strip_tcp_timestamp(tns, tsd, &opt, (NormMode)tns.opt_block);
+
+                if (!stripped)
+                {
+                    tsd.set_ts(extract_32bits(opt.data) );
+                    return TF_TSTAMP;
+                }
             }
         }
     }
     tsd.set_ts(0);
-
     return TF_NONE;
 }
 
 bool TcpNormalizer::validate_rst_seq_geq(
     TcpNormalizerState& tns, TcpSegmentDescriptor& tsd)
 {
-    // FIXIT-H check for rcv_nxt == 0 is hack for uninitialized rcv_nxt, fix this
+    // FIXIT-M check for rcv_nxt == 0 is hack for uninitialized rcv_nxt
     if ( ( tns.tracker->rcv_nxt == 0 ) || SEQ_GEQ(tsd.get_seg_seq(), tns.tracker->rcv_nxt) )
         return true;
 
@@ -227,7 +229,7 @@ bool TcpNormalizer::validate_rst_seq_geq(
 bool TcpNormalizer::validate_rst_end_seq_geq(
     TcpNormalizerState& tns, TcpSegmentDescriptor& tsd)
 {
-    // FIXIT-H check for r_win_base == 0 is hack for uninitialized r_win_base, fix this
+    // FIXIT-M check for r_win_base == 0 is hack for uninitialized r_win_base
     if ( tns.tracker->r_win_base == 0 )
         return true;
 
@@ -246,7 +248,7 @@ bool TcpNormalizer::validate_rst_seq_eq(
 {
     uint32_t expected_seq = tns.tracker->rcv_nxt + tns.tracker->get_fin_seq_adjust();
 
-    // FIXIT-H check for rcv_nxt == 0 is hack for uninitialized rcv_nxt, fix this
+    // FIXIT-M check for rcv_nxt == 0 is hack for uninitialized rcv_nxt
     if ( ( tns.tracker->rcv_nxt == 0 ) || SEQ_EQ(tsd.get_seg_seq(), expected_seq) )
         return true;
 

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -155,6 +155,9 @@ void ThreadConfig::implement_thread_affinity(SThreadType type, unsigned id)
         desired_cpuset = iter->second->cpuset;
     else
         desired_cpuset = process_cpuset;
+
+    // A data race in this library function ensues from the usage of a static variable
+    // to dump chars when calculating string length. This does not affect functionality.
     hwloc_bitmap_list_asprintf(&s, desired_cpuset);
 
     current_cpuset = hwloc_bitmap_alloc();

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -59,7 +59,6 @@ public:
     unsigned prune_excess(const snort::Flow* save_me);
     bool prune_one(PruneReason, bool do_cleanup);
     unsigned timeout(unsigned num_flows, time_t cur_time);
-
     unsigned delete_flows(unsigned num_to_delete);
 
     unsigned purge();
@@ -94,18 +93,18 @@ public:
     const FlowCacheConfig& get_flow_cache_config() const
     { return config; }
 
-	unsigned get_flows_allocated() const
-	{ return flows_allocated; }
-
+    unsigned get_flows_allocated() const
+    { return flows_allocated; }
 
 private:
+    void delete_uni();
     void push(snort::Flow*);
     void link_uni(snort::Flow*);
     void remove(snort::Flow*);
     void retire(snort::Flow*);
     unsigned prune_unis(PktType);
-	unsigned delete_active_flows
-		(unsigned mode, unsigned num_to_delete, unsigned &deleted);
+    unsigned delete_active_flows
+        (unsigned mode, unsigned num_to_delete, unsigned &deleted);
 
 private:
     static const unsigned cleanup_flows = 1;

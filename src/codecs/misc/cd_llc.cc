@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -39,10 +39,10 @@ static const RuleMap llc_rules[] =
     { 0, nullptr }
 };
 
-class LlcModule : public CodecModule
+class LlcModule : public BaseCodecModule
 {
 public:
-    LlcModule() : CodecModule(LLC_NAME, LLC_HELP) {}
+    LlcModule() : BaseCodecModule(LLC_NAME, LLC_HELP) {}
 
     const RuleMap* get_rules() const override
     { return llc_rules; }
@@ -119,7 +119,7 @@ bool LlcCodec::decode(const RawData& raw, CodecData& codec, DecodeData&)
 
         const EthLlcOther* ehllcother = reinterpret_cast<const EthLlcOther*>(raw.data +
             sizeof(EthLlc));
-        
+
         if (ehllcother->org_code[0] == 0 &&
             ehllcother->org_code[1] == 0 &&
             ehllcother->org_code[2] == 0)

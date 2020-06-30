@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2018-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2018-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -32,17 +32,17 @@ namespace snort
 struct Packet;
 }
 
-#define THIRD_PARTY_APP_ID_API_VERSION 1
+class ThirdPartyAppIdContext;
 
-class ThirdPartyAppIDSession
+class ThirdPartyAppIdSession
 {
 public:
-
-    ThirdPartyAppIDSession()
-        : appid(APP_ID_NONE), confidence(100), state(TP_STATE_INIT) { }
-    virtual ~ThirdPartyAppIDSession() { }
+    ThirdPartyAppIdSession(ThirdPartyAppIdContext& ctxt)
+        : appid(APP_ID_NONE), confidence(100), state(TP_STATE_INIT), ctxt(ctxt) { }
+    virtual ~ThirdPartyAppIdSession() { }
 
     virtual bool reset() = 0;            // just reset state
+    virtual void delete_with_ctxt() = 0;
     virtual TPState process(const snort::Packet&,
         AppidSessionDirection direction,
         std::vector<AppId>& proto_list,
@@ -55,18 +55,15 @@ public:
     virtual void set_attr(TPSessionAttr) = 0;
     virtual unsigned get_attr(TPSessionAttr) = 0;
     virtual AppId get_appid(int& conf) { conf=confidence; return appid; }
+    virtual const ThirdPartyAppIdContext& get_ctxt() const
+    { return ctxt; }
 
 protected:
     AppId appid;
     int confidence;
     TPState state;
+    const ThirdPartyAppIdContext& ctxt;
 };
-
-// Function pointer to object factory that returns a pointer to a newly
-// created object of a derived class.
-// This needs to be exported (SO_PUBLIC) by any third party .so library.
-// Must return NULL if it fails to create the object.
-typedef ThirdPartyAppIDSession* (* CreateThirdPartyAppIDSession_t)();
 
 #endif
 

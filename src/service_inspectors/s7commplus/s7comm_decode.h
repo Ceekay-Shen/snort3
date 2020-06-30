@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2018-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2018-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -26,6 +26,8 @@ namespace snort
 {
 struct Packet;
 }
+
+class S7commplusFlowData;
 
 /* S7comm defines */
 #define S7COMMPLUS_PDUTYPE_CONNECT                 0x01
@@ -59,7 +61,7 @@ struct Packet;
 #define S7COMMPLUS_RESERVED_FUNCTION_STR \
     "(spp_s7commplus): Reserved S7commplus function code in use."
 
-bool S7commplusDecode(snort::Packet*);
+bool S7commplusDecode(snort::Packet*, S7commplusFlowData* mfd);
 
 #endif
 

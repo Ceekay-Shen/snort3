@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -33,7 +33,7 @@ namespace snort
 template<typename T>
 class PrimedAllocator
 {
-public: 
+public:
     struct Node
     {
         Node* next;
@@ -85,7 +85,7 @@ public:
 
         if ( !this->state->ref_count )
             delete state;
-        
+
         this->state = state;
         state->ref_count++;
     }
@@ -103,7 +103,7 @@ public:
         }
         return reinterpret_cast<T*>(operator new(sizeof(T)));
     }
-        
+
     void deallocate(pointer p, size_type) noexcept
     {
         Node* node = reinterpret_cast<Node*>(p);

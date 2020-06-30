@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2019-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2019-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -42,7 +42,7 @@ Http2StartLine::~Http2StartLine()
 }
 
 Http2StartLine* Http2StartLine::new_start_line_generator(SourceId source_id,
-        Http2EventGen* events, Http2Infractions* infractions)
+    Http2EventGen* const events, Http2Infractions* const infractions)
 {
     if (source_id == SRC_CLIENT)
         return new Http2RequestLine(events, infractions);
@@ -54,7 +54,7 @@ void Http2StartLine::process_pseudo_header_precheck()
 {
     if (finalized)
     {
-        infractions += INF_PSEUDO_HEADER_AFTER_REGULAR_HEADER;
+        *infractions += INF_PSEUDO_HEADER_AFTER_REGULAR_HEADER;
         events->create_event(EVENT_INVALID_HEADER);
     }
 }

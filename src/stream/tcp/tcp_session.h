@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -76,9 +76,8 @@ private:
     void process_tcp_stream(TcpSegmentDescriptor&);
     int process_tcp_data(TcpSegmentDescriptor&);
     void swap_trackers();
-    void NewTcpSessionOnSyn(TcpSegmentDescriptor&);
-    void NewTcpSessionOnSynAck(TcpSegmentDescriptor&);
-    int process_dis(snort::Packet*);
+    void init_session_on_syn(TcpSegmentDescriptor&);
+    void init_session_on_synack(TcpSegmentDescriptor&);
     void update_on_3whs_complete(TcpSegmentDescriptor&);
     bool is_flow_handling_packets(snort::Packet*);
     void cleanup_session_if_expired(snort::Packet*);

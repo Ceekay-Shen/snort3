@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2008-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -154,7 +154,7 @@ void DCE2_ClProcess(DCE2_SsnData* sd, DCE2_ClTracker* clt)
 
         case DCERPC_PDU_TYPE__RESPONSE:
         {
-            trace_log(dce_udp, "Response from client.  Changing stream direction.\n");
+            debug_log(dce_udp_trace, p, "Response from client.  Changing stream direction.\n");
             ip::IpApi* ip_api = &p->ptrs.ip_api;
 
             p->flow->session->update_direction(SSN_DIR_FROM_SERVER,

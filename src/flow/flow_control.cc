@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -176,18 +176,18 @@ void FlowControl::set_key(FlowKey* key, Packet* p)
 
     if ( (p->ptrs.decode_flags & DECODE_FRAG) )
     {
-        key->init(type, ip_proto, ip_api.get_src(), ip_api.get_dst(), ip_api.id(),
-            vlanId, mplsId, addressSpaceId);
+        key->init(p->context->conf, type, ip_proto, ip_api.get_src(),
+            ip_api.get_dst(), ip_api.id(), vlanId, mplsId, addressSpaceId);
     }
     else if ( type == PktType::ICMP )
     {
-        key->init(type, ip_proto, ip_api.get_src(), p->ptrs.icmph->type, ip_api.get_dst(), 0,
-            vlanId, mplsId, addressSpaceId);
+        key->init(p->context->conf, type, ip_proto, ip_api.get_src(), p->ptrs.icmph->type,
+            ip_api.get_dst(), 0, vlanId, mplsId, addressSpaceId);
     }
     else
     {
-        key->init(type, ip_proto, ip_api.get_src(), p->ptrs.sp, ip_api.get_dst(), p->ptrs.dp,
-            vlanId, mplsId, addressSpaceId);
+        key->init(p->context->conf, type, ip_proto, ip_api.get_src(), p->ptrs.sp,
+            ip_api.get_dst(), p->ptrs.dp, vlanId, mplsId, addressSpaceId);
     }
 }
 
@@ -320,12 +320,24 @@ static bool want_flow(PktType type, Packet* p)
     if ( type != PktType::TCP )
         return true;
 
+    if ( p->is_retry() )
+    {
+        // Do not start a new flow from a retry packet.
+        p->active->drop_packet(p);
+        p->disable_inspect = true;
+        return false;
+    }
+
     if ( p->ptrs.tcph->is_rst() )
         // guessing direction based on ports is misleading
         return false;
 
-    if ( !p->ptrs.tcph->is_syn_only() or SnortConfig::get_conf()->track_on_syn() or
-        (p->ptrs.decode_flags & DECODE_WSCALE) )
+    if ( !p->ptrs.tcph->is_syn_only() or p->context->conf->track_on_syn() )
+        return true;
+
+    const unsigned DECODE_TCP_HS = DECODE_TCP_MSS | DECODE_TCP_TS | DECODE_TCP_WS;
+
+    if ( (p->ptrs.decode_flags & DECODE_TCP_HS) or p->dsize )
         return true;
 
     p->packet_flags |= PKT_FROM_CLIENT;
@@ -391,14 +403,22 @@ unsigned FlowControl::process(Flow* flow, Packet* p)
     last_pkt_type = p->type();
     preemptive_cleanup();
 
-    flow->set_direction(p);
-    flow->session->precheck(p);
+    // If this code is executed on a flow in SETUP state, it will result in a packet from both
+    // client and server on packets from 0.0.0.0 or ::
+    if ( flow->flow_state != Flow::FlowState::SETUP )
+    {
+        flow->set_direction(p);
+        // This call can reset the flow state to SETUP in lazy flow timeout cases
+        flow->session->precheck(p);
+    }
 
     if ( flow->flow_state != Flow::FlowState::SETUP )
     {
-        set_inspection_policy(SnortConfig::get_conf(), flow->inspection_policy_id);
-        set_ips_policy(SnortConfig::get_conf(), flow->ips_policy_id);
-        set_network_policy(SnortConfig::get_conf(), flow->network_policy_id);
+        const SnortConfig* sc = SnortConfig::get_conf();
+        set_inspection_policy(sc, flow->inspection_policy_id);
+        set_ips_policy(sc, flow->ips_policy_id);
+        set_network_policy(sc, flow->network_policy_id);
+        p->filtering_state = flow->filtering_state;
     }
 
     else
@@ -415,6 +435,11 @@ unsigned FlowControl::process(Flow* flow, Packet* p)
             flow->set_state(Flow::FlowState::ALLOW);
 
         ++news;
+        flow->flowstats.start_time = p->pkth->ts;
+        // Set the flag if the flow direction matches the DAQ direction
+        flow->flags.client_initiated =
+            (p->is_from_server() ==
+                (DAQ_PKT_FLAG_REV_FLOW == (p->packet_flags & DAQ_PKT_FLAG_REV_FLOW)));
     }
 
     // This requires the packet direction to be set
@@ -437,8 +462,6 @@ unsigned FlowControl::process(Flow* flow, Packet* p)
             Stream::stop_inspection(flow, p, SSN_DIR_BOTH, -1, 0);
         else
             DetectionEngine::disable_all(p);
-
-        p->ptrs.decode_flags |= DECODE_PKT_TRUST;
         break;
 
     case Flow::FlowState::BLOCK:
@@ -447,7 +470,10 @@ unsigned FlowControl::process(Flow* flow, Packet* p)
         else
             p->active->block_again();
 
+        p->active->set_drop_reason("session");
         DetectionEngine::disable_all(p);
+        if ( PacketTracer::is_active() )
+            PacketTracer::log("Session: session has been blocked, drop\n");
         break;
 
     case Flow::FlowState::RESET:
@@ -457,11 +483,29 @@ unsigned FlowControl::process(Flow* flow, Packet* p)
             p->active->reset_again();
 
         Stream::blocked_flow(p);
+        p->active->set_drop_reason("session");
         DetectionEngine::disable_all(p);
+        if ( PacketTracer::is_active() )
+            PacketTracer::log("Session: session has been reset\n");
         break;
     }
 
+    update_stats(flow, p);
     return news;
+}
+
+void FlowControl::update_stats(Flow* flow, Packet* p)
+{
+    if (p->is_from_client())
+    {
+        flow->flowstats.client_pkts++;
+        flow->flowstats.client_bytes += p->pktlen;
+    }
+    else
+    {
+        flow->flowstats.server_pkts++;
+        flow->flowstats.server_bytes += p->pktlen;
+    }
 }
 
 //-------------------------------------------------------------------------

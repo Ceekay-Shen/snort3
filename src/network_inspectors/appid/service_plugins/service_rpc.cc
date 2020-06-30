@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -33,10 +33,12 @@
 #include <rpc/rpcent.h>
 #endif
 
-#include "appid_inspector.h"
-#include "app_info_table.h"
+#include "detection/ips_context.h"
 #include "log/messages.h"
 #include "protocols/packet.h"
+
+#include "appid_inspector.h"
+#include "app_info_table.h"
 
 using namespace snort;
 
@@ -403,7 +405,7 @@ int RpcServiceDetector::validate_packet(const uint8_t* data, uint16_t size, Appi
                         static THREAD_LOCAL SnortProtocolId sunrpc_snort_protocol_id = UNKNOWN_PROTOCOL_ID;
 
                         if(sunrpc_snort_protocol_id == UNKNOWN_PROTOCOL_ID)
-                            sunrpc_snort_protocol_id = SnortConfig::get_conf()->proto_ref->find("sunrpc");
+                            sunrpc_snort_protocol_id = pkt->context->conf->proto_ref->find("sunrpc");
 
                         const SfIp* dip = pkt->ptrs.ip_api.get_dst();
                         const SfIp* sip = pkt->ptrs.ip_api.get_src();
@@ -411,7 +413,7 @@ int RpcServiceDetector::validate_packet(const uint8_t* data, uint16_t size, Appi
 
                         AppIdSession* pf = AppIdSession::create_future_session(
                             pkt, dip, 0, sip, (uint16_t)tmp,
-                            (IpProtocol)ntohl((uint32_t)rd->proto), sunrpc_snort_protocol_id, 0);
+                            (IpProtocol)ntohl((uint32_t)rd->proto), sunrpc_snort_protocol_id);
                         if (pf)
                         {
                             pf->add_flow_data_id((uint16_t)tmp, this);

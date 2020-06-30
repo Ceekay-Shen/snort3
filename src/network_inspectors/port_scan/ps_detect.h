@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2004-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -164,7 +164,8 @@ void ps_cleanup();
 void ps_reset();
 
 unsigned ps_node_size();
-void ps_init_hash(unsigned long);
+bool ps_init_hash(unsigned long);
+bool ps_prune_hash(unsigned);
 int ps_detect(PS_PKT*);
 
 #endif

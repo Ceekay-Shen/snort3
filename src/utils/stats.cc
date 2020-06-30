@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2013-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -22,6 +22,8 @@
 #endif
 
 #include "stats.h"
+
+#include <cassert>
 
 #include "detection/detection_engine.h"
 #include "file_api/file_stats.h"
@@ -153,12 +155,17 @@ static void timing_stats()
     LogMessage("%25.25s: %lu.%06lu\n", "seconds",
         (unsigned long)difftime.tv_sec, (unsigned long)difftime.tv_usec);
 
-    uint64_t num_pkts = (uint64_t)ModuleManager::get_module("daq")->get_global_count("received");
+    Module* daq = ModuleManager::get_module("daq");
+    assert(daq);
 
-    LogMessage("%25.25s: " STDu64 "\n", "packets", num_pkts);
+    uint64_t num_pkts = (uint64_t)daq->get_global_count("analyzed");
+    uint64_t num_byts = (uint64_t)daq->get_global_count("rx_bytes");
 
-    uint64_t pps = (num_pkts / total_secs);
-    LogMessage("%25.25s: " STDu64 "\n", "pkts/sec", pps);
+    if ( uint64_t pps = (num_pkts / total_secs) )
+        LogMessage("%25.25s: " STDu64 "\n", "pkts/sec", pps);
+
+    if ( uint64_t mbps = 8 * num_byts / total_secs / 1024 / 1024 )
+        LogMessage("%25.25s: " STDu64 "\n", "Mbits/sec", mbps);
 }
 
 //-------------------------------------------------------------------------
@@ -206,8 +213,9 @@ const PegInfo proc_names[] =
     { CountType::SUM, "policy_reloads", "number of times policies were reloaded" },
     { CountType::SUM, "inspector_deletions", "number of times inspectors were deleted" },
     { CountType::SUM, "daq_reloads", "number of times daq configuration was reloaded" },
-    { CountType::SUM, "attribute_table_reloads", "number of times hosts table was reloaded" },
-    { CountType::SUM, "attribute_table_hosts", "total number of hosts in table" },
+    { CountType::SUM, "attribute_table_reloads", "number of times hosts attribute table was reloaded" },
+    { CountType::SUM, "attribute_table_hosts", "number of hosts added to the attribute table" },
+    { CountType::SUM, "attribute_table_overflow", "number of host additions that failed due to attribute table full" },
     { CountType::END, nullptr, nullptr }
 };
 
@@ -222,8 +230,8 @@ void DropStats()
 
     LogLabel("Module Statistics");
     const char* exclude = "daq snort";
-    ModuleManager::dump_stats(SnortConfig::get_conf(), exclude, false);
-    ModuleManager::dump_stats(SnortConfig::get_conf(), exclude, true);
+    ModuleManager::dump_stats(exclude, false);
+    ModuleManager::dump_stats(exclude, true);
 
     LogLabel("Summary Statistics");
     show_stats((PegCount*)&proc_stats, proc_names, array_size(proc_names)-1, "process");
@@ -237,17 +245,17 @@ void PrintStatistics()
     DropStats();
     timing_stats();
 
-    // FIXIT-L can do flag saving with RAII (much cleaner)
-    int save_quiet_flag = SnortConfig::get_conf()->logging_flags & LOGGING_FLAG__QUIET;
+    SnortConfig* sc = SnortConfig::get_main_conf();
 
-    SnortConfig::get_conf()->logging_flags &= ~LOGGING_FLAG__QUIET;
+    // FIXIT-L can do flag saving with RAII (much cleaner)
+    int save_quiet_flag = sc->logging_flags & LOGGING_FLAG__QUIET;
+    sc->logging_flags &= ~LOGGING_FLAG__QUIET;
 
     // once more for the main thread
     Profiler::consolidate_stats();
-
     Profiler::show_stats();
 
-    SnortConfig::get_conf()->logging_flags |= save_quiet_flag;
+    sc->logging_flags |= save_quiet_flag;
 }
 
 //-------------------------------------------------------------------------

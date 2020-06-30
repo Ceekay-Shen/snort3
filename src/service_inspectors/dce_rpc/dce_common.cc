@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -85,7 +85,7 @@ static const char* dce2_get_policy_name(DCE2_Policy policy)
 bool dce2_set_common_config(Value& v, dce2CommonProtoConf& common)
 {
     if ( v.is("limit_alerts") )
-            common.limit_alerts = v.get_bool();
+        common.limit_alerts = v.get_bool();
 
     else if ( v.is("disable_defrag") )
         common.disable_defrag = v.get_bool();
@@ -116,43 +116,28 @@ bool dce2_set_co_config(Value& v, dce2CoProtoConf& co)
     return true;
 }
 
-void print_dce2_common_config(dce2CommonProtoConf& common)
+void print_dce2_common_config(const dce2CommonProtoConf& common)
 {
-    LogMessage("    One alert per flow: %s\n",
-        common.limit_alerts ?
-        "ENABLED" : "DISABLED");
-    LogMessage("    Defragmentation: %s\n",
-        common.disable_defrag ?
-        "DISABLED" : "ENABLED");
-    LogMessage("    Max Fragment length: %d\n",
-        common.max_frag_len);
+    ConfigLogger::log_flag("limit_alerts", common.limit_alerts);
+    ConfigLogger::log_flag("disable_defrag", common.disable_defrag);
+    ConfigLogger::log_value("max_frag_len", common.max_frag_len);
 }
 
-void print_dce2_co_config(dce2CoProtoConf& co)
+void print_dce2_co_config(const dce2CoProtoConf& co)
 {
     print_dce2_common_config(co.common);
 
-    LogMessage("    Policy : %s\n",
-        dce2_get_policy_name(co.policy));
-    LogMessage("    Reassemble Threshold : %d\n",
-        co.co_reassemble_threshold);
+    ConfigLogger::log_value("policy", dce2_get_policy_name(co.policy));
+    ConfigLogger::log_value("reassemble_threshold", co.co_reassemble_threshold);
 }
 
-bool dce2_paf_abort(Flow* flow, DCE2_SsnData* sd)
+bool dce2_paf_abort(DCE2_SsnData* sd)
 {
-    // FIXIT-L Checking flags from flow is okay here because this is in paf?
-    if ( (flow->get_session_flags() & SSNFLAG_MIDSTREAM) )
-        return true;
-
-    else if ( !(flow->get_session_flags() & SSNFLAG_ESTABLISHED) )
-        return true;
-
     if ((sd != nullptr) && DCE2_SsnNoInspect(sd))
         return true;
 
     return false;
 }
-
 
 void DCE2_Detect(DCE2_SsnData* sd)
 {
@@ -168,7 +153,7 @@ void DCE2_Detect(DCE2_SsnData* sd)
     DetectionEngine::detect(top_pkt);
     dce2_detected = 1;
     /* Always reset rule option data after detecting */
-    DCE2_ResetRopts(sd , top_pkt);
+    DCE2_ResetRopts(sd, top_pkt);
 }
 
 DCE2_TransType get_dce2_trans_type(const Packet* p)
@@ -233,7 +218,7 @@ bool DceEndianness::get_offset_endianness(int32_t offset, uint8_t& endian)
     }
 
     endian = (byte_order == DCERPC_BO_FLAG__BIG_ENDIAN) ? ENDIAN_BIG : ENDIAN_LITTLE;
- 
+
     return true;
 }
 

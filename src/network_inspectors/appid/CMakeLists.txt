@@ -1,22 +1,14 @@
-if ( ENABLE_APPID_THIRD_PARTY )
-  set (APPID_TP_INCLUDES
-    tp_appid_module_api.h
-    tp_appid_session_api.h
-    tp_appid_types.h
-    http_xff_fields.h
-    )
-endif()
-
-
 set (APPID_INCLUDES
     appid_api.h
+    appid_app_descriptor.h
     appid_dns_session.h
     appid_http_session.h
     appid_session_api.h
     appid_types.h
     application_ids.h
-    http_xff_fields.h
-    ${APPID_TP_INCLUDES}
+    tp_appid_module_api.h
+    tp_appid_session_api.h
+    tp_appid_types.h
 )
 
 set ( APPID_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR} )
@@ -124,8 +116,6 @@ set ( SP_APPID_SOURCES
 set ( DP_APPID_SOURCES
     detector_plugins/detector_dns.cc
     detector_plugins/detector_dns.h
-    detector_plugins/detector_http.cc
-    detector_plugins/detector_http.h
     detector_plugins/detector_imap.cc
     detector_plugins/detector_imap.h
     detector_plugins/detector_kerberos.cc
@@ -138,8 +128,14 @@ set ( DP_APPID_SOURCES
     detector_plugins/detector_sip.h
     detector_plugins/detector_smtp.cc
     detector_plugins/detector_smtp.h
+    detector_plugins/dns_patterns.cc
+    detector_plugins/dns_patterns.h
     detector_plugins/http_url_patterns.cc
     detector_plugins/http_url_patterns.h
+    detector_plugins/sip_patterns.cc
+    detector_plugins/sip_patterns.h
+    detector_plugins/ssl_patterns.cc
+    detector_plugins/ssl_patterns.h
 )
 
 set ( UTIL_APPID_SOURCES
@@ -148,18 +144,7 @@ set ( UTIL_APPID_SOURCES
     appid_utils/ip_funcs.h
     appid_utils/sf_mlmp.cc
     appid_utils/sf_mlmp.h
-    appid_utils/sf_multi_mpse.cc
-    appid_utils/sf_multi_mpse.h
 )
-
-if ( ENABLE_APPID_THIRD_PARTY )
-  set( APPID_TP_SOURCES
-    tp_lib_handler.cc
-    tp_appid_utils.cc
-    tp_lib_handler.h
-    tp_appid_types.h
-    )
-endif()
 
 set ( APPID_SOURCES
     app_forecast.cc
@@ -170,6 +155,7 @@ set ( APPID_SOURCES
     appid_app_descriptor.h
     appid_config.cc
     appid_config.h
+    appid_data_decrypt_event_handler.h
     appid_debug.cc
     appid_debug.h
     appid_detector.cc
@@ -201,7 +187,6 @@ set ( APPID_SOURCES
     appid_http_event_handler.cc
     appid_http_event_handler.h
     ips_appid_option.cc
-    length_app_cache.cc
     length_app_cache.h
     lua_detector_api.cc
     lua_detector_api.h
@@ -212,8 +197,10 @@ set ( APPID_SOURCES
     lua_detector_util.h
     service_state.cc
     service_state.h
-    http_xff_fields.h
-    ${APPID_TP_SOURCES}
+    tp_appid_utils.cc
+    tp_lib_handler.cc
+    tp_lib_handler.h
+    tp_appid_types.h
 )
 
 #if (STATIC_INSPECTORS)
@@ -236,6 +223,7 @@ add_library(appid OBJECT
 
 target_include_directories ( appid PRIVATE ${APPID_INCLUDE_DIR} )
 
+add_subdirectory(client_plugins/test)
 add_subdirectory(service_plugins/test)
 add_subdirectory(detector_plugins/test)
 add_subdirectory(test)

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2013-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -76,6 +76,7 @@ struct ProcessCount
     PegCount daq_reloads;
     PegCount attribute_table_reloads;
     PegCount attribute_table_hosts;
+    PegCount attribute_table_overflow;
 };
 
 extern ProcessCount proc_stats;

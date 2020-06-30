@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -321,13 +321,15 @@ public:
     Dce2Smb(const dce2SmbProtoConf&);
     ~Dce2Smb() override;
 
-    void show(SnortConfig*) override;
+    void show(const SnortConfig*) const override;
     void eval(Packet*) override;
     void clear(Packet*) override;
+
     StreamSplitter* get_splitter(bool c2s) override
-    {
-        return new Dce2SmbSplitter(c2s);
-    }
+    { return new Dce2SmbSplitter(c2s); }
+
+    bool can_carve_files() const override
+    { return true; }
 
 private:
     dce2SmbProtoConf config;
@@ -346,7 +348,7 @@ Dce2Smb::~Dce2Smb()
     }
 }
 
-void Dce2Smb::show(SnortConfig*)
+void Dce2Smb::show(const SnortConfig*) const
 {
     print_dce2_smb_conf(config);
 }
@@ -358,9 +360,6 @@ void Dce2Smb::eval(Packet* p)
 
     assert(p->has_tcp_data());
     assert(p->flow);
-
-    if ( p->test_session_flags(SSNFLAG_MIDSTREAM) )
-        return;
 
     dce2_smb_sess = dce2_handle_smb_session(p, &config);
 

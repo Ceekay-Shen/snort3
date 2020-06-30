@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2018-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2018-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -49,7 +49,7 @@ void IpsContextChain::push_back(IpsContext* new_back)
     else
     {
         assert(!_front);
-        _front = _back = new_back;        
+        _front = _back = new_back;
     }
 }
 
@@ -85,7 +85,7 @@ TEST_CASE("IpsContextChain pop", "[IpsContextChain]")
 {
     IpsContextChain chain;
     IpsContext a, b, c;
-    
+
     chain.push_back(&a);
     chain.push_back(&b);
     chain.push_back(&c);
@@ -107,7 +107,7 @@ TEST_CASE("IpsContextChain abort", "[IpsContextChain]")
 {
     IpsContextChain chain;
     IpsContext a, b;
-    
+
     chain.push_back(&a);
     chain.push_back(&b);
     chain.abort();

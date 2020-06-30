@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -168,6 +168,7 @@ public:
     PacketCapture(CaptureModule*);
 
     // non-static functions
+    void show(const SnortConfig*) const override;
     void eval(Packet*) override;
     void tterm() override { capture_term(); }
 
@@ -196,6 +197,13 @@ bool PacketCapture::capture_init()
     return false;
 }
 
+void PacketCapture::show(const SnortConfig*) const
+{
+    ConfigLogger::log_flag("enable", config.enabled);
+    if ( config.enabled )
+        ConfigLogger::log_value("filter", config.filter.c_str());
+}
+
 void PacketCapture::eval(Packet* p)
 {
 
@@ -204,7 +212,7 @@ void PacketCapture::eval(Packet* p)
         if ( !capture_initialized() )
             if ( !capture_init() )
                 return;
-                
+
         if ( p->is_cooked() )
             return;
 

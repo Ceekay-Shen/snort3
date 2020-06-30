@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2017-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2017-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -31,6 +31,7 @@
 #include "detection/ips_context.h"
 #include "log/log.h"
 #include "log/messages.h"
+#include "packet_io/active.h"
 #include "packet_io/sfdaq_instance.h"
 #include "protocols/eth.h"
 #include "protocols/icmp4.h"
@@ -49,11 +50,6 @@ using namespace snort;
 // static variables
 // -----------------------------------------------------------------------------
 
-static const uint8_t VERDICT_REASON_NO_BLOCK = 2; /* Not blocking packet; all enum defined after this indicates blocking */
-
-// FIXIT-M currently non-thread-safe accesses being done in packet threads against this
-static std::unordered_map<uint8_t, uint8_t> reasons = { {VERDICT_REASON_NO_BLOCK, PacketTracer::PRIORITY_UNSET} };
-
 // FIXIT-M refactor the way this is used so all methods are members called against this pointer
 THREAD_LOCAL PacketTracer* snort::s_pkt_trace = nullptr;
 
@@ -66,12 +62,6 @@ static bool config_status = false;
 // -----------------------------------------------------------------------------
 // static functions
 // -----------------------------------------------------------------------------
-
-void PacketTracer::register_verdict_reason(uint8_t reason_code, uint8_t priority)
-{
-    assert(reasons.find(reason_code) == reasons.end());
-    reasons[reason_code] = priority;
-}
 
 void PacketTracer::set_log_file(const std::string& file)
 { log_file = file; }
@@ -120,16 +110,16 @@ void PacketTracer::dump(Packet* p)
     if (s_pkt_trace->daq_activated)
         s_pkt_trace->dump_to_daq(p);
 
-    if (s_pkt_trace->user_enabled or s_pkt_trace->shell_enabled)
+    if ((s_pkt_trace->buff_len > 0)
+        and (s_pkt_trace->user_enabled or s_pkt_trace->shell_enabled))
+    {
+        const char* drop_reason = p->active->get_drop_reason();
+        if (drop_reason)
+            PacketTracer::log("Verdict Reason: %s\n", drop_reason);
         LogMessage(s_pkt_trace->log_fh, "%s\n", s_pkt_trace->buffer);
+    }
 
     s_pkt_trace->reset();
-}
-
-void PacketTracer::set_reason(uint8_t reason)
-{
-    if ( reasons[reason] > reasons[s_pkt_trace->reason] )
-        s_pkt_trace->reason = reason;
 }
 
 void PacketTracer::log(const char* format, ...)
@@ -163,7 +153,7 @@ bool PacketTracer::is_paused()
     return false;
 }
 
-void PacketTracer::set_constraints(const PTSessionConstraints* constraints)
+void PacketTracer::set_constraints(const PacketConstraints* constraints)
 {
     if (!s_pkt_trace)
         return;
@@ -173,7 +163,7 @@ void PacketTracer::set_constraints(const PTSessionConstraints* constraints)
         LogMessage("Debugging packet tracer disabled\n");
         s_pkt_trace->shell_enabled = false;
     }
-    else 
+    else
         s_pkt_trace->update_constraints(constraints);
 }
 
@@ -210,7 +200,7 @@ void PacketTracer::activate(const Packet& p)
 
     if ( p.pkth->flags &  DAQ_PKT_FLAG_TRACE_ENABLED )
         s_pkt_trace->daq_activated = true;
-    else 
+    else
         s_pkt_trace->daq_activated = false;
 
     if (s_pkt_trace->daq_activated or s_pkt_trace->user_enabled or s_pkt_trace->shell_enabled)
@@ -222,26 +212,11 @@ void PacketTracer::activate(const Packet& p)
         }
         else
         {
-            if (s_pkt_trace->shell_enabled)
+            if (s_pkt_trace->shell_enabled and
+                !s_pkt_trace->constraints.packet_match(p))
             {
-                uint16_t sport = p.ptrs.sp;
-                uint16_t dport = p.ptrs.dp;
-
-                const SfIp *actual_sip = p.ptrs.ip_api.get_src();
-                const SfIp *actual_dip = p.ptrs.ip_api.get_dst();
-
-                const uint32_t *sip_ptr = actual_sip->get_ip6_ptr();
-                const uint32_t *dip_ptr = actual_dip->get_ip6_ptr();
-
-                IpProtocol proto = p.get_ip_proto_next();
-
-                if (!(s_pkt_trace->info.proto_match(proto) and
-                        ((s_pkt_trace->info.port_match(sport, dport) and s_pkt_trace->info.ip_match(sip_ptr, dip_ptr)) or
-                        (s_pkt_trace->info.port_match(dport, sport) and s_pkt_trace->info.ip_match(dip_ptr, sip_ptr)))))
-                {
-                    s_pkt_trace->active = false;
-                    return;
-                }
+                s_pkt_trace->active = false;
+                return;
             }
             s_pkt_trace->active = true;
             s_pkt_trace->add_ip_header_info(p);
@@ -255,10 +230,6 @@ void PacketTracer::activate(const Packet& p)
 // non-static functions
 // -----------------------------------------------------------------------------
 
-// constructor
-PacketTracer::PacketTracer()
-{ reason = VERDICT_REASON_NO_BLOCK; }
-
 // destructor
 PacketTracer::~PacketTracer()
 {
@@ -270,12 +241,12 @@ PacketTracer::~PacketTracer()
 }
 
 void PacketTracer::log(const char* format, va_list ap)
-{       
+{
     // FIXIT-L Need to find way to add 'PktTracerDbg' string as part of format string.
     std::string dbg_str;
     if (shell_enabled) // only add debug string during shell execution
     {
-        dbg_str = "PktTracerDbg "; 
+        dbg_str = "PktTracerDbg ";
         if (strcmp(format, "\n") != 0)
             dbg_str += get_debug_session();
         dbg_str += format;
@@ -301,7 +272,7 @@ void PacketTracer::add_ip_header_info(const Packet& p)
 
     const SfIp* actual_sip = p.ptrs.ip_api.get_src();
     const SfIp* actual_dip = p.ptrs.ip_api.get_dst();
-    
+
     IpProtocol proto = p.get_ip_proto_next();
 
     actual_sip->ntop(sipstr, sizeof(sipstr));
@@ -382,17 +353,18 @@ void PacketTracer::add_eth_header_info(const Packet& p)
     }
 }
 
-void PacketTracer::update_constraints(const PTSessionConstraints* constraints)
+void PacketTracer::update_constraints(const PacketConstraints* cs)
 {
 
     char sipstr[INET6_ADDRSTRLEN];
     char dipstr[INET6_ADDRSTRLEN];
 
-    info.set(*constraints);
-    info.sip.ntop(sipstr, sizeof(sipstr));
-    info.dip.ntop(dipstr, sizeof(dipstr));
+    constraints = *cs;
+    constraints.src_ip.ntop(sipstr, sizeof(sipstr));
+    constraints.dst_ip.ntop(dipstr, sizeof(dipstr));
     LogMessage("Debugging packet tracer with %s-%hu and %s-%hu %hhu\n",
-               sipstr, info.sport, dipstr, info.dport, static_cast<uint8_t>(info.protocol));
+        sipstr, constraints.src_port, dipstr, constraints.dst_port,
+        static_cast<uint8_t>(constraints.ip_proto));
 
     shell_enabled = true;
 
@@ -419,7 +391,7 @@ void PacketTracer::open_file()
 void PacketTracer::dump_to_daq(Packet* p)
 {
     assert(p);
-    p->daq_instance->modify_flow_pkt_trace(p->daq_msg, reason,
+    p->daq_instance->set_packet_trace_data(p->daq_msg, 
         (uint8_t *)buffer, buff_len + 1);
 }
 
@@ -427,12 +399,10 @@ void PacketTracer::reset()
 {
     buff_len = 0;
     buffer[0] = '\0';
-    reason = VERDICT_REASON_NO_BLOCK;
 
     for ( unsigned i = 0; i < mutes.size(); i++ )
         mutes[i] = false;
 }
-
 // --------------------------------------------------------------------------
 // unit tests
 // --------------------------------------------------------------------------
@@ -444,8 +414,6 @@ void PacketTracer::reset()
 class TestPacketTracer : public PacketTracer
 {
 public:
-    uint8_t dump_reason = VERDICT_REASON_NO_BLOCK;
-
     static void thread_init()
     { PacketTracer::_thread_init<TestPacketTracer>(); }
 
@@ -470,14 +438,8 @@ public:
     static bool is_paused()
     { return ((TestPacketTracer*)s_pkt_trace)->pause_count; }
 
-    static uint8_t get_reason()
-    { return ((TestPacketTracer*)s_pkt_trace)->reason; }
-
-    static uint8_t get_dump_reason()
-    { return ((TestPacketTracer*)s_pkt_trace)->dump_reason; }
-
     void dump_to_daq(Packet*) override
-    { dump_reason = reason; }
+    { }
 
     static std::vector<bool> get_mutes()
     { return ((TestPacketTracer*)s_pkt_trace)->mutes; }
@@ -570,7 +532,7 @@ TEST_CASE("enable", "[PacketTracer]")
     CHECK(!TestPacketTracer::is_daq_enabled());
     // user configuration remain enabled
     CHECK(TestPacketTracer::is_user_enabled());
-    
+
     TestPacketTracer::thread_term();
 }
 
@@ -609,42 +571,6 @@ TEST_CASE("pause", "[PacketTracer]")
     TestPacketTracer::thread_term();
 }
 
-TEST_CASE("reasons", "[PacketTracer]")
-{
-    TestPacketTracer::thread_init();
-    TestPacketTracer::set_daq_enable(true);
-    uint8_t low1 = 100, low2 = 101, high = 102;
-    TestPacketTracer::register_verdict_reason(low1, PacketTracer::PRIORITY_LOW);
-    TestPacketTracer::register_verdict_reason(low2, PacketTracer::PRIORITY_LOW);
-    TestPacketTracer::register_verdict_reason(high, PacketTracer::PRIORITY_HIGH);
-    
-    // Init
-    CHECK((TestPacketTracer::get_reason() == VERDICT_REASON_NO_BLOCK));
-    
-    // Update
-    TestPacketTracer::set_reason(low1);
-    CHECK((TestPacketTracer::get_reason() == low1));
-    
-    // Don't update if already set
-    TestPacketTracer::set_reason(VERDICT_REASON_NO_BLOCK);
-    CHECK((TestPacketTracer::get_reason() == low1));
-    TestPacketTracer::set_reason(low2);
-    CHECK((TestPacketTracer::get_reason() == low1));
-
-    // Always update for high priority
-    TestPacketTracer::set_reason(high);
-    CHECK((TestPacketTracer::get_reason() == high));
-
-    // Dump resets reason
-    TestPacketTracer::dump(nullptr);
-    CHECK((TestPacketTracer::get_reason() == VERDICT_REASON_NO_BLOCK));
-
-    // Dump delivers reason to daq
-    CHECK((TestPacketTracer::get_dump_reason() == high));
-
-    TestPacketTracer::thread_term();
-}
-
 TEST_CASE("verbosity", "[PacketTracer]")
 {
     TestPacketTracer::thread_init();
@@ -669,7 +595,7 @@ TEST_CASE("verbosity", "[PacketTracer]")
     TestPacketTracer::log(mute_2, "this should also log\n");
     val = TestPacketTracer::get_buff();
     CHECK((val == expected));
-       
+
     TestPacketTracer::thread_term();
 }
 

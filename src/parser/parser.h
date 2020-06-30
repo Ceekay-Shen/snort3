@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2013-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -45,6 +45,7 @@ void inc_parse_position();
 snort::SnortConfig* ParseSnortConf(const snort::SnortConfig*, const char* fname = nullptr,
     bool is_fatal = true);
 void ParseRules(snort::SnortConfig*);
+void ShowPolicyStats(const snort::SnortConfig*);
 
 char* ProcessFileOption(snort::SnortConfig*, const char*);
 void SetRuleStates(snort::SnortConfig*);
@@ -84,7 +85,8 @@ inline RuleTreeNode* getRuntimeRtnFromOtn(const struct OptTreeNode* otn)
     return getRtnFromOtn(otn);
 }
 
-ListHead* CreateRuleType(snort::SnortConfig* sc, const char* name, snort::Actions::Type);
+RuleListNode* CreateRuleType(snort::SnortConfig* sc, const char* name,
+    snort::Actions::Type, bool is_plugin_action = false);
 
 void FreeRuleTreeNode(RuleTreeNode*);
 void DestroyRuleTreeNode(RuleTreeNode*);

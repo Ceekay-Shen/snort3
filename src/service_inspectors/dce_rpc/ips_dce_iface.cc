@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -29,7 +29,7 @@
 #include "framework/module.h"
 #include "framework/ips_option.h"
 #include "framework/range.h"
-#include "hash/hashfcn.h"
+#include "hash/hash_key_operations.h"
 #include "profiler/profiler.h"
 #include "target_based/snort_protocols.h"
 #include "utils/util.h"

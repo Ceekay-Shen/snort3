@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2013-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -26,10 +26,12 @@
 #include <sys/types.h>
 
 #include <list>
+#include <unordered_map>
 #include <vector>
 
 #include "events/event_queue.h"
 #include "framework/bits.h"
+#include "helpers/scratch_allocator.h"
 #include "main/policy.h"
 #include "main/thread.h"
 #include "sfip/sf_cidr.h"
@@ -40,8 +42,8 @@ enum RunFlag
 {
     RUN_FLAG__READ                = 0x00000001,
     RUN_FLAG__DAEMON              = 0x00000002,
-    RUN_FLAG__NO_PROMISCUOUS      = 0x00000004,
-    // unused                     = 0x00000008,
+    RUN_FLAG__DUMP_MSG_MAP        = 0x00000004,
+    RUN_FLAG__DUMP_RULE_META      = 0x00000008,
 
     RUN_FLAG__INLINE              = 0x00000010,
     RUN_FLAG__STATIC_HASH         = 0x00000020,
@@ -66,7 +68,7 @@ enum RunFlag
     RUN_FLAG__ASSURE_EST          = 0x00080000,
 
     RUN_FLAG__TREAT_DROP_AS_IGNORE= 0x00100000,
-    RUN_FLAG__PCAP_RELOAD         = 0x00200000,
+    RUN_FLAG__DUMP_RULE_DEPS      = 0x00200000,
     RUN_FLAG__TEST                = 0x00400000,
 #ifdef SHELL
     RUN_FLAG__SHELL               = 0x00800000,
@@ -77,6 +79,8 @@ enum RunFlag
     RUN_FLAG__MEM_CHECK           = 0x02000000,
     RUN_FLAG__TRACK_ON_SYN        = 0x04000000,
     RUN_FLAG__IP_FRAGS_ONLY       = 0x08000000,
+
+    RUN_FLAG__DUMP_RULE_STATE     = 0x10000000,
 };
 
 enum OutputFlag
@@ -117,48 +121,49 @@ enum TunnelFlags
     TUNNEL_4IN4   = 0x10,
     TUNNEL_6IN6   = 0x20,
     TUNNEL_GRE    = 0x40,
-    TUNNEL_MPLS   = 0x80
+    TUNNEL_MPLS   = 0x80,
+    TUNNEL_VXLAN  = 0x100
 };
 
 class FastPatternConfig;
 class RuleStateMap;
 class ThreadConfig;
+class TraceConfig;
 
 struct srmm_table_t;
 struct sopg_table_t;
 struct ClassType;
 struct DetectionFilterConfig;
 struct EventQueueConfig;
-struct FlowBitState;
 struct FrameworkConfig;
 struct HighAvailabilityConfig;
 struct IpsActionsConfig;
 struct LatencyConfig;
 struct MemoryConfig;
+struct Plugins;
 struct PORT_RULE_MAP;
 struct RateFilterConfig;
-struct ReferenceSystemNode;
+struct ReferenceSystem;
 struct RuleListNode;
 struct RulePortTables;
 struct SFDAQConfig;
+struct SoRules;
 struct ThresholdConfig;
 struct VarNode;
 
 namespace snort
 {
+class GHash;
 class ProtocolReference;
+class XHash;
 struct ProfilerConfig;
-struct GHash;
-struct XHash;
-struct SnortConfig;
-
-typedef void (* ScScratchFunc)(SnortConfig* sc);
 
 class ReloadResourceTuner
 {
 public:
     static const unsigned RELOAD_MAX_WORK_PER_PACKET = 3;
-    static const unsigned RELOAD_MAX_WORK_WHEN_IDLE = 10;
+    // be aggressive when idle as analyzer gets chance once in every second only due to daq timeout
+    static const unsigned RELOAD_MAX_WORK_WHEN_IDLE = 32767;
 
     virtual ~ReloadResourceTuner() = default;
 
@@ -180,7 +185,6 @@ struct SnortConfig
 {
 private:
     void init(const SnortConfig* const, ProtocolReference*);
-    bool verify_stream_inspectors();
 
 public:
     SnortConfig(const SnortConfig* const other_conf = nullptr);
@@ -191,7 +195,7 @@ public:
 
     void setup();
     void post_setup();
-    bool verify();
+    bool verify() const;
 
     void merge(SnortConfig*);
     void clone(const SnortConfig* const);
@@ -211,7 +215,7 @@ public:
     //------------------------------------------------------
     // output module stuff
 #ifdef REG_TEST
-    // FIXIT-H builtin modules should set SnortConfig defaults instead
+    // FIXIT-M builtin modules should set SnortConfig defaults instead
     uint32_t output_flags = OUTPUT_FLAG__WIDE_HEX;
 #else
     uint32_t output_flags = 0;
@@ -233,13 +237,20 @@ public:
     // somehow a packet thread needs a much lower setting
     long int pcre_match_limit = 1500;
     long int pcre_match_limit_recursion = 1500;
+
     int pcre_ovector_size = 0;
+    bool pcre_override = true;
 
     int asn1_mem = 0;
     uint32_t run_flags = 0;
 
     unsigned offload_limit = 99999;  // disabled
     unsigned offload_threads = 0;    // disabled
+
+#ifdef HAVE_HYPERSCAN
+    bool hyperscan_literals = false;
+    bool pcre_to_regex = false;
+#endif
 
     bool global_rule_state = false;
     bool global_default_rule_state = true;
@@ -263,8 +274,6 @@ public:
 
     //------------------------------------------------------
     // decode module stuff
-    PortBitSet* gtp_ports = nullptr;
-
     int mpls_stack_depth = 0;
 
     uint8_t mpls_payload_type = 0;
@@ -272,7 +281,6 @@ public:
     uint8_t max_ip6_extensions = 0;
     uint8_t max_ip_layers = 0;
 
-    bool enable_teredo = false;
     bool enable_esp = false;
     bool address_anomaly_check_enabled = false;
 
@@ -288,6 +296,7 @@ public:
 
     //------------------------------------------------------
     // attribute tables stuff
+    std::string attribute_hosts_file;
     uint32_t max_attribute_hosts = 0;
     uint32_t max_attribute_services_per_host = 0;
     uint32_t max_metadata_services = 0;
@@ -312,7 +321,6 @@ public:
     ThresholdConfig* threshold_config = nullptr;
     RateFilterConfig* rate_filter_config = nullptr;
     DetectionFilterConfig* detection_filter_config = nullptr;
-    FlowBitState* flowbit_state = nullptr;
 
     //------------------------------------------------------
     // FIXIT-L command line only stuff, add to conf / module
@@ -320,6 +328,7 @@ public:
     uint32_t event_log_id = 0;
     SfCidr obfuscation_net;
     std::string bpf_filter;
+    std::string metadata_filter;
 
     //------------------------------------------------------
     // FIXIT-L non-module stuff - separate config from derived state?
@@ -335,14 +344,15 @@ public:
 
     int thiszone = 0;
 
+    std::unordered_map<std::string, ClassType*> classifications;
+    std::unordered_map<std::string, ReferenceSystem*> references;
+
     RuleStateMap* rule_states = nullptr;
-    ClassType* classifications = nullptr;
-    ReferenceSystemNode* references = nullptr;
     GHash* otn_map = nullptr;
 
     ProtocolReference* proto_ref = nullptr;
 
-    int num_rule_types = 0;
+    unsigned num_rule_types = 0;
     RuleListNode* rule_lists = nullptr;
     int evalOrder[Actions::MAX + 1];
 
@@ -379,7 +389,7 @@ public:
 
     DataBus* global_dbus = nullptr;
 
-    uint8_t tunnel_mask = 0;
+    uint16_t tunnel_mask = 0;
 
     // FIXIT-L this is temporary for legacy paf_max required only for HI;
     // it is not appropriate for multiple stream_tcp with different
@@ -396,17 +406,23 @@ public:
     MemoryConfig* memory = nullptr;
     //------------------------------------------------------
 
+    std::vector<ScratchAllocator*> scratchers;
     std::vector<void *>* state = nullptr;
     unsigned num_slots = 0;
 
     ThreadConfig* thread_config;
     HighAvailabilityConfig* ha_config = nullptr;
+    TraceConfig* trace_config = nullptr;
+
+    // TraceConfig instance which used by TraceSwap control channel command
+    TraceConfig* overlay_trace_config = nullptr;
 
     //------------------------------------------------------
     //Reload inspector related
 
     bool cloned = false;
-
+    Plugins* plugins = nullptr;
+    SoRules* so_rules = nullptr;
 private:
     std::list<ReloadResourceTuner*> reload_tuners;
 
@@ -459,242 +475,196 @@ public:
     void set_umask(uint32_t);
     void set_utc(bool);
     void set_verbose(bool);
+    void set_overlay_trace_config(TraceConfig*);
 
     //------------------------------------------------------
-    // Static convenience accessor methods
+    // accessor methods
 
-    static long int get_mpls_stack_depth()
-    { return get_conf()->mpls_stack_depth; }
+    long int get_mpls_stack_depth() const
+    { return mpls_stack_depth; }
 
-    static long int get_mpls_payload_type()
-    { return get_conf()->mpls_payload_type; }
+    long int get_mpls_payload_type() const
+    { return mpls_payload_type; }
 
-    static bool mpls_overlapping_ip()
-    { return get_conf()->run_flags & RUN_FLAG__MPLS_OVERLAPPING_IP; }
+    bool mpls_overlapping_ip() const
+    { return run_flags & RUN_FLAG__MPLS_OVERLAPPING_IP; }
 
-    static bool mpls_multicast()
-    { return get_conf()->run_flags & RUN_FLAG__MPLS_MULTICAST; }
+    bool mpls_multicast() const
+    { return run_flags & RUN_FLAG__MPLS_MULTICAST; }
 
-    static bool deep_teredo_inspection()
-    { return get_conf()->enable_teredo; }
+    bool esp_decoding() const
+    { return enable_esp; }
 
-    static bool gtp_decoding()
-    { return get_conf()->gtp_ports; }
-
-    static bool is_gtp_port(uint16_t port)
-    { return get_conf()->gtp_ports->test(port); }
-
-    static bool esp_decoding()
-    { return get_conf()->enable_esp; }
-
-    static bool is_address_anomaly_check_enabled()
-    { return get_conf()->address_anomaly_check_enabled; }
+    bool is_address_anomaly_check_enabled() const
+    { return address_anomaly_check_enabled; }
 
     // mode related
-    static bool test_mode()
-    { return get_conf()->run_flags & RUN_FLAG__TEST; }
+    bool dump_msg_map() const
+    { return run_flags & RUN_FLAG__DUMP_MSG_MAP; }
 
-    static bool mem_check()
-    { return get_conf()->run_flags & RUN_FLAG__MEM_CHECK; }
+    bool dump_rule_meta() const
+    { return run_flags & RUN_FLAG__DUMP_RULE_META; }
 
-    static bool daemon_mode()
-    { return get_conf()->run_flags & RUN_FLAG__DAEMON; }
+    bool dump_rule_state() const
+    { return run_flags & RUN_FLAG__DUMP_RULE_STATE; }
 
-    static bool read_mode()
-    { return get_conf()->run_flags & RUN_FLAG__READ; }
+    bool dump_rule_deps() const
+    { return run_flags & RUN_FLAG__DUMP_RULE_DEPS; }
 
-    static bool inline_mode()
-    { return snort::get_ips_policy()->policy_mode == POLICY_MODE__INLINE; }
+    bool dump_rule_info() const
+    { return dump_msg_map() or dump_rule_meta() or dump_rule_deps() or dump_rule_state(); }
 
-    static bool inline_test_mode()
-    { return snort::get_ips_policy()->policy_mode == POLICY_MODE__INLINE_TEST; }
+    bool test_mode() const
+    { return run_flags & RUN_FLAG__TEST; }
 
-    static bool show_file_codes()
-    { return get_conf()->run_flags & RUN_FLAG__SHOW_FILE_CODES; }
+    bool mem_check() const
+    { return run_flags & RUN_FLAG__MEM_CHECK; }
 
-    static bool adaptor_inline_mode()
-    { return get_conf()->run_flags & RUN_FLAG__INLINE; }
+    bool daemon_mode() const
+    { return run_flags & RUN_FLAG__DAEMON; }
 
-    static bool adaptor_inline_test_mode()
-    { return get_conf()->run_flags & RUN_FLAG__INLINE_TEST; }
+    bool read_mode() const
+    { return run_flags & RUN_FLAG__READ; }
+
+    bool inline_mode() const
+    { return get_ips_policy()->policy_mode == POLICY_MODE__INLINE; }
+
+    bool inline_test_mode() const
+    { return get_ips_policy()->policy_mode == POLICY_MODE__INLINE_TEST; }
+
+    bool show_file_codes() const
+    { return run_flags & RUN_FLAG__SHOW_FILE_CODES; }
+
+    bool adaptor_inline_mode() const
+    { return run_flags & RUN_FLAG__INLINE; }
+
+    bool adaptor_inline_test_mode() const
+    { return run_flags & RUN_FLAG__INLINE_TEST; }
 
     // logging stuff
-    static bool log_syslog()
-    { return get_conf()->logging_flags & LOGGING_FLAG__SYSLOG; }
+    bool log_syslog() const
+    { return logging_flags & LOGGING_FLAG__SYSLOG; }
 
-    static bool log_verbose()
-    { return get_conf()->logging_flags & LOGGING_FLAG__VERBOSE; }
+    bool log_verbose() const
+    { return logging_flags & LOGGING_FLAG__VERBOSE; }
 
-    static bool log_quiet()
-    { return get_conf()->logging_flags & LOGGING_FLAG__QUIET; }
+    bool log_quiet() const
+    { return logging_flags & LOGGING_FLAG__QUIET; }
 
     // event stuff
-    static uint32_t get_event_log_id()
-    { return get_conf()->event_log_id; }
+    uint32_t get_event_log_id() const
+    { return event_log_id; }
 
-    static bool process_all_events()
-    { return get_conf()->event_queue_config->process_all_events; }
+    bool process_all_events() const
+    { return event_queue_config->process_all_events; }
 
-    static int get_eval_index(Actions::Type type)
-    { return get_conf()->evalOrder[type]; }
-
-    static bool get_default_rule_state()
-    {
-        switch ( get_ips_policy()->default_rule_state )
-        {
-            case IpsPolicy::INHERIT_ENABLE:
-                return get_conf()->global_default_rule_state;
-
-            case IpsPolicy::ENABLED:
-                return true;
-
-            case IpsPolicy::DISABLED:
-                return false;
-        }
-        return true;
-    }
-
-    SO_PUBLIC static bool tunnel_bypass_enabled(uint8_t proto);
-
-    // checksum stuff
-    static bool checksum_drop(uint16_t codec_cksum_err_flag)
-    { return snort::get_network_policy()->checksum_drop & codec_cksum_err_flag; }
-
-    static bool ip_checksums()
-    { return snort::get_network_policy()->checksum_eval & CHECKSUM_FLAG__IP; }
-
-    static bool ip_checksum_drops()
-    { return snort::get_network_policy()->checksum_drop & CHECKSUM_FLAG__IP; }
-
-    static bool udp_checksums()
-    { return snort::get_network_policy()->checksum_eval & CHECKSUM_FLAG__UDP; }
-
-    static bool udp_checksum_drops()
-    { return snort::get_network_policy()->checksum_drop & CHECKSUM_FLAG__UDP; }
-
-    static bool tcp_checksums()
-    { return snort::get_network_policy()->checksum_eval & CHECKSUM_FLAG__TCP; }
-
-    static bool tcp_checksum_drops()
-    { return snort::get_network_policy()->checksum_drop & CHECKSUM_FLAG__TCP; }
-
-    static bool icmp_checksums()
-    { return snort::get_network_policy()->checksum_eval & CHECKSUM_FLAG__ICMP; }
-
-    static bool icmp_checksum_drops()
-    { return snort::get_network_policy()->checksum_drop & CHECKSUM_FLAG__ICMP; }
+    int get_eval_index(Actions::Type type) const
+    { return evalOrder[type]; }
 
     // output stuff
-    static bool output_include_year()
-    { return get_conf()->output_flags & OUTPUT_FLAG__INCLUDE_YEAR; }
+    bool output_include_year() const
+    { return output_flags & OUTPUT_FLAG__INCLUDE_YEAR; }
 
-    static bool output_use_utc()
-    { return get_conf()->output_flags & OUTPUT_FLAG__USE_UTC; }
+    bool output_use_utc() const
+    { return output_flags & OUTPUT_FLAG__USE_UTC; }
 
-    static bool output_datalink()
-    { return get_conf()->output_flags & OUTPUT_FLAG__SHOW_DATA_LINK; }
+    bool output_datalink() const
+    { return output_flags & OUTPUT_FLAG__SHOW_DATA_LINK; }
 
-    static bool verbose_byte_dump()
-    { return get_conf()->output_flags & OUTPUT_FLAG__VERBOSE_DUMP; }
+    bool verbose_byte_dump() const
+    { return output_flags & OUTPUT_FLAG__VERBOSE_DUMP; }
 
-    static bool obfuscate()
-    { return get_conf()->output_flags & OUTPUT_FLAG__OBFUSCATE; }
+    bool obfuscate() const
+    { return output_flags & OUTPUT_FLAG__OBFUSCATE; }
 
-    static bool output_app_data()
-    { return get_conf()->output_flags & OUTPUT_FLAG__APP_DATA; }
+    bool output_app_data() const
+    { return output_flags & OUTPUT_FLAG__APP_DATA; }
 
-    static bool output_char_data()
-    { return get_conf()->output_flags & OUTPUT_FLAG__CHAR_DATA; }
+    bool output_char_data() const
+    { return output_flags & OUTPUT_FLAG__CHAR_DATA; }
 
-    static bool alert_interface()
-    { return get_conf()->output_flags & OUTPUT_FLAG__ALERT_IFACE; }
+    bool alert_interface() const
+    { return output_flags & OUTPUT_FLAG__ALERT_IFACE; }
 
-    static bool output_no_timestamp()
-    { return get_conf()->output_flags & OUTPUT_FLAG__NO_TIMESTAMP; }
+    bool output_no_timestamp() const
+    { return output_flags & OUTPUT_FLAG__NO_TIMESTAMP; }
 
-    static bool line_buffered_logging()
-    { return get_conf()->output_flags & OUTPUT_FLAG__LINE_BUFFER; }
+    bool line_buffered_logging() const
+    { return output_flags & OUTPUT_FLAG__LINE_BUFFER; }
 
-    static bool output_wide_hex()
-    { return get_conf()->output_flags & OUTPUT_FLAG__WIDE_HEX; }
+    bool output_wide_hex() const
+    { return output_flags & OUTPUT_FLAG__WIDE_HEX; }
 
-    static bool alert_refs()
-    { return get_conf()->output_flags & OUTPUT_FLAG__ALERT_REFS; }
+    bool alert_refs() const
+    { return output_flags & OUTPUT_FLAG__ALERT_REFS; }
 
     // run flags
-    static bool no_lock_pid_file()
-    { return get_conf()->run_flags & RUN_FLAG__NO_LOCK_PID_FILE; }
+    bool no_lock_pid_file() const
+    { return run_flags & RUN_FLAG__NO_LOCK_PID_FILE; }
 
-    static bool create_pid_file()
-    { return get_conf()->run_flags & RUN_FLAG__CREATE_PID_FILE; }
+    bool create_pid_file() const
+    { return run_flags & RUN_FLAG__CREATE_PID_FILE; }
 
-    static bool pcap_show()
-    { return get_conf()->run_flags & RUN_FLAG__PCAP_SHOW; }
+    bool pcap_show() const
+    { return run_flags & RUN_FLAG__PCAP_SHOW; }
 
-    static bool treat_drop_as_alert()
-    { return get_conf()->run_flags & RUN_FLAG__TREAT_DROP_AS_ALERT; }
+    bool treat_drop_as_alert() const
+    { return run_flags & RUN_FLAG__TREAT_DROP_AS_ALERT; }
 
-    static bool treat_drop_as_ignore()
-    { return get_conf()->run_flags & RUN_FLAG__TREAT_DROP_AS_IGNORE; }
+    bool treat_drop_as_ignore() const
+    { return run_flags & RUN_FLAG__TREAT_DROP_AS_IGNORE; }
 
-    static bool alert_before_pass()
-    { return get_conf()->run_flags & RUN_FLAG__ALERT_BEFORE_PASS; }
+    bool alert_before_pass() const
+    { return run_flags & RUN_FLAG__ALERT_BEFORE_PASS; }
 
-    static bool no_pcre()
-    { return get_conf()->run_flags & RUN_FLAG__NO_PCRE; }
+    bool no_pcre() const
+    { return run_flags & RUN_FLAG__NO_PCRE; }
 
-    static bool conf_error_out()
-    { return get_conf()->run_flags & RUN_FLAG__CONF_ERROR_OUT; }
+    bool conf_error_out() const
+    { return run_flags & RUN_FLAG__CONF_ERROR_OUT; }
 
-    static bool assure_established()
-    { return get_conf()->run_flags & RUN_FLAG__ASSURE_EST; }
-
-    // FIXIT-L snort_conf needed for static hash before initialized
-    static bool static_hash()
-    { return get_conf() && get_conf()->run_flags & RUN_FLAG__STATIC_HASH; }
+    bool assure_established() const
+    { return run_flags & RUN_FLAG__ASSURE_EST; }
 
     // other stuff
-    static uint8_t min_ttl()
-    { return snort::get_network_policy()->min_ttl; }
+    uint8_t min_ttl() const
+    { return get_network_policy()->min_ttl; }
 
-    static uint8_t new_ttl()
-    { return snort::get_network_policy()->new_ttl; }
+    uint8_t new_ttl() const
+    { return get_network_policy()->new_ttl; }
 
-    static long int get_pcre_match_limit()
-    { return get_conf()->pcre_match_limit; }
+    long int get_pcre_match_limit() const
+    { return pcre_match_limit; }
 
-    static long int get_pcre_match_limit_recursion()
-    { return get_conf()->pcre_match_limit_recursion; }
+    long int get_pcre_match_limit_recursion() const
+    { return pcre_match_limit_recursion; }
 
-    static const ProfilerConfig* get_profiler()
-    { return get_conf()->profiler; }
+    const ProfilerConfig* get_profiler() const
+    { return profiler; }
 
-    static long int get_tagged_packet_limit()
-    { return get_conf()->tagged_packet_limit; }
+    long int get_tagged_packet_limit() const
+    { return tagged_packet_limit; }
 
-    static uint32_t get_max_attribute_hosts()
-    { return get_conf()->max_attribute_hosts; }
+    uint32_t get_max_attribute_hosts() const
+    { return max_attribute_hosts; }
 
-    static uint32_t get_max_services_per_host()
-    { return get_conf()->max_attribute_services_per_host; }
+    uint32_t get_max_services_per_host() const
+    { return max_attribute_services_per_host; }
 
-    static int get_uid()
-    { return get_conf()->user_id; }
+    int get_uid() const
+    { return user_id; }
 
-    static int get_gid()
-    { return get_conf()->group_id; }
+    int get_gid() const
+    { return group_id; }
 
-    static bool get_vlan_agnostic()
-    { return get_conf()->vlan_agnostic; }
+    bool get_vlan_agnostic() const
+    { return vlan_agnostic; }
 
-    static bool address_space_agnostic()
-    { return get_conf()->addressspace_agnostic; }
+    bool address_space_agnostic() const
+    { return addressspace_agnostic; }
 
-    static bool change_privileges()
-    {
-        return get_conf()->user_id != -1 || get_conf()->group_id != -1 ||
-            !get_conf()->chroot_dir.empty();
-    }
+    bool change_privileges() const
+    { return user_id != -1 || group_id != -1 || !chroot_dir.empty(); }
 
     bool track_on_syn() const
     { return (run_flags & RUN_FLAG__TRACK_ON_SYN) != 0; }
@@ -708,25 +678,38 @@ public:
     void set_run_flags(RunFlag flag)
     { run_flags |= flag; }
 
-    // This requests an entry in the scratch space vector and calls setup /
-    // cleanup as appropriate
-    SO_PUBLIC static int request_scratch(ScScratchFunc setup, ScScratchFunc cleanup);
-
-    // Use this to access current thread's conf from other units
-    static void set_conf(SnortConfig*);
-    static void set_parser_conf(SnortConfig*);
-
-    SO_PUBLIC static SnortConfig* get_conf();
-    SO_PUBLIC static SnortConfig* get_parser_conf();  // main thread only!
-
-    SO_PUBLIC void register_reload_resource_tuner(ReloadResourceTuner& rrt)
-    { reload_tuners.push_back(&rrt); }
-
     const std::list<ReloadResourceTuner*>& get_reload_resource_tuners() const
     { return reload_tuners; }
 
     void clear_reload_resource_tuner_list()
     { reload_tuners.clear(); }
+
+    bool get_default_rule_state() const;
+
+    SO_PUBLIC bool tunnel_bypass_enabled(uint16_t proto) const;
+
+    // FIXIT-L snort_conf needed for static hash before initialized
+    static bool static_hash()
+    { return get_conf() && get_conf()->run_flags & RUN_FLAG__STATIC_HASH; }
+
+    // This requests an entry in the scratch space vector and calls setup /
+    // cleanup as appropriate
+    SO_PUBLIC static int request_scratch(ScratchAllocator*);
+    SO_PUBLIC static void release_scratch(int);
+
+    // runtime access to const config - especially for packet threads
+    // prefer access via packet->context->conf
+    SO_PUBLIC static const SnortConfig* get_conf();
+
+    // runtime access to mutable config - main thread only, and only special cases
+    SO_PUBLIC static SnortConfig* get_main_conf();
+    
+    static void set_conf(const SnortConfig*);
+
+    SO_PUBLIC void register_reload_resource_tuner(ReloadResourceTuner& rrt)
+    { reload_tuners.push_back(&rrt); }
+
+    static void cleanup_fatal_error();
 };
 }
 

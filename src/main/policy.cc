@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2013-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -23,6 +23,7 @@
 
 #include "policy.h"
 
+#include "actions/actions.h"
 #include "detection/detection_engine.h"
 #include "log/messages.h"
 #include "managers/inspector_manager.h"
@@ -80,6 +81,8 @@ void InspectionPolicy::init(InspectionPolicy* other_inspection_policy)
 {
     framework_policy = nullptr;
     cloned = false;
+    if (other_inspection_policy)
+        policy_id = other_inspection_policy->policy_id;
 
     InspectorManager::new_policy(this, other_inspection_policy);
 }
@@ -106,7 +109,7 @@ void InspectionPolicy::clone_dbus(SnortConfig* from, const char* exclude_module)
 // detection policy
 //-------------------------------------------------------------------------
 
-IpsPolicy::IpsPolicy(PolicyId id)
+IpsPolicy::IpsPolicy(PolicyId id) : action(Actions::Type::MAX, nullptr)
 {
     policy_id = id;
     user_policy_id = 0;
@@ -296,7 +299,13 @@ InspectionPolicy* get_inspection_policy()
 IpsPolicy* get_ips_policy()
 { return s_detection_policy; }
 
-InspectionPolicy* get_default_inspection_policy(SnortConfig* sc)
+IpsPolicy* get_ips_policy(const SnortConfig* sc, unsigned i)
+{
+    return sc && i < sc->policy_map->ips_policy_count() ?
+        sc->policy_map->get_ips_policy(i) : nullptr;
+}
+
+InspectionPolicy* get_default_inspection_policy(const SnortConfig* sc)
 { return sc->policy_map->get_inspection_policy(0); }
 
 void set_ips_policy(IpsPolicy* p)
@@ -305,23 +314,23 @@ void set_ips_policy(IpsPolicy* p)
 void set_network_policy(NetworkPolicy* p)
 { s_traffic_policy = p; }
 
-IpsPolicy* get_user_ips_policy(SnortConfig* sc, unsigned policy_id)
+IpsPolicy* get_user_ips_policy(const SnortConfig* sc, unsigned policy_id)
 {
     return sc->policy_map->get_user_ips(policy_id);
 }
 
-IpsPolicy* get_empty_ips_policy(SnortConfig* sc)
+IpsPolicy* get_empty_ips_policy(const SnortConfig* sc)
 {
     return sc->policy_map->get_empty_ips();
 }
 
-NetworkPolicy* get_user_network_policy(SnortConfig* sc, unsigned policy_id)
+NetworkPolicy* get_user_network_policy(const SnortConfig* sc, unsigned policy_id)
 {
     return sc->policy_map->get_user_network(policy_id);
 }
 } // namespace snort
 
-void set_network_policy(SnortConfig* sc, unsigned i)
+void set_network_policy(const SnortConfig* sc, unsigned i)
 {
     PolicyMap* pm = sc->policy_map;
 
@@ -332,7 +341,7 @@ void set_network_policy(SnortConfig* sc, unsigned i)
 void set_inspection_policy(InspectionPolicy* p)
 { s_inspection_policy = p; }
 
-void set_inspection_policy(SnortConfig* sc, unsigned i)
+void set_inspection_policy(const SnortConfig* sc, unsigned i)
 {
     PolicyMap* pm = sc->policy_map;
 
@@ -340,7 +349,7 @@ void set_inspection_policy(SnortConfig* sc, unsigned i)
         set_inspection_policy(pm->get_inspection_policy(i));
 }
 
-void set_ips_policy(SnortConfig* sc, unsigned i)
+void set_ips_policy(const SnortConfig* sc, unsigned i)
 {
     PolicyMap* pm = sc->policy_map;
 
@@ -348,7 +357,7 @@ void set_ips_policy(SnortConfig* sc, unsigned i)
         set_ips_policy(pm->get_ips_policy(i));
 }
 
-void set_policies(SnortConfig* sc, Shell* sh)
+void set_policies(const SnortConfig* sc, Shell* sh)
 {
     auto policies = sc->policy_map->get_policies(sh);
 
@@ -362,15 +371,12 @@ void set_policies(SnortConfig* sc, Shell* sh)
         set_network_policy(policies->network);
 }
 
-void set_default_policy(SnortConfig* sc)
+void set_default_policy(const SnortConfig* sc)
 {
     set_network_policy(sc->policy_map->get_network_policy(0));
     set_inspection_policy(sc->policy_map->get_inspection_policy(0));
     set_ips_policy(sc->policy_map->get_ips_policy(0));
 }
-
-void set_default_policy()
-{ set_default_policy(SnortConfig::get_conf()); }
 
 bool default_inspection_policy()
 {
@@ -391,3 +397,4 @@ bool only_ips_policy()
 
 bool only_network_policy()
 { return get_network_policy() && !get_ips_policy() && !get_inspection_policy(); }
+

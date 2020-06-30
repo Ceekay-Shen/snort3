@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -27,7 +27,10 @@
 // state.  Inspector state is stored in FlowData, and Flow manages a list
 // of FlowData items.
 
+#include <sys/time.h>
+
 #include "detection/ips_context_chain.h"
+#include "flow/flow_data.h"
 #include "flow/flow_stash.h"
 #include "framework/data_bus.h"
 #include "framework/decode_data.h"
@@ -106,40 +109,36 @@ struct Packet;
 
 typedef void (* StreamAppDataFree)(void*);
 
-class SO_PUBLIC FlowData
+struct FilteringState
 {
-public:
-    FlowData(unsigned u, Inspector* = nullptr);
-    virtual ~FlowData();
+    uint8_t generation_id = 0;
+    bool matched = false;
 
-    unsigned get_id()
-    { return id; }
+    void clear()
+    {
+        generation_id = 0;
+        matched = false;
+    }
 
-    static unsigned create_flow_data_id()
-    { return ++flow_data_id; }
+    bool was_checked(uint8_t id) const
+    {
+        return generation_id and (generation_id == id);
+    }
 
-    void update_allocations(size_t);
-    void update_deallocations(size_t);
-    Inspector* get_handler() { return handler; }
+    void set_matched(uint8_t id, bool match)
+    {
+        generation_id = id;
+        matched = match;
+    }
+};
 
-    // return fixed size (could be an approx avg)
-    // this must be fixed for life of flow data instance
-    // track significant supplemental allocations with the above updaters
-    virtual size_t size_of() = 0;
-
-    virtual void handle_expected(Packet*) { }
-    virtual void handle_retransmit(Packet*) { }
-    virtual void handle_eof(Packet*) { }
-
-public:  // FIXIT-L privatize
-    FlowData* next;
-    FlowData* prev;
-
-private:
-    static unsigned flow_data_id;
-    Inspector* handler;
-    size_t mem_in_use = 0;
-    unsigned id;
+struct FlowStats
+{
+    uint64_t client_pkts;
+    uint64_t server_pkts;
+    uint64_t client_bytes;
+    uint64_t server_bytes;
+    struct timeval start_time;
 };
 
 struct LwState
@@ -200,6 +199,7 @@ public:
     void set_ttl(Packet*, bool client);
     void set_mpls_layer_per_dir(Packet*);
     Layer get_mpls_layer_per_dir(bool);
+    void swap_roles();
     void set_service(Packet* pkt, const char* new_service);
     bool get_attr(const std::string& key, int32_t& val);
     bool get_attr(const std::string& key, std::string& val);
@@ -227,17 +227,17 @@ public:
         stash->store(key, val);
     }
 
-    uint32_t update_session_flags(uint32_t flags)
-    { return ssn_state.session_flags = flags; }
+    uint32_t update_session_flags(uint32_t ssn_flags)
+    { return ssn_state.session_flags = ssn_flags; }
 
-    uint32_t set_session_flags(uint32_t flags)
-    { return ssn_state.session_flags |= flags; }
+    uint32_t set_session_flags(uint32_t ssn_flags)
+    { return ssn_state.session_flags |= ssn_flags; }
 
     uint32_t get_session_flags()
     { return ssn_state.session_flags; }
 
-    uint32_t clear_session_flags(uint32_t flags)
-    { return ssn_state.session_flags &= ~flags; }
+    uint32_t clear_session_flags(uint32_t ssn_flags)
+    { return ssn_state.session_flags &= ~ssn_flags; }
 
     void set_to_client_detection(bool enable);
     void set_to_server_detection(bool enable);
@@ -340,10 +340,10 @@ public:
     }
 
     void disable_inspection()
-    { disable_inspect = true; }
+    { flags.disable_inspect = true; }
 
     bool is_inspection_disabled() const
-    { return disable_inspect; }
+    { return flags.disable_inspect; }
 
     bool is_suspended() const
     { return context_chain.front(); }
@@ -362,7 +362,15 @@ public:
 
     void set_deferred_whitelist(DeferredWhitelist defer_state)
     {
-        deferred_whitelist = defer_state;
+        if (defer_state == WHITELIST_DEFER_DONE )
+        {
+            if (deferred_whitelist == WHITELIST_DEFER_STARTED )
+                deferred_whitelist = WHITELIST_DEFER_DONE;
+            else
+                deferred_whitelist = WHITELIST_DEFER_OFF;
+        }
+        else
+            deferred_whitelist = defer_state;
     }
 
     DeferredWhitelist get_deferred_whitelist_state()
@@ -395,6 +403,14 @@ public:  // FIXIT-M privatize if possible
     // everything from here down is zeroed
     IpsContextChain context_chain;
     FlowData* flow_data;
+    FlowStats flowstats;
+
+    SfIp client_ip;
+    SfIp server_ip;
+
+    LwState ssn_state;
+    LwState previous_ssn_state;
+
     Inspector* clouseau;  // service identifier
     Inspector* gadget;    // service handler
     Inspector* assistant_gadget;
@@ -403,12 +419,8 @@ public:  // FIXIT-M privatize if possible
 
     uint64_t expire_time;
 
-    SfIp client_ip;
-    SfIp server_ip;
+    DeferredWhitelist deferred_whitelist = WHITELIST_DEFER_OFF;
 
-    LwState ssn_state;
-    LwState previous_ssn_state;
-    FlowState flow_state;
     unsigned inspection_policy_id;
     unsigned ips_policy_id;
     unsigned network_policy_id;
@@ -427,10 +439,23 @@ public:  // FIXIT-M privatize if possible
 
     uint8_t response_count;
 
-    bool disable_inspect;
-    bool trigger_finalize_event;
+    struct
+    {
+        bool client_initiated : 1; // Set if the first packet on the flow was from the side that is currently
+                                   // considered to be the client
+        bool disable_inspect : 1;
+        bool reputation_src_dest : 1;
+        bool reputation_blacklist : 1;
+        bool reputation_monitor : 1;
+        bool reputation_whitelist : 1;
+        bool trigger_detained_packet_event : 1;
+        bool trigger_finalize_event : 1;
+        bool use_direct_inject : 1;
+    } flags;
 
-    DeferredWhitelist deferred_whitelist = WHITELIST_DEFER_OFF;
+    FlowState flow_state;
+
+    FilteringState filtering_state;
 
 private:
     void clean();

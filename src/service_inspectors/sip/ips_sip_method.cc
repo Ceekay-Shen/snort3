@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2011-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -30,7 +30,7 @@
 
 #include "framework/ips_option.h"
 #include "framework/module.h"
-#include "hash/hashfcn.h"
+#include "hash/hash_key_operations.h"
 #include "log/messages.h"
 #include "profiler/profiler.h"
 #include "protocols/packet.h"
@@ -127,7 +127,7 @@ IpsOption::EvalStatus SipMethodOption::eval(Cursor&, Packet* p)
         std::transform(method.begin(), method.end(), method.begin(), ::toupper);
 
         bool negated = methods.begin()->second;
-        bool match = methods.find(method) != methods.cend(); 
+        bool match = methods.find(method) != methods.cend();
 
         if ( negated ^ match )
             return MATCH;

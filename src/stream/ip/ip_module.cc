@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -26,9 +26,12 @@
 
 #include "ip_session.h"
 #include "stream_ip.h"
+#include "trace/trace.h"
 
 using namespace snort;
 using namespace std;
+
+THREAD_LOCAL const Trace* stream_ip_trace = nullptr;
 
 #define DEFRAG_IPOPTIONS_STR \
     "inconsistent IP options on fragmented packets"
@@ -81,8 +84,6 @@ FragEngine::FragEngine()
 // stream_ip module
 //-------------------------------------------------------------------------
 
-Trace TRACE_NAME(stream_ip);
-
 static const RuleMap stream_ip_rules[] =
 {
     { DEFRAG_IPOPTIONS, DEFRAG_IPOPTIONS_STR },
@@ -123,14 +124,24 @@ static const Parameter s_params[] =
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
 };
 
-StreamIpModule::StreamIpModule() :
-    Module(MOD_NAME, MOD_HELP, s_params, false, &TRACE_NAME(stream_ip))
-{ config = nullptr; }
+StreamIpModule::StreamIpModule() : Module(MOD_NAME, MOD_HELP, s_params)
+{
+    config = nullptr;
+}
 
 StreamIpModule::~StreamIpModule()
 {
     if ( config )
         delete config;
+}
+
+void StreamIpModule::set_trace(const Trace* trace) const
+{ stream_ip_trace = trace; }
+
+const TraceOption* StreamIpModule::get_trace_options() const
+{
+    static const TraceOption stream_ip_trace_options(nullptr, 0, nullptr);
+    return &stream_ip_trace_options;
 }
 
 const RuleMap* StreamIpModule::get_rules() const
@@ -146,7 +157,7 @@ StreamIpConfig* StreamIpModule::get_data()
     return temp;
 }
 
-bool StreamIpModule::set(const char* f, Value& v, SnortConfig* c)
+bool StreamIpModule::set(const char*, Value& v, SnortConfig*)
 {
     if ( v.is("max_frags") )
         config->frag_engine.max_frags = v.get_uint32();
@@ -169,8 +180,6 @@ bool StreamIpModule::set(const char* f, Value& v, SnortConfig* c)
         config->session_timeout = v.get_uint32();
         config->frag_engine.frag_timeout = v.get_uint32();
     }
-    else
-        return Module::set(f, v, c);
 
     return true;
 }
@@ -180,11 +189,6 @@ bool StreamIpModule::begin(const char*, int, SnortConfig*)
     if ( !config )
         config = new StreamIpConfig;
 
-    return true;
-}
-
-bool StreamIpModule::end(const char*, int, SnortConfig*)
-{
     return true;
 }
 

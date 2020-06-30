@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -139,79 +139,6 @@ struct ServiceDNSData
     uint16_t id;
 };
 
-// DNS host pattern structure
-struct DNSHostPattern
-{
-    uint8_t type;
-    AppId appId;
-    uint8_t* pattern;
-    int pattern_size;
-};
-
-struct DetectorDNSHostPattern
-{
-    DNSHostPattern* dpattern;
-    DetectorDNSHostPattern* next;
-};
-
-struct MatchedDNSPatterns
-{
-    DNSHostPattern* mpattern;
-    MatchedDNSPatterns* next;
-};
-
-struct ServiceDnsConfig
-{
-    DetectorDNSHostPattern* DetectorDNSHostPatternList;
-    SearchTool* dns_host_host_matcher;
-};
-static ServiceDnsConfig serviceDnsConfig;      // DNS service configuration
-
-static int dns_host_pattern_match(void* id, void*, int, void* data, void*)
-{
-    MatchedDNSPatterns* cm;
-    MatchedDNSPatterns** matches = (MatchedDNSPatterns**)data;
-    DNSHostPattern* target = (DNSHostPattern*)id;
-
-    cm = (MatchedDNSPatterns*)snort_calloc(sizeof(MatchedDNSPatterns));
-    cm->mpattern = target;
-    cm->next = *matches;
-    *matches = cm;
-
-    return 0;
-}
-
-static int dns_host_detector_create_matcher(DetectorDNSHostPattern* list)
-{
-    DetectorDNSHostPattern* element = nullptr;
-
-    if (serviceDnsConfig.dns_host_host_matcher)
-        delete serviceDnsConfig.dns_host_host_matcher;
-
-    serviceDnsConfig.dns_host_host_matcher = new SearchTool("ac_full", true);
-    if (!serviceDnsConfig.dns_host_host_matcher)
-        return 0;
-
-    /* Add patterns from Lua API */
-    for (element = list; element; element = element->next)
-    {
-        serviceDnsConfig.dns_host_host_matcher->add((char*)element->dpattern->pattern,
-            element->dpattern->pattern_size, element->dpattern, true);
-    }
-
-    serviceDnsConfig.dns_host_host_matcher->prep();
-
-    return 1;
-}
-
-int dns_host_detector_process_patterns()
-{
-    int retVal = 1;
-    if (!dns_host_detector_create_matcher(serviceDnsConfig.DetectorDNSHostPatternList))
-        retVal = 0;
-    return retVal;
-}
-
 DnsTcpServiceDetector::DnsTcpServiceDetector(ServiceDiscovery* sd)
 {
     handler = sd;
@@ -261,6 +188,8 @@ APPID_STATUS_CODE DnsValidator::add_dns_query_info(AppIdSession& asd, uint16_t i
     const uint8_t* host, uint8_t host_len, uint16_t host_offset, uint16_t record_type)
 {
     AppIdDnsSession* dsession = asd.get_dns_session();
+    if (!dsession)
+        dsession = asd.create_dns_session();
     if ( ( dsession->get_state() != 0 ) && ( dsession->get_id() != id ) )
         dsession->reset();
 
@@ -291,6 +220,8 @@ APPID_STATUS_CODE DnsValidator::add_dns_response_info(AppIdSession& asd, uint16_
     const uint8_t* host, uint8_t host_len, uint16_t host_offset, uint8_t response_type, uint32_t ttl)
 {
     AppIdDnsSession* dsession = asd.get_dns_session();
+    if (!dsession)
+        dsession = asd.create_dns_session();
     if ( ( dsession->get_state() != 0 ) && ( dsession->get_id() != id ) )
         dsession->reset();
 
@@ -511,7 +442,11 @@ int DnsValidator::dns_validate_header(const AppidSessionDirection dir, const DNS
     else if (!hdr->QR)        // Query.
     {
         if (host_reporting)
-            asd.get_dns_session()->reset();
+        {
+            AppIdDnsSession* dsession = asd.get_dns_session();
+            if (dsession)
+                dsession->reset();
+        }
         return dir == APP_ID_FROM_INITIATOR ? APPID_SUCCESS : APPID_REVERSED;
     }
     else     // Response.
@@ -602,7 +537,7 @@ int DnsUdpServiceDetector::validate(AppIdDiscoveryArgs& args)
         goto udp_done;
     }
     if ((rval = dns_validate_header(args.dir, (const DNSHeader*)args.data,
-        args.config->mod_config->dns_host_reporting, args.asd)) != APPID_SUCCESS)
+        args.ctxt.get_odp_ctxt().dns_host_reporting, args.asd)) != APPID_SUCCESS)
     {
         if (rval == APPID_REVERSED)
         {
@@ -613,7 +548,7 @@ int DnsUdpServiceDetector::validate(AppIdDiscoveryArgs& args)
                     // To get here, we missed the initial query, got a
                     // response, and now we've got another query.
                     rval = validate_packet(args.data, args.size, args.dir,
-                        args.config->mod_config->dns_host_reporting, args.asd);
+                        args.ctxt.get_odp_ctxt().dns_host_reporting, args.asd);
                     if (rval == APPID_SUCCESS)
                         goto inprocess;
                 }
@@ -624,7 +559,7 @@ int DnsUdpServiceDetector::validate(AppIdDiscoveryArgs& args)
                 // To get here, we missed the initial query, but now we've got
                 // a response.
                 rval = validate_packet(args.data, args.size, args.dir,
-                    args.config->mod_config->dns_host_reporting, args.asd);
+                    args.ctxt.get_odp_ctxt().dns_host_reporting, args.asd);
                 if (rval == APPID_SUCCESS)
                 {
                     args.asd.set_session_flags(APPID_SESSION_UDP_REVERSED);
@@ -638,7 +573,7 @@ int DnsUdpServiceDetector::validate(AppIdDiscoveryArgs& args)
     }
 
     rval = validate_packet(args.data, args.size, args.dir,
-        args.config->mod_config->dns_host_reporting, args.asd);
+        args.ctxt.get_odp_ctxt().dns_host_reporting, args.asd);
     if ((rval == APPID_SUCCESS) && (args.dir == APP_ID_FROM_INITIATOR))
         goto inprocess;
 
@@ -690,7 +625,7 @@ int DnsTcpServiceDetector::validate(AppIdDiscoveryArgs& args)
         uint16_t size = args.size - sizeof(DNSTCPHeader);
         uint16_t tmp = ntohs(hdr->length);
         if (tmp < sizeof(DNSHeader) || dns_validate_header(args.dir, (const DNSHeader*)data,
-            args.config->mod_config->dns_host_reporting, args.asd))
+            args.ctxt.get_odp_ctxt().dns_host_reporting, args.asd))
         {
             if (args.dir == APP_ID_FROM_INITIATOR)
                 goto not_compatible;
@@ -701,7 +636,7 @@ int DnsTcpServiceDetector::validate(AppIdDiscoveryArgs& args)
         if (tmp > size)
             goto not_compatible;
         rval = validate_packet(data, size, args.dir,
-            args.config->mod_config->dns_host_reporting, args.asd);
+            args.ctxt.get_odp_ctxt().dns_host_reporting, args.asd);
         if (rval != APPID_SUCCESS)
             goto tcp_done;
 
@@ -760,121 +695,6 @@ inprocess:
     return APPID_INPROCESS;
 }
 
-static int dns_host_scan_patterns(SearchTool* matcher, const uint8_t* pattern, size_t size,
-    AppId* ClientAppId, AppId* payloadId)
-{
-    MatchedDNSPatterns* mp = nullptr;
-    MatchedDNSPatterns* tmpMp;
-    DNSHostPattern* best_match;
-
-    if (!matcher)
-        return 0;
-
-    matcher->find_all((const char*)pattern, size, dns_host_pattern_match, false, &mp);
-
-    if (!mp)
-        return 0;
-
-    best_match = mp->mpattern;
-    tmpMp = mp->next;
-    snort_free(mp);
-
-    while ((mp = tmpMp))
-    {
-        tmpMp = mp->next;
-        if (mp->mpattern->pattern_size > best_match->pattern_size)
-        {
-            best_match = mp->mpattern;
-        }
-        snort_free(mp);
-    }
-
-    switch (best_match->type)
-    {
-    // type 0 means WEB APP
-    case 0:
-        *ClientAppId = APP_ID_DNS;
-        *payloadId = best_match->appId;
-        break;
-    // type 1 means CLIENT
-    case 1:
-        *ClientAppId = best_match->appId;
-        *payloadId = 0;
-        break;
-    default:
-        return 0;
-    }
-
-    return 1;
-}
-
-int dns_host_scan_hostname(const uint8_t* pattern, size_t size, AppId* ClientAppId,
-    AppId* payloadId)
-{
-    return dns_host_scan_patterns(serviceDnsConfig.dns_host_host_matcher, pattern, size,
-        ClientAppId, payloadId);
-}
-
-void service_dns_host_clean()
-{
-    dns_detector_free_patterns();
-
-    if (serviceDnsConfig.dns_host_host_matcher )
-    {
-        delete serviceDnsConfig.dns_host_host_matcher;
-        serviceDnsConfig.dns_host_host_matcher = nullptr;
-    }
-}
-
-static int dns_add_pattern(DetectorDNSHostPattern** list, uint8_t* pattern_str, size_t
-    pattern_size, uint8_t type, AppId app_id)
-{
-    DetectorDNSHostPattern* new_dns_host_pattern;
-
-    new_dns_host_pattern = static_cast<DetectorDNSHostPattern*>(snort_calloc(
-        sizeof(DetectorDNSHostPattern)));
-    new_dns_host_pattern->dpattern = static_cast<DNSHostPattern*>(snort_calloc(
-        sizeof(DNSHostPattern)));
-
-    new_dns_host_pattern->dpattern->type = type;
-    new_dns_host_pattern->dpattern->appId = app_id;
-    new_dns_host_pattern->dpattern->pattern = pattern_str;
-    new_dns_host_pattern->dpattern->pattern_size = pattern_size;
-
-    new_dns_host_pattern->next = *list;
-    *list = new_dns_host_pattern;
-
-    return 1;
-}
-
-int dns_add_host_pattern(uint8_t* pattern_str, size_t pattern_size, uint8_t type, AppId app_id)
-{
-    return dns_add_pattern(&serviceDnsConfig.DetectorDNSHostPatternList, pattern_str, pattern_size,
-        type, app_id);
-}
-
-static void dns_patterns_free(DetectorDNSHostPattern** list)
-{
-    DetectorDNSHostPattern* tmp_pattern;
-
-    while ((tmp_pattern = *list))
-    {
-        *list = tmp_pattern->next;
-        if (tmp_pattern->dpattern)
-        {
-            if (tmp_pattern->dpattern->pattern)
-                snort_free(tmp_pattern->dpattern->pattern);
-            snort_free (tmp_pattern->dpattern);
-        }
-        snort_free(tmp_pattern);
-    }
-}
-
-void dns_detector_free_patterns()
-{
-    dns_patterns_free(&serviceDnsConfig.DetectorDNSHostPatternList);
-}
-
 char* dns_parse_host(const uint8_t* host, uint8_t host_len)
 {
     char* str = static_cast<char*>(snort_calloc(host_len + 1));    // plus '\0' at end
@@ -905,4 +725,3 @@ char* dns_parse_host(const uint8_t* host, uint8_t host_len)
     str[host_len] = '\0';    // nullptr term
     return str;
 }
-

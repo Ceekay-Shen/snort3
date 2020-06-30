@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2019-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2019-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -35,10 +35,11 @@ class Http2StartLine;
 class Http2HpackDecoder
 {
 public:
-    Http2HpackDecoder() { }
+    Http2HpackDecoder(Http2FlowData* flow_data, HttpCommon::SourceId src_id,
+        Http2EventGen* const _events, Http2Infractions* const _infractions) :
+        events(_events), infractions(_infractions), decode_table(flow_data, src_id) { }
     bool decode_headers(const uint8_t* encoded_headers, const uint32_t encoded_headers_length,
-        uint8_t* decoded_headers, uint32_t* decoded_headers_size, Http2StartLine* start_line,
-        Http2EventGen* stream_events, Http2Infractions* stream_infractions);
+        uint8_t* decoded_headers, Http2StartLine* start_line);
     bool write_decoded_headers(const uint8_t* in_buffer, const uint32_t in_length,
         uint8_t* decoded_header_buffer, uint32_t decoded_header_length, uint32_t& bytes_written);
     bool decode_header_line(const uint8_t* encoded_header_buffer,
@@ -68,14 +69,15 @@ public:
     bool finalize_start_line();
     const Field* get_start_line();
     const Field* get_decoded_headers(const uint8_t* const decoded_headers);
+    HpackIndexTable* get_decode_table() { return &decode_table; }
 
 private:
-    Http2StartLine* start_line = nullptr;
-    uint32_t* decoded_headers_size;
-    uint32_t pseudo_headers_fragment_size = 0;
-    bool decode_error = false;
-    Http2EventGen* events;
-    Http2Infractions* infractions;
+    Http2StartLine* start_line;
+    uint32_t decoded_headers_size;
+    uint32_t pseudo_headers_fragment_size;
+    bool decode_error;
+    Http2EventGen* const events;
+    Http2Infractions* const infractions;
 
     static Http2HpackIntDecode decode_int7;
     static Http2HpackIntDecode decode_int6;
@@ -84,6 +86,8 @@ private:
     static Http2HpackStringDecode decode_string;
 
     HpackIndexTable decode_table;
+    bool table_size_update_allowed = true;
+    uint8_t num_table_size_updates = 0;
 };
 
 #endif

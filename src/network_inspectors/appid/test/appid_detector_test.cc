@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -36,7 +36,12 @@
 #include <CppUTest/CommandLineTestRunner.h>
 #include <CppUTest/TestHarness.h>
 
-void ApplicationDescriptor::set_id(const Packet&, AppIdSession&, AppidSessionDirection, AppId, AppidChangeBits&) { }
+snort::Inspector* snort::InspectorManager::get_inspector(
+    char const*, bool, const snort::SnortConfig*) { return nullptr; }
+
+void ApplicationDescriptor::set_id(
+    const Packet&, AppIdSession&, AppidSessionDirection, AppId, AppidChangeBits&) { }
+
 void AppIdHttpSession::set_http_change_bits(AppidChangeBits&, HttpFieldIds) {}
 
 class TestDetector : public AppIdDetector
@@ -46,8 +51,7 @@ public:
 
     void do_custom_init() override { }
     int validate(AppIdDiscoveryArgs&) override { return 0; }
-    void register_appid(AppId, unsigned) override { }
-    void release_thread_resources() override { }
+    void register_appid(AppId, unsigned, OdpContext&) override { }
 };
 
 TEST_GROUP(appid_detector_tests)
@@ -58,7 +62,7 @@ TEST_GROUP(appid_detector_tests)
     void setup() override
     {
         MemoryLeakWarningPlugin::turnOffNewDeleteOverloads();
-        mock_session = new AppIdSession(IpProtocol::TCP, nullptr, 1492, appid_inspector);
+        mock_session = new AppIdSession(IpProtocol::TCP, nullptr, 1492, dummy_appid_inspector);
         mock_session->get_http_session();
         flow = new Flow;
         flow->set_flow_data(mock_session);
@@ -71,20 +75,6 @@ TEST_GROUP(appid_detector_tests)
         MemoryLeakWarningPlugin::turnOnNewDeleteOverloads();
     }
 };
-
-TEST(appid_detector_tests, add_info)
-{
-    const char* info_url = "https://tools.ietf.org/html/rfc793";
-    AppidChangeBits change_bits;
-    AppIdDetector* ad = new TestDetector;
-    MockAppIdHttpSession* hsession = (MockAppIdHttpSession*)mock_session->get_http_session();
-    ad->add_info(*mock_session, info_url, change_bits);
-    STRCMP_EQUAL(hsession->get_cfield(MISC_URL_FID), URL);
-    hsession->reset();
-    ad->add_info(*mock_session, info_url, change_bits);
-    STRCMP_EQUAL(mock_session->get_http_session()->get_cfield(MISC_URL_FID), info_url);
-    delete ad;
-}
 
 TEST(appid_detector_tests, add_user)
 {

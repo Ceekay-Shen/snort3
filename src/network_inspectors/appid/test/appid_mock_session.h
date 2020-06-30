@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -62,7 +62,7 @@ class MockAppIdDnsSession : public AppIdDnsSession
 public:
     MockAppIdDnsSession()
     {
-        host = (char*)APPID_ID_UT_DNS_HOST;
+        host = (const char*) APPID_ID_UT_DNS_HOST;
         host_offset = APPID_UT_DNS_HOST_OFFSET;
         record_type = APPID_UT_DNS_PATTERN_CNAME_REC;
         response_type = APPID_UT_DNS_NOERROR;
@@ -70,10 +70,16 @@ public:
     }
 };
 
+AppIdConfig::~AppIdConfig() { }
+OdpContext::OdpContext(AppIdConfig&, snort::SnortConfig*) { }
+
+static AppIdConfig stub_config;
+static AppIdContext stub_ctxt(stub_config);
+static OdpContext stub_odp_ctxt(stub_config, nullptr);
+OdpContext* AppIdContext::odp_ctxt = &stub_odp_ctxt;
 AppIdSession::AppIdSession(IpProtocol proto, const SfIp*, uint16_t, AppIdInspector& inspector)
-    : FlowData(inspector_id, &inspector), protocol(proto)
+    : FlowData(inspector_id, &inspector), ctxt(stub_ctxt), protocol(proto)
 {
-    common.flow_type = APPID_FLOW_TYPE_NORMAL;
     service_port = APPID_UT_SERVICE_PORT;
     AppidChangeBits change_bits;
 
@@ -85,8 +91,6 @@ AppIdSession::AppIdSession(IpProtocol proto, const SfIp*, uint16_t, AppIdInspect
     service.set_version(APPID_UT_SERVICE_VERSION, change_bits);
     subtype = &APPID_UT_SERVICE_SUBTYPE;
 
-    search_support_type = UNKNOWN_SEARCH_ENGINE;
-
     tsession = new TlsSession;
 
     service_ip.pton(AF_INET, APPID_UT_SERVICE_IP_ADDR);
@@ -96,7 +100,7 @@ AppIdSession::AppIdSession(IpProtocol proto, const SfIp*, uint16_t, AppIdInspect
 
     dsession = new MockAppIdDnsSession;
     tp_app_id = APPID_UT_ID;
-    service.set_id(APPID_UT_ID + 1);
+    service.set_id(APPID_UT_ID + 1, ctxt.get_odp_ctxt());
     client_inferred_service_id = APPID_UT_ID + 2;
     service.set_port_service_id(APPID_UT_ID + 3);
     payload.set_id(APPID_UT_ID + 4);
@@ -107,69 +111,25 @@ AppIdSession::AppIdSession(IpProtocol proto, const SfIp*, uint16_t, AppIdInspect
 
 AppIdSession::~AppIdSession()
 {
-    delete hsession;
+    for (auto* hsession: hsessions)
+        delete hsession;
     delete tsession;
     delete dsession;
     if (netbios_name)
         snort_free(netbios_name);
 }
 
-DHCPInfo* dhcp_info = nullptr;
-DHCPData* dhcp_data = nullptr;
-FpSMBData* smb_data = nullptr;
-
 void* AppIdSession::get_flow_data(unsigned)
 {
     return nullptr;
 }
 
-int AppIdSession::add_flow_data(void* data, unsigned type, AppIdFreeFCN)
+int AppIdSession::add_flow_data(void*, unsigned, AppIdFreeFCN)
 {
-    if ( type == APPID_SESSION_DATA_DHCP_FP_DATA )
-    {
-        dhcp_data = (DHCPData*)data;
-        set_session_flags(APPID_SESSION_HAS_DHCP_FP);
-    }
-    else if (  type == APPID_SESSION_DATA_DHCP_INFO )
-    {
-        dhcp_info = (DHCPInfo*)data;
-        set_session_flags(APPID_SESSION_HAS_DHCP_INFO);
-    }
-    else if ( type == APPID_SESSION_DATA_SMB_DATA )
-    {
-        smb_data = (FpSMBData*)data;
-        set_session_flags(APPID_SESSION_HAS_SMB_INFO);
-    }
     return 0;
 }
 
-void* AppIdSession::remove_flow_data(unsigned type)
-{
-    void* data = nullptr;
-
-    if ( type == APPID_SESSION_DATA_DHCP_FP_DATA )
-    {
-        data = dhcp_data;
-        dhcp_data = nullptr;
-        clear_session_flags(APPID_SESSION_HAS_DHCP_FP);
-    }
-    else if (  type == APPID_SESSION_DATA_DHCP_INFO )
-    {
-        data = dhcp_info;
-        dhcp_info = nullptr;
-        clear_session_flags(APPID_SESSION_HAS_DHCP_INFO);
-    }
-    else if ( type == APPID_SESSION_DATA_SMB_DATA )
-    {
-        data = smb_data;
-        smb_data = nullptr;
-        clear_session_flags(APPID_SESSION_HAS_SMB_INFO);
-    }
-
-    return data;
-}
-
-void AppIdSession::set_application_ids(AppId service_id, AppId client_id,
+void AppIdSession::set_ss_application_ids(AppId service_id, AppId client_id,
     AppId payload_id, AppId misc_id, AppidChangeBits& change_bits)
 {
     if (application_ids[APP_PROTOID_SERVICE] != service_id)
@@ -199,41 +159,54 @@ AppId AppIdSession::pick_service_app_id()
     return service.get_id();
 }
 
-AppId AppIdSession::pick_misc_app_id()
+AppId AppIdSession::pick_ss_misc_app_id()
 {
     return misc_app_id;
 }
 
-AppId AppIdSession::pick_client_app_id()
+AppId AppIdSession::pick_ss_client_app_id()
 {
     return client.get_id();
 }
 
-AppId AppIdSession::pick_payload_app_id()
+AppId AppIdSession::pick_ss_payload_app_id()
 {
     return payload.get_id();
 }
 
-AppId AppIdSession::pick_referred_payload_app_id()
+AppId AppIdSession::pick_ss_referred_payload_app_id()
 {
     return APPID_UT_ID;
 }
 
-void AppIdSession::get_application_ids(AppId&, AppId&, AppId&, AppId&) { }
+void AppIdSession::get_first_stream_app_ids(AppId&, AppId&, AppId&, AppId&) { }
 
-void AppIdSession::get_application_ids(AppId&, AppId&, AppId&) { }
+void AppIdSession::get_first_stream_app_ids(AppId&, AppId&, AppId&) { }
 
 AppId AppIdSession::get_application_ids_service() { return APPID_UT_ID; }
 
-AppId AppIdSession::get_application_ids_client() { return APPID_UT_ID; }
-
-AppId AppIdSession::get_application_ids_payload() { return APPID_UT_ID; }
-
-AppId AppIdSession::get_application_ids_misc() { return APPID_UT_ID; }
-
-AppId AppIdSession::pick_only_service_app_id()
+AppId AppIdSession::get_application_ids_client(uint32_t stream_index)
 {
-    return APPID_UT_ID;
+    if (stream_index < hsessions.size() or stream_index == 0)
+      return APPID_UT_ID;
+
+    return APP_ID_NONE;      
+}
+
+AppId AppIdSession::get_application_ids_payload(uint32_t stream_index)
+{
+    if (stream_index < hsessions.size() or stream_index == 0)
+      return APPID_UT_ID;
+
+    return APP_ID_NONE;      
+}
+
+AppId AppIdSession::get_application_ids_misc(uint32_t stream_index)
+{
+    if (stream_index < hsessions.size() or stream_index == 0)
+      return APPID_UT_ID;
+
+    return APP_ID_NONE;      
 }
 
 bool AppIdSession::is_ssl_session_decrypted()
@@ -241,17 +214,48 @@ bool AppIdSession::is_ssl_session_decrypted()
     return is_session_decrypted;
 }
 
-AppIdHttpSession* AppIdSession::get_http_session()
+AppIdHttpSession* AppIdSession::create_http_session(uint32_t)
 {
-    if ( !hsession )
-        hsession = new MockAppIdHttpSession(*this);
+    AppIdHttpSession* hsession = new MockAppIdHttpSession(*this);
+    AppidChangeBits change_bits;
+
+    hsession->client.set_id(APPID_UT_ID);
+    hsession->client.set_version(APPID_UT_CLIENT_VERSION, change_bits);
+    hsession->payload.set_id(APPID_UT_ID);
+    hsession->misc_app_id = APPID_UT_ID;
+    hsession->referred_payload_app_id = APPID_UT_ID;
+    hsessions.push_back(hsession);
     return hsession;
+}
+
+AppIdHttpSession* AppIdSession::get_http_session(uint32_t stream_index)
+{
+    if (stream_index < hsessions.size())
+    {
+        return hsessions[stream_index];
+    }
+    return nullptr;
+}
+
+AppIdHttpSession* AppIdSession::get_matching_http_session(uint32_t stream_id)
+{
+    for (uint32_t stream_index=0; stream_index < hsessions.size(); stream_index++)
+    {
+        if(stream_id == hsessions[stream_index]->get_http2_stream_id())
+            return hsessions[stream_index];
+    }
+    return nullptr;
+}
+
+AppIdDnsSession* AppIdSession::create_dns_session()
+{
+    if ( !dsession )
+        dsession = new MockAppIdDnsSession();
+    return dsession;
 }
 
 AppIdDnsSession* AppIdSession::get_dns_session()
 {
-    if ( !dsession )
-        dsession = new MockAppIdDnsSession();
     return dsession;
 }
 
@@ -265,17 +269,7 @@ bool AppIdSession::is_tp_appid_available() const
     return true;
 }
 
-int ssl_scan_hostname(const uint8_t*, size_t, AppId& client_id, AppId&)
-{
-    client_id = APPID_UT_ID + 1;
-    return 1;
-}
-
-int ssl_scan_cname(const uint8_t*, size_t, AppId&, AppId& payload_id)
-{
-    payload_id = APPID_UT_ID + 1;
-    return 1;
-}
+void AppIdSession::set_application_ids_service(int, AppidChangeBits&) { }
 
 #endif
 

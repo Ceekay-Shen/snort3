@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2017-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2017-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -22,25 +22,29 @@
 #ifndef REQUEST_H
 #define REQUEST_H
 
+#include <mutex>
+#include <queue>
+
 #include "main/snort_types.h"
 
 class Request
 {
 public:
-    Request(int f = -1);
+    Request(int f = -1) : fd(f), bytes_read(0) { }
 
-    bool read(const int&);
+    bool read();
     const char* get() { return read_buf; }
     bool write_response(const char* s) const;
     void respond(const char* s, bool queue_response = false, bool remote_only = false);
 #ifdef SHELL
-    void send_queued_response();
+    bool send_queued_response();
 #endif
 
 private:
     int fd;
     char read_buf[1024];
     size_t bytes_read;
-    const char* queued_response = nullptr;
+    std::queue<const char*> queued_response;
+    std::mutex queued_response_mutex;
 };
 #endif

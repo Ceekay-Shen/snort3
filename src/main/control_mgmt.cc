@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2017-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2017-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -36,6 +36,7 @@
 #include "control.h"
 #include "request.h"
 #include "snort_config.h"
+#include "utils/util_cstring.h"
 
 using namespace snort;
 using namespace std;
@@ -148,7 +149,8 @@ int ControlMgmt::socket_init()
 
     // FIXIT-M want to disable time wait
     int on = 1;
-    setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
+    if (setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) < 0)
+        FatalError("setsockopt() call failed: %s", get_error(errno));
 
     if (::bind(listener, sock_addr, sock_addr_size) < 0)
         FatalError("bind failed: %s\n", get_error(errno));
@@ -437,29 +439,31 @@ int ControlMgmt::socket_conn()
 int ControlMgmt::setup_socket_family()
 {
     int family = AF_UNSPEC;
-    if (SnortConfig::get_conf()->remote_control_port)
+    const SnortConfig* sc = SnortConfig::get_conf();
+
+    if (sc->remote_control_port)
     {
         memset(&in_addr, 0, sizeof(in_addr));
 
         in_addr.sin_family = AF_INET;
         in_addr.sin_addr.s_addr = htonl(0x7F000001);
-        in_addr.sin_port = htons(SnortConfig::get_conf()->remote_control_port);
+        in_addr.sin_port = htons(sc->remote_control_port);
         sock_addr = (struct sockaddr*)&in_addr;
         sock_addr_size = sizeof(in_addr);
         family = AF_INET;
     }
-    else if (!SnortConfig::get_conf()->remote_control_socket.empty())
+    else if (!sc->remote_control_socket.empty())
     {
         string fullpath;
-        const char* path_sep = strrchr(SnortConfig::get_conf()->remote_control_socket.c_str(), '/');
+        const char* path_sep = strrchr(sc->remote_control_socket.c_str(), '/');
         if (path_sep != nullptr)
-            fullpath = SnortConfig::get_conf()->remote_control_socket;
+            fullpath = sc->remote_control_socket;
         else
-            get_instance_file(fullpath, SnortConfig::get_conf()->remote_control_socket.c_str());
+            get_instance_file(fullpath, sc->remote_control_socket.c_str());
 
         memset(&unix_addr, 0, sizeof(unix_addr));
         unix_addr.sun_family = AF_UNIX;
-        strncpy(unix_addr.sun_path, fullpath.c_str(), sizeof(unix_addr.sun_path)-1);
+        SnortStrncpy(unix_addr.sun_path, fullpath.c_str(), sizeof(unix_addr.sun_path));
         sock_addr = (struct sockaddr*)&unix_addr;
         sock_addr_size = sizeof(unix_addr);
         unlink(fullpath.c_str());

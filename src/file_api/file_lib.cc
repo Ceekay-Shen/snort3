@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2012-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -38,6 +38,7 @@
 #include "framework/data_bus.h"
 #include "main/snort_config.h"
 #include "managers/inspector_manager.h"
+#include "packet_tracer/packet_tracer.h"
 #include "protocols/packet.h"
 #include "utils/util.h"
 #include "utils/util_utf.h"
@@ -348,6 +349,13 @@ void FileContext::finish_signature_lookup(Packet* p, bool final_lookup, FilePoli
             FileCache* file_cache = FileService::get_file_cache();
             if (file_cache)
                 file_cache->apply_verdict(p, this, verdict, false, policy);
+
+            if ( PacketTracer::is_active() and ( verdict == FILE_VERDICT_BLOCK
+                    or verdict == FILE_VERDICT_REJECT ))
+            {
+                PacketTracer::log("File: signature lookup verdict %s\n",
+                    verdict == FILE_VERDICT_BLOCK ? "block" : "reject");
+            }
             log_file_event(flow, policy);
             config_file_signature(false);
             file_stats->signatures_processed[get_file_type()][get_file_direction()]++;
@@ -404,12 +412,18 @@ bool FileContext::process(Packet* p, const uint8_t* file_data, int data_size,
     if ((!is_file_type_enabled()) and (!is_file_signature_enabled()))
     {
         update_file_size(data_size, position);
+        processing_complete = true;
+        if (PacketTracer::is_active())
+            PacketTracer::log("File: Type and Sig not enabled\n");
         return false;
     }
 
     if ((FileService::get_file_cache()->cached_verdict_lookup(p, this,
         policy) != FILE_VERDICT_UNKNOWN))
+    {
+        processing_complete = true;
         return true;
+    }
 
     /*file type id*/
     if (is_file_type_enabled())
@@ -424,11 +438,16 @@ bool FileContext::process(Packet* p, const uint8_t* file_data, int data_size,
             update_file_size(data_size, position);
             processing_complete = true;
             stop_file_capture();
+            if (PacketTracer::is_active())
+                PacketTracer::log("File: Type unknown\n");
             return false;
         }
 
         if (get_file_type() != SNORT_FILE_TYPE_CONTINUE)
         {
+            if (PacketTracer::is_active())
+                PacketTracer::log("File: Type-%s found\n",
+                    file_type_name(get_file_type()).c_str());
             config_file_type(false);
             file_stats->files_processed[get_file_type()][get_file_direction()]++;
             //Check file type based on file policy
@@ -438,6 +457,13 @@ bool FileContext::process(Packet* p, const uint8_t* file_data, int data_size,
                 FileCache* file_cache = FileService::get_file_cache();
                 if (file_cache)
                     file_cache->apply_verdict(p, this, v, false, policy);
+
+                if ( PacketTracer::is_active() and ( v == FILE_VERDICT_BLOCK
+                        or v == FILE_VERDICT_REJECT ))
+                {
+                    PacketTracer::log("File: file type verdict %s\n",
+                        v == FILE_VERDICT_BLOCK ? "block" : "reject");
+                }
             }
 
             log_file_event(flow, policy);
@@ -477,6 +503,12 @@ bool FileContext::process(Packet* p, const uint8_t* file_data, int data_size,
 
                 log_file_event(flow, policy);
             }
+            else
+            {
+                if (PacketTracer::is_active())
+                    PacketTracer::log("File: Sig depth exceeded\n");
+                return false;
+            }
         }
     }
     else
@@ -488,11 +520,11 @@ bool FileContext::process(Packet* p, const uint8_t* file_data, int data_size,
 }
 
 bool FileContext::process(Packet* p, const uint8_t* file_data, int data_size,
-    uint64_t offset, FilePolicyBase* policy)
+    uint64_t offset, FilePolicyBase* policy, FilePosition position)
 {
     if (!file_segments)
         file_segments = new FileSegments(this);
-    return file_segments->process(p, file_data, data_size, offset, policy);
+    return file_segments->process(p, file_data, data_size, offset, policy, position);
 }
 
 /*

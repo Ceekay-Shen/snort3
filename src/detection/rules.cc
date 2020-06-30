@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2019-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2019-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -38,12 +38,29 @@
 
 using namespace snort;
 
+bool operator< (const RuleKey& lhs, const RuleKey& rhs)
+{
+    if ( lhs.policy_id < rhs.policy_id )
+        return true;
+
+    if ( lhs.policy_id == rhs.policy_id )
+    {
+        if ( lhs.gid < rhs.gid )
+            return true;
+
+        if ( lhs.gid == rhs.gid and lhs.sid < rhs.sid )
+            return true;
+    }
+    return false;
+}
+
 void RuleStateMap::apply(SnortConfig* sc)
 {
     for ( auto it : map )
     {
         const RuleKey& k = it.first;
         OptTreeNode* otn = OtnLookup(sc->otn_map, k.gid, k.sid);
+        auto empty_ips_id = get_empty_ips_policy(sc)->policy_id;
 
         if ( !otn )
             ParseWarning(WARN_RULES, "Rule state specified for unknown rule %u:%u", k.gid, k.sid);
@@ -53,12 +70,13 @@ void RuleStateMap::apply(SnortConfig* sc)
             {
                 for ( unsigned i = 0; i < sc->policy_map->ips_policy_count(); i++ )
                 {
-                    if ( sc->policy_map->get_ips_policy(i) )
+                    auto policy = sc->policy_map->get_ips_policy(i);
+                    if ( policy and (policy->policy_id != empty_ips_id) )
                         apply(sc, otn, i, it.second);
                 }
             }
             else
-                apply(sc, otn, it.second.policy_id, it.second);
+                apply(sc, otn, it.first.policy_id, it.second);
         }
     }
 }
@@ -66,13 +84,18 @@ void RuleStateMap::apply(SnortConfig* sc)
 void RuleStateMap::apply(
     SnortConfig* sc, OptTreeNode* otn, unsigned ips_num, RuleState& s)
 {
+    IpsPolicy* policy = nullptr;
     RuleTreeNode* rtn = getRtnFromOtn(otn, ips_num);
 
     if ( !rtn )
-        rtn = getRtnFromOtn(otn, 0);
+        if ( ips_num and (rtn = getRtnFromOtn(otn, 0)) )
+            policy = sc->policy_map->get_ips_policy(ips_num);
 
     if ( !rtn )
         return;
+
+    if ( policy )
+        policy->rules_shared++;
 
     rtn = dup_rtn(rtn);
     update_rtn(rtn, s);

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -67,9 +67,11 @@ public:
     IpsContext(const IpsContext&) = delete;
     IpsContext& operator=(const IpsContext&) = delete;
 
+    void setup();
+    void clear();
+
     void set_context_data(unsigned id, IpsContextData*);
     IpsContextData* get_context_data(unsigned id) const;
-    void clear_context_data();
 
     void snapshot_flow(Flow*);
 
@@ -78,6 +80,9 @@ public:
 
     SnortProtocolId get_snort_protocol_id()
     { return flow.proto_id; }
+
+    void disable_detection();
+    void disable_inspection();
 
     enum ActiveRules
     { NONE, NON_CONTENT, CONTENT };
@@ -126,7 +131,7 @@ public:
             next_to_process->depends_on = depends_on;
 
         if ( depends_on )
-            depends_on->next_to_process = next_to_process; 
+            depends_on->next_to_process = next_to_process;
 
         depends_on = next_to_process = nullptr;
     }
@@ -135,25 +140,25 @@ public:
     std::vector<Replacement> rpl;
 
     Packet* packet;
-    Packet* wire_packet;
+    Packet* wire_packet = nullptr;
     Packet* encode_packet;
     DAQ_PktHdr_t* pkth;
     uint8_t* buf;
 
-    SnortConfig* conf;
+    const SnortConfig* conf = nullptr;
     MpseBatch searches;
     MpseStash* stash;
     OtnxMatchData* otnx;
     std::list<RegexRequest*>::iterator regex_req_it;
     SF_EVENTQ* equeue;
 
-    DataPointer file_data;
-    DataBuffer alt_data;
+    DataPointer file_data = {};
+    DataBuffer alt_data = {};
 
     uint64_t context_num;
-    uint64_t packet_number;
+    uint64_t packet_number = 0;
     ActiveRules active_rules;
-    State state; 
+    State state;
     bool check_tags;
     bool clear_inspectors;
 
@@ -164,12 +169,13 @@ public:
     static constexpr unsigned max_ips_id = 8;
 
 private:
-    FlowSnapshot flow;
+    FlowSnapshot flow = {};
     std::vector<IpsContextData*> data;
     std::vector<unsigned> ids_in_use;  // for indirection; FIXIT-P evaluate alternatives
     std::vector<Callback> post_callbacks;
     IpsContext* depends_on;
     IpsContext* next_to_process;
+    bool remove_gadget = false;
 };
 }
 #endif

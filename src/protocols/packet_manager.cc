@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -30,6 +30,7 @@
 #include "detection/detection_engine.h"
 #include "log/text_log.h"
 #include "main/snort_config.h"
+#include "main/snort_debug.h"
 #include "packet_io/active.h"
 #include "packet_io/sfdaq.h"
 #include "profiler/profiler_defs.h"
@@ -99,7 +100,7 @@ static inline void push_layer(Packet* p,
 void PacketManager::pop_teredo(Packet* p, RawData& raw)
 {
     p->proto_bits &= ~PROTO_BIT__TEREDO;
-    if ( SnortConfig::tunnel_bypass_enabled(TUNNEL_TEREDO) )
+    if ( p->context->conf->tunnel_bypass_enabled(TUNNEL_TEREDO) )
         p->active->clear_tunnel_bypass();
 
     const ProtocolIndex mapped_prot = CodecManager::s_proto_map[to_utype(ProtocolId::TEREDO)];
@@ -137,7 +138,7 @@ void PacketManager::decode(
     ProtocolId prev_prot_id = CodecManager::grinder_id;
 
     RawData raw(p->daq_msg, pkt, pktlen);
-    CodecData codec_data(ProtocolId::FINISHED_DECODE);
+    CodecData codec_data(p->context->conf, ProtocolId::FINISHED_DECODE);
 
     if ( cooked )
         codec_data.codec_flags |= CODEC_STREAM_REBUILT;
@@ -156,7 +157,7 @@ void PacketManager::decode(
     // loop until the protocol id is no longer valid
     while (CodecManager::s_protocols[mapped_prot]->decode(raw, codec_data, p->ptrs))
     {
-        trace_logf(decode, "Codec %s (protocol_id: %hu) "
+        debug_logf(decode_trace, nullptr, "Codec %s (protocol_id: %hu) "
             "ip header starts at: %p, length is %d\n",
             CodecManager::s_protocols[mapped_prot]->get_name(),
             static_cast<uint16_t>(codec_data.next_prot_id), pkt, codec_data.lyr_len);
@@ -246,7 +247,7 @@ void PacketManager::decode(
         codec_data.proto_bits = 0;
     }
 
-    trace_logf(decode, "Codec %s (protocol_id: %hu) ip header"
+    debug_logf(decode_trace, nullptr, "Codec %s (protocol_id: %hu) ip header"
         " starts at: %p, length is %lu\n",
         CodecManager::s_protocols[mapped_prot]->get_name(),
         static_cast<uint16_t>(prev_prot_id), pkt, (unsigned long)codec_data.lyr_len);
@@ -590,13 +591,13 @@ const uint8_t* PacketManager::encode_reject(UnreachResponse type,
 
         checksum::Pseudoheader6 ps6;
         const int ip_len = buf.size();
-        memcpy(ps6.sip, ip6h->get_src()->u6_addr8, sizeof(ps6.sip));
-        memcpy(ps6.dip, ip6h->get_dst()->u6_addr8, sizeof(ps6.dip));
-        ps6.zero = 0;
-        ps6.protocol = IpProtocol::ICMPV6;
-        ps6.len = htons((uint16_t)(ip_len));
+        memcpy(ps6.hdr.sip, ip6h->get_src()->u6_addr8, sizeof(ps6.hdr.sip));
+        memcpy(ps6.hdr.dip, ip6h->get_dst()->u6_addr8, sizeof(ps6.hdr.dip));
+        ps6.hdr.zero = 0;
+        ps6.hdr.protocol = IpProtocol::ICMPV6;
+        ps6.hdr.len = htons((uint16_t)(ip_len));
 
-        icmph->csum = checksum::icmp_cksum((uint16_t*)buf.data(), ip_len, &ps6);
+        icmph->csum = checksum::icmp_cksum((uint16_t*)buf.data(), ip_len, ps6);
 
         if (encode(p, flags, inner_ip_index, IpProtocol::ICMPV6, buf))
         {

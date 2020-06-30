@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -75,7 +75,9 @@ PerfTracker::PerfTracker(PerfConfig* config, const char* tracker_name)
 #ifdef UNIT_TEST
         case PerfFormat::MOCK: formatter = new MockFormatter(tracker_name); break;
 #endif
-        default: break;
+        default:
+            FatalError("Perfmonitor: Can't initialize output format\n");
+            break;
     }
 
     if ( config->output == PerfOutput::TO_FILE )
@@ -95,6 +97,15 @@ PerfTracker::~PerfTracker()
 
     if (fh && fh != stdout)
         fclose(fh);
+}
+
+void PerfTracker::close()
+{
+    if (fh && fh != stdout)
+    {
+        fclose(fh);
+        fh = nullptr;
+    }
 }
 
 bool PerfTracker::open(bool append)
@@ -123,13 +134,13 @@ bool PerfTracker::open(bool append)
                         file_name, mode, get_error(errno));
                 }
 
-                if (chown(file_name, SnortConfig::get_uid(),
-                    SnortConfig::get_gid()) != 0)
+                const SnortConfig* sc = SnortConfig::get_conf();
+
+                if (chown(file_name, sc->get_uid(), sc->get_gid()) != 0)
                 {
                     WarningMessage("perfmonitor: Unable to change permissions of "
                         "stats file '%s' to user:%d and group:%d: %s.\n",
-                        file_name, SnortConfig::get_uid(), SnortConfig::get_gid(),
-                        get_error(errno));
+                        file_name, sc->get_uid(), sc->get_gid(), get_error(errno));
                 }
             }
         }

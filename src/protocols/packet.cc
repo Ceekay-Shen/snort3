@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -31,6 +31,7 @@
 #include "managers/codec_manager.h"
 
 #include "packet_manager.h"
+#include "vlan.h"
 
 namespace snort
 {
@@ -52,7 +53,7 @@ Packet::Packet(bool packet_data)
 
     obfuscator = nullptr;
     endianness = nullptr;
-    active_inst = new Active;
+    active_inst = new Active();
     action_inst = nullptr;
     reset();
 }
@@ -91,6 +92,7 @@ void Packet::reset()
     user_ips_policy_id = 0;
     user_network_policy_id = 0;
     vlan_idx = 0;
+    filtering_state.clear();
 }
 
 void Packet::release_helpers()
@@ -248,6 +250,18 @@ SnortProtocolId Packet::get_snort_protocol_id()
         return context->get_snort_protocol_id();
 
     return flow ? flow->ssn_state.snort_protocol_id : UNKNOWN_PROTOCOL_ID;
+}
+
+uint16_t Packet::get_flow_vlan_id() const
+{
+    uint16_t vid = 0;
+
+    if (flow)
+        vid = flow->key->vlan_tag;
+    else if ( !context->conf->get_vlan_agnostic() and (proto_bits & PROTO_BIT__VLAN) )
+        vid = layer::get_vlan_layer(this)->vid();
+
+    return vid;
 }
 
 } // namespace snort

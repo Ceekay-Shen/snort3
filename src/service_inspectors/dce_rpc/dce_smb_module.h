@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -27,8 +27,11 @@
 
 namespace snort
 {
+class Trace;
 struct SnortConfig;
 }
+
+extern THREAD_LOCAL const snort::Trace* dce_smb_trace;
 
 #define DCE2_VALID_SMB_VERSION_FLAG_V1 1
 #define DCE2_VALID_SMB_VERSION_FLAG_V2 2
@@ -61,8 +64,6 @@ struct dce2SmbProtoConf
     bool legacy_mode;
 };
 
-extern Trace TRACE_NAME(dce_smb);
-
 class Dce2SmbModule : public snort::Module
 {
 public:
@@ -83,11 +84,14 @@ public:
     Usage get_usage() const override
     { return INSPECT; }
 
+    void set_trace(const snort::Trace*) const override;
+    const snort::TraceOption* get_trace_options() const override;
+
 private:
     dce2SmbProtoConf config;
 };
 
-void print_dce2_smb_conf(dce2SmbProtoConf& config);
+void print_dce2_smb_conf(const dce2SmbProtoConf&);
 
 inline int64_t DCE2_ScSmbFileDepth(const dce2SmbProtoConf* sc)
 {

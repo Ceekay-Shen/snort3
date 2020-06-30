@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -31,13 +31,19 @@
 #include "packet_io/active.h"
 #include "profiler/profiler_defs.h"
 #include "protocols/eth.h"
-#include "stream/stream.h"
-#include "stream/tcp/tcp_module.h"
-#include "stream/tcp/tcp_normalizers.h"
-#include "stream/tcp/tcp_reassemblers.h"
-#include "stream/tcp/segment_overlap_editor.h"
+
+#include "held_packet_queue.h"
+#include "segment_overlap_editor.h"
+#include "tcp_module.h"
+#include "tcp_normalizers.h"
+#include "tcp_reassemblers.h"
+#include "tcp_session.h"
 
 using namespace snort;
+
+THREAD_LOCAL HeldPacketQueue* hpq = nullptr;
+
+const std::list<HeldPacket>::iterator TcpStreamTracker::null_iterator { };
 
 const char* tcp_state_names[] =
 {
@@ -58,7 +64,8 @@ const char* tcp_event_names[] = {
 };
 
 TcpStreamTracker::TcpStreamTracker(bool client) :
-    tcp_state(client ? TCP_STATE_NONE : TCP_LISTEN), client_tracker(client)
+    tcp_state(client ? TCP_STATE_NONE : TCP_LISTEN), client_tracker(client),
+    held_packet(null_iterator)
 { }
 
 TcpStreamTracker::~TcpStreamTracker()
@@ -94,6 +101,7 @@ TcpStreamTracker::TcpEvent TcpStreamTracker::set_tcp_event(const TcpSegmentDescr
                 tcp_event = TCP_ACK_SENT_EVENT;
         }
         else if ( tsd.get_seg_len() > 0 )   // FIXIT-H no flags set, how do we handle this?
+                                            // discard; drop if normalizing
             tcp_event = TCP_DATA_SEG_SENT_EVENT;
         else
             tcp_event = TCP_ACK_SENT_EVENT;
@@ -136,6 +144,7 @@ TcpStreamTracker::TcpEvent TcpStreamTracker::set_tcp_event(const TcpSegmentDescr
                 tcp_event = TCP_ACK_RECV_EVENT;
         }
         else if ( tsd.get_seg_len() > 0 )    // FIXIT-H no flags set, how do we handle this?
+                                             // discard; drop if normalizing
             tcp_event = TCP_DATA_SEG_RECV_EVENT;
         else
             tcp_event = TCP_ACK_RECV_EVENT;
@@ -207,8 +216,7 @@ void TcpStreamTracker::init_tcp_state()
     fin_seq_set = false;
     rst_pkt_sent = false;
     order = 0;
-    held_packet = nullptr;
-    held_seq_num = 0;
+    held_packet = null_iterator;
 }
 
 //-------------------------------------------------------------------------
@@ -281,7 +289,7 @@ void TcpStreamTracker::init_on_syn_sent(TcpSegmentDescriptor& tsd)
 void TcpStreamTracker::init_on_syn_recv(TcpSegmentDescriptor& tsd)
 {
     irs = tsd.get_seg_seq();
-    // FIXIT-H can we really set the vars below now?
+
     rcv_nxt = tsd.get_seg_seq() + 1;
     r_win_base = tsd.get_seg_seq() + 1;
     reassembler.set_seglist_base_seq(tsd.get_seg_seq() + 1);
@@ -386,7 +394,6 @@ void TcpStreamTracker::init_on_data_seg_sent(TcpSegmentDescriptor& tsd)
     else
         flow->set_session_flags(SSNFLAG_SEEN_SERVER);
 
-    // FIXIT-H should we init these?
     iss = tsd.get_seg_seq();
     irs = tsd.get_seg_ack();
     snd_una = tsd.get_seg_seq();
@@ -432,7 +439,7 @@ void TcpStreamTracker::finish_server_init(TcpSegmentDescriptor& tsd)
     snd_nxt = tsd.get_end_seq();
     snd_wnd = tsd.get_seg_wnd();
 
-    // FIXIT-H move this to fin handler for syn_recv state ..
+    // FIXIT-M move this to fin handler for syn_recv state ..
     //if ( tcph->is_fin() )
     //    server->set_snd_nxt(server->get_snd_nxt() - 1);
 
@@ -493,6 +500,7 @@ void TcpStreamTracker::update_tracker_ack_sent(TcpSegmentDescriptor& tsd)
     //snd_una = tsd.get_seg_seq();
 
     // FIXIT-H add check to validate ack...
+    // norm/drop + discard
 
     if ( SEQ_GT(tsd.get_end_seq(), snd_nxt) )
         snd_nxt = tsd.get_end_seq();
@@ -507,7 +515,7 @@ void TcpStreamTracker::update_tracker_ack_sent(TcpSegmentDescriptor& tsd)
     }
 
     snd_wnd = tsd.get_seg_wnd();
-    reassembler.flush_on_ack_policy(tsd.get_pkt() );
+    reassembler.flush_on_ack_policy(tsd.get_pkt());
 }
 
 bool TcpStreamTracker::update_on_3whs_ack(TcpSegmentDescriptor& tsd)
@@ -655,36 +663,33 @@ bool TcpStreamTracker::is_segment_seq_valid(TcpSegmentDescriptor& tsd)
 
 bool TcpStreamTracker::set_held_packet(Packet* p)
 {
-    // FIXIT-M - limit of packets held per packet thread should be determined based on runtime criteria
-    //           such as # of DAQ Msg buffers, # of threads, etc... for now we use small number like 10
-    if ( held_packet )
+    if ( held_packet != null_iterator )
         return false;
-    if ( tcpStats.current_packets_held >= 50 )
-    {
-        tcpStats.held_packet_limit_exceeded++;
-        return false;
-    }
 
-    if ( p->active->hold_packet(p) )
-    {
-        held_packet = p->daq_msg;
-        held_seq_num = p->ptrs.tcph->seq();
-        tcpStats.total_packets_held++;
-        if ( ++tcpStats.current_packets_held > tcpStats.max_packets_held )
-            tcpStats.max_packets_held = tcpStats.current_packets_held;
-        return true;
-    }
+    held_packet = hpq->append(p->daq_msg, p->ptrs.tcph->seq(), *this);
 
-    return false;
+    tcpStats.total_packets_held++;
+    if ( ++tcpStats.current_packets_held > tcpStats.max_packets_held )
+        tcpStats.max_packets_held = tcpStats.current_packets_held;
+
+    return true;
+}
+
+uint32_t TcpStreamTracker::perform_partial_flush()
+{
+    uint32_t flushed = 0;
+    if ( held_packet != null_iterator )
+        flushed = reassembler.perform_partial_flush(session->flow);
+    return flushed;
 }
 
 bool TcpStreamTracker::is_retransmit_of_held_packet(Packet* cp)
 {
-    if ( !held_packet or ( cp->daq_msg == held_packet ) )
+    if ( (held_packet == null_iterator) or ( cp->daq_msg == held_packet->get_daq_msg() ) )
         return false;
 
     uint32_t next_send_seq = cp->ptrs.tcph->seq() + (uint32_t)cp->dsize;
-    if ( SEQ_LEQ(cp->ptrs.tcph->seq(), held_seq_num) and SEQ_GT(next_send_seq, held_seq_num) )
+    if ( SEQ_LEQ(cp->ptrs.tcph->seq(), held_packet->get_seq_num()) and SEQ_GT(next_send_seq, held_packet->get_seq_num()) )
     {
         tcpStats.held_packet_rexmits++;
         return true;
@@ -695,57 +700,81 @@ bool TcpStreamTracker::is_retransmit_of_held_packet(Packet* cp)
 
 void TcpStreamTracker::finalize_held_packet(Packet* cp)
 {
-    if ( held_packet )
+    if ( held_packet != null_iterator )
     {
         if ( cp->active->packet_was_dropped() )
         {
-            Analyzer::get_local_analyzer()->finalize_daq_message(held_packet, DAQ_VERDICT_BLOCK);
+            DAQ_Verdict verdict = held_packet->has_expired() ? DAQ_VERDICT_BLACKLIST : DAQ_VERDICT_BLOCK;
+            Analyzer::get_local_analyzer()->finalize_daq_message(held_packet->get_daq_msg(), verdict);
             tcpStats.held_packets_dropped++;
         }
         else
         {
-            Analyzer::get_local_analyzer()->finalize_daq_message(held_packet, DAQ_VERDICT_PASS);
+            Analyzer::get_local_analyzer()->finalize_daq_message(held_packet->get_daq_msg(), DAQ_VERDICT_PASS);
             tcpStats.held_packets_passed++;
         }
 
-        held_packet = nullptr;
-        held_seq_num = 0;
+        hpq->erase(held_packet);
+        held_packet = null_iterator;
         tcpStats.current_packets_held--;
     }
+
+    if (cp->active->is_packet_held())
+        cp->active->cancel_packet_hold();
 }
 
 void TcpStreamTracker::finalize_held_packet(Flow* flow)
 {
-    if ( held_packet )
+    if ( held_packet != null_iterator )
     {
-        if ( flow->ssn_state.session_flags & SSNFLAG_BLOCK )
+        if ( (flow->session_state & STREAM_STATE_BLOCK_PENDING) ||
+             (flow->ssn_state.session_flags & SSNFLAG_BLOCK) )
         {
-            Analyzer::get_local_analyzer()->finalize_daq_message(held_packet, DAQ_VERDICT_BLOCK);
+            DAQ_Verdict verdict = held_packet->has_expired() ? DAQ_VERDICT_BLACKLIST : DAQ_VERDICT_BLOCK;
+            Analyzer::get_local_analyzer()->finalize_daq_message(held_packet->get_daq_msg(), verdict);
             tcpStats.held_packets_dropped++;
         }
         else
         {
-            Analyzer::get_local_analyzer()->finalize_daq_message(held_packet, DAQ_VERDICT_PASS);
+            Analyzer::get_local_analyzer()->finalize_daq_message(held_packet->get_daq_msg(), DAQ_VERDICT_PASS);
             tcpStats.held_packets_passed++;
         }
 
-        held_packet = nullptr;
-        held_seq_num = 0;
+        hpq->erase(held_packet);
+        held_packet = null_iterator;
         tcpStats.current_packets_held--;
     }
 }
 
-void TcpStreamTracker::print()
+bool TcpStreamTracker::release_held_packets(const timeval& cur_time, int max_remove)
 {
-    LogMessage(" + TcpTracker +\n");
-    LogMessage("    state:              %s\n", tcp_state_names[ tcp_state ]);
-    LogMessage("    iss:                0x%X\n", iss);
-    LogMessage("    ts_last:            %u\n", ts_last);
-    LogMessage("    wscale:             %u\n", wscale);
-    LogMessage("    mss:                0x%08X\n", mss);
-    LogMessage("    snd_una:            %X\n", snd_una);
-    LogMessage("    snd_nxt:            %X\n", snd_nxt);
-    LogMessage("    snd_win:            %u\n", snd_wnd);
-    LogMessage("    rcv_nxt:            %X\n", rcv_nxt);
-    LogMessage("    r_win_base:         %X\n", r_win_base);
+    bool is_front_expired = false;
+    if ( hpq )
+        is_front_expired = hpq->execute(cur_time, max_remove);
+    return is_front_expired;
+}
+
+void TcpStreamTracker::set_held_packet_timeout(const uint32_t ms)
+{
+    assert(hpq);
+    hpq->set_timeout(ms);
+}
+
+bool TcpStreamTracker::adjust_expiration(uint32_t new_timeout_ms, const timeval& now)
+{
+    assert(hpq);
+    return hpq->adjust_expiration(new_timeout_ms, now);
+}
+
+void TcpStreamTracker::thread_init()
+{
+    assert(!hpq);
+    hpq = new HeldPacketQueue();
+}
+
+void TcpStreamTracker::thread_term()
+{
+    assert(hpq->empty());
+    delete hpq;
+    hpq = nullptr;
 }

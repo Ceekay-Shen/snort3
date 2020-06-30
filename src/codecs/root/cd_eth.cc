@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -45,10 +45,10 @@ static const RuleMap eth_rules[] =
     { 0, nullptr }
 };
 
-class EthModule : public CodecModule
+class EthModule : public BaseCodecModule
 {
 public:
-    EthModule() : CodecModule(CD_ETH_NAME, CD_ETH_HELP) { }
+    EthModule() : BaseCodecModule(CD_ETH_NAME, CD_ETH_HELP) { }
 
     const RuleMap* get_rules() const override
     { return eth_rules; }
@@ -169,12 +169,14 @@ bool EthCodec::encode(const uint8_t* const raw_in, const uint16_t /*raw_len*/,
         ho->ether_type = enc.ethertype_set() ?
             htons(to_utype(enc.next_ethertype)) : hi->ether_type;
 
+        const SnortConfig* sc = SnortConfig::get_conf();
+
         if ( enc.forward() )
         {
             memcpy(ho->ether_src, hi->ether_src, sizeof(ho->ether_src));
 
-            if ( SnortConfig::get_conf()->eth_dst )
-                memcpy(ho->ether_dst, SnortConfig::get_conf()->eth_dst, sizeof(ho->ether_dst));
+            if ( sc->eth_dst )
+                memcpy(ho->ether_dst, sc->eth_dst, sizeof(ho->ether_dst));
             else
                 memcpy(ho->ether_dst, hi->ether_dst, sizeof(ho->ether_dst));
         }
@@ -182,8 +184,8 @@ bool EthCodec::encode(const uint8_t* const raw_in, const uint16_t /*raw_len*/,
         {
             memcpy(ho->ether_src, hi->ether_dst, sizeof(ho->ether_src));
 
-            if ( SnortConfig::get_conf()->eth_dst )
-                memcpy(ho->ether_dst, SnortConfig::get_conf()->eth_dst, sizeof(ho->ether_dst));
+            if ( sc->eth_dst )
+                memcpy(ho->ether_dst, sc->eth_dst, sizeof(ho->ether_dst));
             else
                 memcpy(ho->ether_dst, hi->ether_src, sizeof(ho->ether_dst));
         }

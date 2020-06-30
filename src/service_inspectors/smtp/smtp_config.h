@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -24,14 +24,14 @@
 #include "mime/file_mime_process.h"
 #include "search_engines/search_tool.h"
 
-enum NORM_TYPES
+enum SMTPNormType
 {
     NORMALIZE_NONE = 0,
     NORMALIZE_CMDS,
     NORMALIZE_ALL
 };
 
-enum XLINK2STATE
+enum SMTPXlinkState
 {
     DISABLE_XLINK2STATE = 0,
     ALERT_XLINK2STATE,
@@ -102,7 +102,7 @@ enum SMTPCmdTypeEnum
 struct SMTPCmdConfig
 {
     bool alert;
-    bool normalize;     //  1 if we should normalize this command 
+    bool normalize;     //  1 if we should normalize this command
     int max_line_len;   //  Max length of this particular command
 };
 
@@ -120,15 +120,15 @@ struct SMTPToken
     SMTPCmdTypeEnum type;
 };
 
-struct SMTP_PROTO_CONF
+struct SmtpProtoConf
 {
-    NORM_TYPES normalize;
+    SMTPNormType normalize;
     bool ignore_tls_data;
     int max_auth_command_line_len = 1000;
     int max_command_line_len = 0;
     int max_header_line_len = 0;
     int max_response_line_len = 0;
-    int xlink2state;
+    SMTPXlinkState xlink2state;
     snort::MailLogConfig log_config;
     snort::DecodeConfig decode_conf;
 
@@ -142,11 +142,14 @@ struct SMTP_PROTO_CONF
     SMTPCmdConfig* cmd_config = nullptr;
     SMTPSearch* cmd_search = nullptr;
     snort::SearchTool* cmd_search_mpse = nullptr;
+
+    void show() const;
 };
 
 struct SmtpStats
 {
     PegCount packets;
+    PegCount total_bytes;
     PegCount sessions;
     PegCount concurrent_sessions;
     PegCount max_concurrent_sessions;

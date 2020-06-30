@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -73,9 +73,9 @@ struct TcpStats
     PegCount segs_released;
     PegCount segs_split;
     PegCount segs_used;
-    PegCount rebuilt_packets;   //iStreamFlushes
+    PegCount rebuilt_packets;
     PegCount rebuilt_buffers;
-    PegCount rebuilt_bytes;     //total_rebuilt_bytes
+    PegCount rebuilt_bytes;
     PegCount overlaps;
     PegCount gaps;
     PegCount exceeded_max_segs;
@@ -95,11 +95,14 @@ struct TcpStats
     PegCount held_packet_rexmits;
     PegCount held_packets_dropped;
     PegCount held_packets_passed;
+    PegCount held_packet_timeouts;
+    PegCount held_packet_purges;
     PegCount current_packets_held;
     PegCount max_packets_held;
-    PegCount held_packet_limit_exceeded;
     PegCount partial_flushes;
     PegCount partial_flush_bytes;
+    PegCount inspector_fallbacks;
+    PegCount partial_fallbacks;
 };
 
 extern THREAD_LOCAL struct TcpStats tcpStats;

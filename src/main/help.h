@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -55,7 +55,6 @@ void help_args(const char* pfx);
 [[noreturn]] void dump_builtin_rules(snort::SnortConfig* sc, const char*);
 [[noreturn]] void dump_defaults(snort::SnortConfig* sc, const char*);
 [[noreturn]] void dump_dynamic_rules(snort::SnortConfig* sc, const char*);
-[[noreturn]] void dump_msg_map(snort::SnortConfig* sc, const char*);
 [[noreturn]] void dump_rule_hex(snort::SnortConfig* sc, const char*);
 [[noreturn]] void dump_rule_text(snort::SnortConfig* sc, const char*);
 [[noreturn]] void dump_version(snort::SnortConfig* sc);

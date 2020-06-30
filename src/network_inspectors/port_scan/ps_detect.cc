@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2004-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -33,6 +33,7 @@
 
 #include "ps_detect.h"
 
+#include "hash/hash_defs.h"
 #include "hash/xhash.h"
 #include "log/messages.h"
 #include "protocols/icmp4.h"
@@ -44,6 +45,7 @@
 #include "utils/stats.h"
 
 #include "ps_inspect.h"
+#include "ps_pegs.h"
 
 using namespace snort;
 
@@ -56,7 +58,33 @@ struct PS_HASH_KEY
 };
 PADDING_GUARD_END
 
-static THREAD_LOCAL XHash* portscan_hash = nullptr;
+class PortScanCache : public XHash
+{
+public:
+    PortScanCache(unsigned rows, unsigned key_len, unsigned datasize, unsigned memcap)
+        : XHash(rows, key_len, datasize, memcap)
+    { }
+
+    bool is_node_recovery_ok(HashNode* hnode) override
+    {
+        PS_TRACKER* tracker = (PS_TRACKER*)hnode->data;
+
+        if ( !tracker->priority_node )
+            return true;
+
+        /*
+         **  Cycle through the protos to see if it's past the time.
+         **  We only get here if we ARE a priority node.
+         */
+        if ( tracker->proto.window >= packet_time() )
+            return false;
+
+        return true;
+    }
+};
+
+static THREAD_LOCAL PortScanCache* portscan_hash = nullptr;
+extern THREAD_LOCAL PsPegStats spstats;
 
 PS_PKT::PS_PKT(Packet* p)
 {
@@ -82,37 +110,11 @@ PortscanConfig::~PortscanConfig()
         ipset_free(watch_ip);
 }
 
-/*
-**  This function is passed into the hash algorithm, so that
-**  we only reuse nodes that aren't priority nodes.  We have to make
-**  sure that we only track so many priority nodes, otherwise we could
-**  have all priority nodes and not be able to allocate more.
-*/
-static int ps_tracker_free(void* key, void* data)
-{
-    if (!key || !data)
-        return 0;
-
-    PS_TRACKER* tracker = (PS_TRACKER*)data;
-
-    if (!tracker->priority_node)
-        return 0;
-
-    /*
-    **  Cycle through the protos to see if it's past the time.
-    **  We only get here if we ARE a priority node.
-    */
-    if (tracker->proto.window >= packet_time())
-        return 1;
-
-    return 0;
-}
-
 void ps_cleanup()
 {
     if ( portscan_hash )
     {
-        xhash_delete(portscan_hash);
+        delete portscan_hash;
         portscan_hash = nullptr;
     }
 }
@@ -120,24 +122,37 @@ void ps_cleanup()
 unsigned ps_node_size()
 { return sizeof(PS_HASH_KEY) + sizeof(PS_TRACKER); }
 
-void ps_init_hash(unsigned long memcap)
+bool ps_init_hash(unsigned long memcap)
 {
     if ( portscan_hash )
-        return;
+    {
+        bool need_pruning = (memcap < portscan_hash->get_mem_used());
+        portscan_hash->set_memcap(memcap);
+        return need_pruning;
+    }
 
     int rows = memcap / ps_node_size();
+    portscan_hash = new PortScanCache(rows, sizeof(PS_HASH_KEY), sizeof(PS_TRACKER),
+        memcap);
 
-    portscan_hash = xhash_new(rows, sizeof(PS_HASH_KEY), sizeof(PS_TRACKER),
-        memcap, 1, ps_tracker_free, nullptr, 1);
+    return false;
+}
 
+bool ps_prune_hash(unsigned work_limit)
+{
     if ( !portscan_hash )
-        FatalError("Failed to initialize portscan hash table.\n");
+        return true;
+
+    unsigned num_pruned = 0;
+    int result = portscan_hash->tune_memory_resources(work_limit, num_pruned);
+    spstats.reload_prunes += num_pruned;
+    return result != HASH_PENDING;
 }
 
 void ps_reset()
 {
     if ( portscan_hash )
-        xhash_make_empty(portscan_hash);
+        portscan_hash->clear_hash();
 }
 
 //  Check scanner and scanned ips to see if we can filter them out.
@@ -277,15 +292,20 @@ bool PortScan::ps_filter_ignore(PS_PKT* ps_pkt)
 */
 static PS_TRACKER* ps_tracker_get(PS_HASH_KEY* key)
 {
-    PS_TRACKER* ht = (PS_TRACKER*)xhash_find(portscan_hash, (void*)key);
+    PS_TRACKER* ht = (PS_TRACKER*)portscan_hash->get_user_data((void*)key);
 
     if ( ht )
         return ht;
 
-    if ( xhash_add(portscan_hash, (void*)key, nullptr) != XHASH_OK )
+    auto prev_count = portscan_hash->get_num_nodes();
+    if ( portscan_hash->insert((void*)key, nullptr) != HASH_OK )
         return nullptr;
 
-    ht = (PS_TRACKER*)xhash_mru(portscan_hash);
+    ++spstats.trackers;
+    if ( prev_count == portscan_hash->get_num_nodes() )
+        ++spstats.alloc_prunes;
+
+    ht = (PS_TRACKER*)portscan_hash->get_mru_user_data();
 
     if ( ht )
         memset(ht, 0x00, sizeof(PS_TRACKER));
@@ -579,7 +599,7 @@ void PortScan::ps_tracker_update_tcp(PS_PKT* ps_pkt, PS_TRACKER* scanner,
     **  picked up midstream, then we don't care about the MIDSTREAM flag.
     **  Otherwise, only consider streams not picked up midstream.
     */
-    // FIXIT-H using SSNFLAG_COUNTED_INITIALIZE is a hack to get parity with 2.X
+    // FIXIT-E using SSNFLAG_COUNTED_INITIALIZE is a hack to get parity with 2.X
     // this should be completely redone and port_scan should require stream_tcp
     if ( p->flow and (p->flow->ssn_state.session_flags & SSNFLAG_COUNTED_INITIALIZE) )
     {

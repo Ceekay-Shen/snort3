@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2010-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -87,7 +87,7 @@ static bool allow_codes(NormalizerConfig* config, const char* s)
 
 static const Parameter norm_ip4_params[] =
 {
-    { "base", Parameter::PT_BOOL, nullptr, "true",
+    { "base", Parameter::PT_BOOL, nullptr, "false",
       "clear options" },
 
     { "df", Parameter::PT_BOOL, nullptr, "false",
@@ -107,13 +107,13 @@ static const Parameter norm_ip4_params[] =
 
 static const Parameter norm_tcp_params[] =
 {
-    { "base", Parameter::PT_BOOL, nullptr, "true",
+    { "base", Parameter::PT_BOOL, nullptr, "false",
       "clear reserved bits and option padding and fix urgent pointer / flags issues" },
 
-    { "block", Parameter::PT_BOOL, nullptr, "true",
+    { "block", Parameter::PT_BOOL, nullptr, "false",
       "allow packet drops during TCP normalization" },
 
-    { "urp", Parameter::PT_BOOL, nullptr, "true",
+    { "urp", Parameter::PT_BOOL, nullptr, "false",
       "adjust urgent pointer if beyond segment length" },
 
     { "ips", Parameter::PT_BOOL, nullptr, "true",
@@ -122,7 +122,7 @@ static const Parameter norm_tcp_params[] =
     { "ecn", Parameter::PT_SELECT, "off | packet | stream", "off",
       "clear ecn for all packets | sessions w/o ecn setup" },
 
-    { "pad", Parameter::PT_BOOL, nullptr, "true",
+    { "pad", Parameter::PT_BOOL, nullptr, "false",
       "clear any option padding bytes" },
 
     { "trim_syn", Parameter::PT_BOOL, nullptr, "false",
@@ -140,19 +140,19 @@ static const Parameter norm_tcp_params[] =
     { "trim", Parameter::PT_BOOL, nullptr, "false",
       "enable all of the TCP trim options" },
 
-    { "opts", Parameter::PT_BOOL, nullptr, "true",
+    { "opts", Parameter::PT_BOOL, nullptr, "false",
       "clear all options except mss, wscale, timestamp, and any explicitly allowed" },
 
-    { "req_urg", Parameter::PT_BOOL, nullptr, "true",
+    { "req_urg", Parameter::PT_BOOL, nullptr, "false",
       "clear the urgent pointer if the urgent flag is not set" },
 
-    { "req_pay", Parameter::PT_BOOL, nullptr, "true",
+    { "req_pay", Parameter::PT_BOOL, nullptr, "false",
       "clear the urgent pointer and the urgent flag if there is no payload" },
 
-    { "rsv", Parameter::PT_BOOL, nullptr, "true",
+    { "rsv", Parameter::PT_BOOL, nullptr, "false",
       "clear the reserved bits in the TCP header" },
 
-    { "req_urp", Parameter::PT_BOOL, nullptr, "true",
+    { "req_urp", Parameter::PT_BOOL, nullptr, "false",
       "clear the urgent flag if the urgent pointer is not set" },
 
     { "allow_names", Parameter::PT_MULTI,
@@ -191,7 +191,7 @@ static const Parameter s_params[] =
 //-------------------------------------------------------------------------
 
 // using string* instead of string because clang++ 5.1
-// vector::back() does not seem to return a reference 
+// vector::back() does not seem to return a reference
 //
 // FIXIT-L these are static since get_pegs() is const
 // consider making that non-const

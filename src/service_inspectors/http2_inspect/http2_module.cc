@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2018-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2018-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -56,7 +56,7 @@ THREAD_LOCAL ProfileStats Http2Module::http2_profile;
 ProfileStats* Http2Module::get_profile() const
 { return &http2_profile; }
 
-THREAD_LOCAL PegCount Http2Module::peg_counts[PEG_COUNT_MAX] = { 0 };
+THREAD_LOCAL PegCount Http2Module::peg_counts[PEG_COUNT__MAX] = { 0 };
 
 bool Http2Module::begin(const char*, int, SnortConfig*)
 {

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2018-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2018-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -40,10 +40,10 @@ using namespace snort;
 unsigned IpsContextData::ips_id = 0;
 
 unsigned IpsContextData::get_ips_id()
-{ 
+{
     ++ips_id;
     assert(ips_id < IpsContext::max_ips_id);
-    return ips_id; 
+    return ips_id;
 }
 
 void IpsContextData::clear_ips_id()

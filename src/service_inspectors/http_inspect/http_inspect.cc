@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -24,9 +24,13 @@
 #include "http_inspect.h"
 
 #include <cassert>
+#include <iomanip>
+#include <sstream>
 
 #include "detection/detection_engine.h"
 #include "detection/detection_util.h"
+#include "service_inspectors/http2_inspect/http2_dummy_packet.h"
+#include "service_inspectors/http2_inspect/http2_flow_data.h"
 #include "log/unified2.h"
 #include "protocols/packet.h"
 #include "stream/stream.h"
@@ -38,6 +42,7 @@
 #include "http_msg_body.h"
 #include "http_msg_body_chunk.h"
 #include "http_msg_body_cl.h"
+#include "http_msg_body_h2.h"
 #include "http_msg_body_old.h"
 #include "http_msg_header.h"
 #include "http_msg_request.h"
@@ -49,12 +54,40 @@ using namespace snort;
 using namespace HttpCommon;
 using namespace HttpEnums;
 
-uint32_t HttpInspect::xtra_trueip_id;
-uint32_t HttpInspect::xtra_uri_id;
-uint32_t HttpInspect::xtra_host_id;
-uint32_t HttpInspect::xtra_jsnorm_id;
+static std::string GetUnreservedChars(const ByteBitSet& bitset)
+{
+    const ByteBitSet& def_bitset(HttpParaList::UriParam::UriParam::default_unreserved_char);
+    std::string chars;
 
-HttpInspect::HttpInspect(const HttpParaList* params_) : params(params_)
+    for (unsigned char c = 1; c; ++c)
+        if (def_bitset[c] && !bitset[c])
+            chars += c;
+
+    return chars;
+}
+
+static std::string GetBadChars(const ByteBitSet& bitset)
+{
+    std::stringstream ss;
+    ss << std::hex;
+
+    for (unsigned i = 0; i < bitset.size(); ++i)
+        if (bitset[i])
+            ss << " 0x" << std::setw(2) << std::setfill('0') << i;
+
+    auto str = ss.str();
+    if ( !str.empty() )
+        str.erase(0, 1);
+
+    return str;
+}
+
+HttpInspect::HttpInspect(const HttpParaList* params_) :
+    params(params_),
+    xtra_trueip_id(Stream::reg_xtra_data_cb(get_xtra_trueip)),
+    xtra_uri_id(Stream::reg_xtra_data_cb(get_xtra_uri)),
+    xtra_host_id(Stream::reg_xtra_data_cb(get_xtra_host)),
+    xtra_jsnorm_id(Stream::reg_xtra_data_cb(get_xtra_jsnorm))
 {
 #ifdef REG_TEST
     if (params->test_input)
@@ -80,49 +113,40 @@ bool HttpInspect::configure(SnortConfig* )
     if (params->js_norm_param.normalize_javascript)
         params->js_norm_param.js_norm->configure();
 
-    xtra_trueip_id = Stream::reg_xtra_data_cb(get_xtra_trueip);
-    xtra_uri_id = Stream::reg_xtra_data_cb(get_xtra_uri);
-    xtra_host_id = Stream::reg_xtra_data_cb(get_xtra_host);
-    xtra_jsnorm_id = Stream::reg_xtra_data_cb(get_xtra_jsnorm);
-
     return true;
 }
 
-void HttpInspect::show(snort::SnortConfig*)
+void HttpInspect::show(const SnortConfig*) const
 {
     assert(params);
-    LogMessage("http_inspect\n");
 
-    if ( params->request_depth == -1 )
-        LogMessage("    request_depth: " "%s" "\n", "unlimited");
-    else
-        LogMessage("    request_depth: " STDi64 "\n", params->request_depth);
+    auto unreserved_chars = GetUnreservedChars(params->uri_param.unreserved_char);
+    auto bad_chars = GetBadChars(params->uri_param.bad_characters);
 
-    if ( params->response_depth == -1 )
-        LogMessage("    response_depth: " "%s" "\n", "unlimited");
-    else
-        LogMessage("    response_depth: " STDi64 "\n", params->response_depth);
-
-    LogMessage("    unzip: %s\n", params->unzip ? "yes" : "no");
-    LogMessage("    normalize_utf: %s\n", params->normalize_utf ? "yes" : "no");
-    LogMessage("    decompress_pdf: %s\n", params->decompress_pdf ? "yes" : "no");
-    LogMessage("    decompress_swf: %s\n", params->decompress_swf ? "yes" : "no");
-    LogMessage("    decompress_zip: %s\n", params->decompress_zip ? "yes" : "no");
-    LogMessage("    detained_inspection: %s\n", params->detained_inspection ? "yes" : "no");
-
-    LogMessage("    normalize_javascript: %s\n", params->js_norm_param.normalize_javascript ? "yes" : "no");
-    LogMessage("    max_javascript_whitespaces: %d\n", params->js_norm_param.max_javascript_whitespaces);
-
-    LogMessage("    percent_u: %s\n", params->uri_param.percent_u ? "yes" : "no");
-    LogMessage("    utf8: %s\n", params->uri_param.utf8 ? "yes" : "no");
-    LogMessage("    utf8_bare_byte: %s\n", params->uri_param.utf8_bare_byte ? "yes" : "no");
-    LogMessage("    oversize_dir_length: %d\n", params->uri_param.oversize_dir_length);
-    LogMessage("    iis_unicode: %s\n", params->uri_param.iis_unicode ? "yes" : "no");
-    LogMessage("    iis_unicode_map_file: %s\n", params->uri_param.iis_unicode_map_file.c_str());
-    LogMessage("    iis_double_decode: %s\n", params->uri_param.iis_double_decode ? "yes" : "no");
-    LogMessage("    backslash_to_slash: %s\n", params->uri_param.backslash_to_slash ? "yes" : "no");
-    LogMessage("    plus_to_space: %s\n", params->uri_param.plus_to_space ? "yes" : "no");
-    LogMessage("    simplify_path: %s\n", params->uri_param.simplify_path ? "yes" : "no");
+    ConfigLogger::log_limit("request_depth", params->request_depth, -1LL);
+    ConfigLogger::log_limit("response_depth", params->response_depth, -1LL);
+    ConfigLogger::log_flag("unzip", params->unzip);
+    ConfigLogger::log_flag("normalize_utf", params->normalize_utf);
+    ConfigLogger::log_flag("decompress_pdf", params->decompress_pdf);
+    ConfigLogger::log_flag("decompress_swf", params->decompress_swf);
+    ConfigLogger::log_flag("decompress_zip", params->decompress_zip);
+    ConfigLogger::log_flag("detained_inspection", params->detained_inspection);
+    ConfigLogger::log_flag("normalize_javascript", params->js_norm_param.normalize_javascript);
+    ConfigLogger::log_value("max_javascript_whitespaces",
+        params->js_norm_param.max_javascript_whitespaces);
+    ConfigLogger::log_value("bad_characters", bad_chars.c_str());
+    ConfigLogger::log_value("ignore_unreserved", unreserved_chars.c_str());
+    ConfigLogger::log_flag("percent_u", params->uri_param.percent_u);
+    ConfigLogger::log_flag("utf8", params->uri_param.utf8);
+    ConfigLogger::log_flag("utf8_bare_byte", params->uri_param.utf8_bare_byte);
+    ConfigLogger::log_flag("iis_unicode", params->uri_param.iis_unicode);
+    ConfigLogger::log_value("iis_unicode_map_file", params->uri_param.iis_unicode_map_file.c_str());
+    ConfigLogger::log_value("iis_unicode_code_page", params->uri_param.iis_unicode_code_page);
+    ConfigLogger::log_flag("iis_double_decode", params->uri_param.iis_double_decode);
+    ConfigLogger::log_value("oversize_dir_length", params->uri_param.oversize_dir_length);
+    ConfigLogger::log_flag("backslash_to_slash", params->uri_param.backslash_to_slash);
+    ConfigLogger::log_flag("plus_to_space", params->uri_param.plus_to_space);
+    ConfigLogger::log_flag("simplify_path", params->uri_param.simplify_path);
 }
 
 InspectSection HttpInspect::get_latest_is(const Packet* p)
@@ -155,14 +179,14 @@ bool HttpInspect::get_buf(InspectionBuffer::Type ibt, Packet* p, InspectionBuffe
     switch (ibt)
     {
     case InspectionBuffer::IBT_KEY:
-        return http_get_buf(HTTP_BUFFER_URI, 0, 0, p, b);
+        return get_buf(HTTP_BUFFER_URI, p, b);
     case InspectionBuffer::IBT_HEADER:
         if (get_latest_is(p) == IS_TRAILER)
-            return http_get_buf(HTTP_BUFFER_TRAILER, 0, 0, p, b);
+            return get_buf(HTTP_BUFFER_TRAILER, p, b);
         else
-            return http_get_buf(HTTP_BUFFER_HEADER, 0, 0, p, b);
+            return get_buf(HTTP_BUFFER_HEADER, p , b);
     case InspectionBuffer::IBT_BODY:
-        return http_get_buf(HTTP_BUFFER_CLIENT_BODY, 0, 0, p, b);
+        return get_buf(HTTP_BUFFER_CLIENT_BODY, p, b);
     default:
         return false;
     }
@@ -170,25 +194,28 @@ bool HttpInspect::get_buf(InspectionBuffer::Type ibt, Packet* p, InspectionBuffe
 
 bool HttpInspect::get_buf(unsigned id, Packet* p, InspectionBuffer& b)
 {
-    return http_get_buf(id, 0, 0, p, b);
+    Cursor c;
+    HttpBufferInfo buffer_info(id);
+
+    const Field& http_buffer = http_get_buf(c, p, buffer_info);
+
+    if (http_buffer.length() <= 0)
+        return false;
+
+    b.data = http_buffer.start();
+    b.len = http_buffer.length();
+    return true;
 }
 
-bool HttpInspect::http_get_buf(unsigned id, uint64_t sub_id, uint64_t form, Packet* p,
-    InspectionBuffer& b)
+const Field& HttpInspect::http_get_buf(Cursor& c, Packet* p,
+    HttpBufferInfo& buffer_info)
 {
     HttpMsgSection* current_section = HttpContextData::get_snapshot(p);
 
     if (current_section == nullptr)
-        return false;
+        return Field::FIELD_NULL;
 
-    const Field& buffer = current_section->get_classic_buffer(id, sub_id, form);
-
-    if (buffer.length() <= 0)
-        return false;
-
-    b.data = buffer.start();
-    b.len = buffer.length();
-    return true;
+    return current_section->get_classic_buffer(c, buffer_info);
 }
 
 bool HttpInspect::get_fp_buf(InspectionBuffer::Type ibt, Packet* p, InspectionBuffer& b)
@@ -221,9 +248,9 @@ bool HttpInspect::get_fp_buf(InspectionBuffer::Type ibt, Packet* p, InspectionBu
     return get_buf(ibt, p, b);
 }
 
-int HttpInspect::get_xtra_trueip(Flow*, uint8_t** buf, uint32_t* len, uint32_t* type)
+int HttpInspect::get_xtra_trueip(Flow* flow, uint8_t** buf, uint32_t* len, uint32_t* type)
 {
-    HttpMsgSection* current_section = HttpContextData::get_snapshot(nullptr);
+    HttpMsgSection* current_section = HttpContextData::get_snapshot(flow);
 
     if (current_section == nullptr)
         return 0;
@@ -241,9 +268,9 @@ int HttpInspect::get_xtra_trueip(Flow*, uint8_t** buf, uint32_t* len, uint32_t* 
     return 1;
 }
 
-int HttpInspect::get_xtra_uri(Flow*, uint8_t** buf, uint32_t* len, uint32_t* type)
+int HttpInspect::get_xtra_uri(Flow* flow, uint8_t** buf, uint32_t* len, uint32_t* type)
 {
-    HttpMsgSection* current_section = HttpContextData::get_snapshot(nullptr);
+    HttpMsgSection* current_section = HttpContextData::get_snapshot(flow);
 
     if (current_section == nullptr)
         return 0;
@@ -262,9 +289,9 @@ int HttpInspect::get_xtra_uri(Flow*, uint8_t** buf, uint32_t* len, uint32_t* typ
     return 1;
 }
 
-int HttpInspect::get_xtra_host(Flow*, uint8_t** buf, uint32_t* len, uint32_t* type)
+int HttpInspect::get_xtra_host(Flow* flow, uint8_t** buf, uint32_t* len, uint32_t* type)
 {
-    HttpMsgSection* current_section = HttpContextData::get_snapshot(nullptr);
+    HttpMsgSection* current_section = HttpContextData::get_snapshot(flow);
 
     if (current_section == nullptr)
         return 0;
@@ -286,9 +313,9 @@ int HttpInspect::get_xtra_host(Flow*, uint8_t** buf, uint32_t* len, uint32_t* ty
 // The name of this method reflects its legacy purpose. We actually return the normalized data
 // from a response message body which may include other forms of normalization in addition to
 // JavaScript normalization. But if you don't turn JavaScript normalization on you get nothing.
-int HttpInspect::get_xtra_jsnorm(Flow*, uint8_t** buf, uint32_t* len, uint32_t* type)
+int HttpInspect::get_xtra_jsnorm(Flow* flow, uint8_t** buf, uint32_t* len, uint32_t* type)
 {
-    HttpMsgSection* current_section = HttpContextData::get_snapshot(nullptr);
+    HttpMsgSection* current_section = HttpContextData::get_snapshot(flow);
 
     if ((current_section == nullptr) ||
         (current_section->get_source_id() != SRC_SERVER) ||
@@ -310,18 +337,60 @@ int HttpInspect::get_xtra_jsnorm(Flow*, uint8_t** buf, uint32_t* len, uint32_t* 
     return 1;
 }
 
+void HttpInspect::disable_detection(Packet* p)
+{
+    HttpFlowData* session_data = http_get_flow_data(p->flow);
+    if (session_data->for_http2)
+        p->disable_inspect = true;
+    else
+    {
+        assert(p->context);
+        DetectionEngine::disable_all(p);
+    }
+}
+
+HttpFlowData* HttpInspect::http_get_flow_data(const Flow* flow)
+{
+    Http2FlowData* h2i_flow_data = nullptr;
+    if (Http2FlowData::inspector_id != 0)
+        h2i_flow_data = (Http2FlowData*)flow->get_flow_data(Http2FlowData::inspector_id);
+    if (h2i_flow_data == nullptr)
+        return (HttpFlowData*)flow->get_flow_data(HttpFlowData::inspector_id);
+    else
+        return h2i_flow_data->get_hi_flow_data();
+}
+
+void HttpInspect::http_set_flow_data(Flow* flow, HttpFlowData* flow_data)
+{
+    Http2FlowData* h2i_flow_data = nullptr;
+    if (Http2FlowData::inspector_id != 0)
+        h2i_flow_data = (Http2FlowData*)flow->get_flow_data(Http2FlowData::inspector_id);
+    if (h2i_flow_data == nullptr)
+        flow->set_flow_data(flow_data);
+    else
+    {
+        flow_data->for_http2 = true;
+        h2i_flow_data->set_hi_flow_data(flow_data);
+    }
+}
+
 void HttpInspect::eval(Packet* p)
 {
     Profile profile(HttpModule::get_profile_stats());
 
     const SourceId source_id = p->is_from_client() ? SRC_CLIENT : SRC_SERVER;
 
-    HttpFlowData* session_data =
-        (HttpFlowData*)p->flow->get_flow_data(HttpFlowData::inspector_id);
+    HttpFlowData* session_data = http_get_flow_data(p->flow);
 
-    // FIXIT-H Workaround for unexpected eval() calls
-    if (session_data->section_type[source_id] == SEC__NOT_COMPUTE)
+    // FIXIT-E Workaround for unexpected eval() calls. Convert to asserts when possible.
+    if ((session_data->section_type[source_id] == SEC__NOT_COMPUTE) ||
+        (session_data->type_expected[source_id] == SEC_ABORT)       ||
+        (session_data->octets_reassembled[source_id] != p->dsize))
+    {
+        session_data->type_expected[source_id] = SEC_ABORT;
         return;
+    }
+    session_data->octets_reassembled[source_id] = STAT_NOT_PRESENT;
 
     // Don't make pkt_data for headers available to detection
     if ((session_data->section_type[source_id] == SEC_HEADER) ||
@@ -339,9 +408,7 @@ void HttpInspect::eval(Packet* p)
 
     const bool buf_owner = !session_data->partial_flush[source_id];
     if (!process(p->data, p->dsize, p->flow, source_id, buf_owner))
-    {
-        DetectionEngine::disable_content(p);
-    }
+        disable_detection(p);
 
 #ifdef REG_TEST
     else
@@ -376,8 +443,7 @@ bool HttpInspect::process(const uint8_t* data, const uint16_t dsize, Flow* const
     SourceId source_id, bool buf_owner) const
 {
     HttpMsgSection* current_section;
-    HttpFlowData* session_data = (HttpFlowData*)flow->get_flow_data(HttpFlowData::inspector_id);
-    assert(session_data != nullptr);
+    HttpFlowData* session_data = http_get_flow_data(flow);
 
     if (!session_data->partial_flush[source_id])
         HttpModule::increment_peg_counts(PEG_INSPECT);
@@ -408,6 +474,10 @@ bool HttpInspect::process(const uint8_t* data, const uint16_t dsize, Flow* const
         break;
     case SEC_BODY_CHUNK:
         current_section = new HttpMsgBodyChunk(
+            data, dsize, session_data, source_id, buf_owner, flow, params);
+        break;
+    case SEC_BODY_H2:
+        current_section = new HttpMsgBodyH2(
             data, dsize, session_data, source_id, buf_owner, flow, params);
         break;
     case SEC_TRAILER:
@@ -452,13 +522,25 @@ void HttpInspect::clear(Packet* p)
 {
     Profile profile(HttpModule::get_profile_stats());
 
-    HttpFlowData* const session_data =
-        (HttpFlowData*)p->flow->get_flow_data(HttpFlowData::inspector_id);
+    HttpFlowData* const session_data = http_get_flow_data(p->flow);
 
     if ( session_data == nullptr )
         return;
 
-    HttpMsgSection* current_section = HttpContextData::clear_snapshot(p->context);
+    Http2FlowData* h2i_flow_data = nullptr;
+    if (Http2FlowData::inspector_id != 0)
+    {
+        h2i_flow_data = (Http2FlowData*)p->flow->get_flow_data(Http2FlowData::inspector_id);
+    }
+
+    HttpMsgSection* current_section = nullptr;
+    if (h2i_flow_data != nullptr)
+    {
+        current_section = h2i_flow_data->get_hi_msg_section();
+        h2i_flow_data->set_hi_msg_section(nullptr);
+    }
+    else
+        current_section = HttpContextData::clear_snapshot(p->context);
 
     // FIXIT-M This test is necessary because sometimes we get extra clears
     // Convert to assert when that gets fixed.
@@ -471,7 +553,7 @@ void HttpInspect::clear(Packet* p)
     const SourceId source_id = current_section->get_source_id();
 
     //FIXIT-M This check may not apply to the transaction attached to the packet
-    //in case of offload. 
+    //in case of offload.
     if (session_data->detection_status[source_id] == DET_DEACTIVATING)
     {
         if (source_id == SRC_CLIENT)
@@ -487,5 +569,12 @@ void HttpInspect::clear(Packet* p)
 
     current_transaction->garbage_collect();
     session_data->garbage_collect();
+
+    if (session_data->cutover_on_clear)
+    {
+        Flow* flow = p->flow;
+        flow->set_service(p, nullptr);
+        flow->free_flow_data(HttpFlowData::inspector_id);
+    }
 }
 

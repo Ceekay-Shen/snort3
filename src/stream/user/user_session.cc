@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -26,6 +26,7 @@
 #include "detection/detection_engine.h"
 #include "detection/rules.h"
 #include "main/analyzer.h"
+#include "main/snort_debug.h"
 #include "memory/memory_cap.h"
 #include "profiler/profiler_defs.h"
 #include "protocols/packet.h"
@@ -165,7 +166,7 @@ void UserTracker::detect(
     up->packet_flags |= (p->packet_flags & (PKT_FROM_CLIENT|PKT_FROM_SERVER));
     up->packet_flags |= (p->packet_flags & (PKT_STREAM_EST|PKT_STREAM_UNEST_UNI));
 
-    trace_logf(stream_user, "detect[%d]\n", up->dsize);
+    debug_logf(stream_user_trace, up, "detect[%d]\n", up->dsize);
     Analyzer::get_local_analyzer()->inspect_rebuilt(up);
 }
 
@@ -185,7 +186,7 @@ int UserTracker::scan(Packet* p, uint32_t& flags)
 
         flags = p->packet_flags & (PKT_FROM_CLIENT|PKT_FROM_SERVER);
         unsigned len = us->get_unused_len();
-        trace_logf(stream_user, "scan[%d]\n", len);
+        debug_logf(stream_user_trace, p, "scan[%d]\n", len);
 
         int32_t flush_amt = paf_check(
             splitter, &paf_state, p, us->get_unused_data(), len,
@@ -210,7 +211,7 @@ int UserTracker::scan(Packet* p, uint32_t& flags)
 void UserTracker::flush(Packet* p, unsigned flush_amt, uint32_t flags)
 {
     unsigned bytes_flushed = 0;
-    trace_logf(stream_user, "flush[%d]\n", flush_amt);
+    debug_logf(stream_user_trace, p, "flush[%d]\n", flush_amt);
     uint32_t rflags = flags & ~PKT_PDU_TAIL;
     Packet* up = DetectionEngine::set_next_packet(p);
 
@@ -230,7 +231,7 @@ void UserTracker::flush(Packet* p, unsigned flush_amt, uint32_t flags)
             len = flush_amt;
         }
 
-        trace_logf(stream_user, "reassemble[%d]\n", len);
+        debug_logf(stream_user_trace, p, "reassemble[%d]\n", len);
         StreamBuffer sb = splitter->reassemble(
             p->flow, flush_amt, bytes_flushed, data, len, rflags, bytes_copied);
 
@@ -275,7 +276,7 @@ void UserTracker::process(Packet* p)
 
 void UserTracker::add_data(Packet* p)
 {
-    trace_logf(stream_user, "add[%d]\n", p->dsize);
+    debug_logf(stream_user_trace, p, "add[%d]\n", p->dsize);
     unsigned avail = 0;
 
     if ( !seg_list.empty() )
@@ -305,12 +306,12 @@ void UserTracker::add_data(Packet* p)
 // may need additional refactoring
 //-------------------------------------------------------------------------
 
-void UserSession::start(Packet* p, Flow* flow)
+void UserSession::start(Packet* p, Flow* f)
 {
-    Inspector* ins = flow->gadget;
+    Inspector* ins = f->gadget;
 
     if ( !ins )
-        ins = flow->clouseau;
+        ins = f->clouseau;
 
     if ( ins )
     {
@@ -324,46 +325,39 @@ void UserSession::start(Packet* p, Flow* flow)
     }
 
     {
-        flow->pkt_type = p->type();
-        flow->ip_proto = (uint8_t)p->get_ip_proto_next();
+        f->pkt_type = p->type();
+        f->ip_proto = (uint8_t)p->get_ip_proto_next();
 
-        if (flow->ssn_state.session_flags & SSNFLAG_RESET)
-            flow->ssn_state.session_flags &= ~SSNFLAG_RESET;
+        if (f->ssn_state.session_flags & SSNFLAG_RESET)
+            f->ssn_state.session_flags &= ~SSNFLAG_RESET;
 
-        if ( (flow->ssn_state.session_flags & SSNFLAG_CLIENT_SWAP) &&
-            !(flow->ssn_state.session_flags & SSNFLAG_CLIENT_SWAPPED) )
+        if ( (f->ssn_state.session_flags & SSNFLAG_CLIENT_SWAP) &&
+            !(f->ssn_state.session_flags & SSNFLAG_CLIENT_SWAPPED) )
         {
-            SfIp ip = flow->client_ip;
-            uint16_t port = flow->client_port;
+            f->swap_roles();
 
-            flow->client_ip = flow->server_ip;
-            flow->server_ip = ip;
-
-            flow->client_port = flow->server_port;
-            flow->server_port = port;
-
-            if ( !flow->two_way_traffic() )
+            if ( !f->two_way_traffic() )
             {
-                if ( flow->ssn_state.session_flags & SSNFLAG_SEEN_CLIENT )
+                if ( f->ssn_state.session_flags & SSNFLAG_SEEN_CLIENT )
                 {
-                    flow->ssn_state.session_flags ^= SSNFLAG_SEEN_CLIENT;
-                    flow->ssn_state.session_flags |= SSNFLAG_SEEN_SERVER;
+                    f->ssn_state.session_flags ^= SSNFLAG_SEEN_CLIENT;
+                    f->ssn_state.session_flags |= SSNFLAG_SEEN_SERVER;
                 }
-                else if ( flow->ssn_state.session_flags & SSNFLAG_SEEN_SERVER )
+                else if ( f->ssn_state.session_flags & SSNFLAG_SEEN_SERVER )
                 {
-                    flow->ssn_state.session_flags ^= SSNFLAG_SEEN_SERVER;
-                    flow->ssn_state.session_flags |= SSNFLAG_SEEN_CLIENT;
+                    f->ssn_state.session_flags ^= SSNFLAG_SEEN_SERVER;
+                    f->ssn_state.session_flags |= SSNFLAG_SEEN_CLIENT;
                 }
             }
-            flow->ssn_state.session_flags |= SSNFLAG_CLIENT_SWAPPED;
+            f->ssn_state.session_flags |= SSNFLAG_CLIENT_SWAPPED;
         }
 #if 0
         // FIXIT-M implement stream_user perf stats
-        //flow->set_expire(p, dstPolicy->session_timeout);
+        //f->set_expire(p, dstPolicy->session_timeout);
 
         // add user flavor to perf stats?
         AddStreamSession(
-            &sfBase, flow->session_state & STREAM_STATE_MIDSTREAM ? SSNFLAG_MIDSTREAM : 0);
+            &sfBase, f->session_state & STREAM_STATE_MIDSTREAM ? SSNFLAG_MIDSTREAM : 0);
 
         StreamUpdatePerfBaseState(&sfBase, tmp->flow, TCP_STATE_SYN_SENT);
 
@@ -381,30 +375,30 @@ void UserSession::end(Packet*, Flow*)
     server.splitter = nullptr;
 }
 
-void UserSession::update(Packet* p, Flow* flow)
+void UserSession::update(Packet* p, Flow* f)
 {
     if ( p->ptrs.sp and p->ptrs.dp )
         p->packet_flags |= PKT_STREAM_EST;
     else
         p->packet_flags |= PKT_STREAM_UNEST_UNI;
 
-    if ( !(flow->ssn_state.session_flags & SSNFLAG_ESTABLISHED) )
+    if ( !(f->ssn_state.session_flags & SSNFLAG_ESTABLISHED) )
     {
         if ( p->is_from_client() )
-            flow->ssn_state.session_flags |= SSNFLAG_SEEN_CLIENT;
+            f->ssn_state.session_flags |= SSNFLAG_SEEN_CLIENT;
         else
-            flow->ssn_state.session_flags |= SSNFLAG_SEEN_SERVER;
+            f->ssn_state.session_flags |= SSNFLAG_SEEN_SERVER;
 
-        if ( (flow->ssn_state.session_flags & SSNFLAG_SEEN_CLIENT) &&
-            (flow->ssn_state.session_flags & SSNFLAG_SEEN_SERVER) )
+        if ( (f->ssn_state.session_flags & SSNFLAG_SEEN_CLIENT) &&
+            (f->ssn_state.session_flags & SSNFLAG_SEEN_SERVER) )
         {
-            flow->ssn_state.session_flags |= SSNFLAG_ESTABLISHED;
+            f->ssn_state.session_flags |= SSNFLAG_ESTABLISHED;
 
-            flow->set_ttl(p, false);
+            f->set_ttl(p, false);
         }
     }
 
-    flow->set_expire(p, flow->default_session_timeout);
+    f->set_expire(p, f->default_session_timeout);
 }
 
 void UserSession::restart(Packet* p)
@@ -428,7 +422,7 @@ void UserSession::restart(Packet* p)
 // UserSession methods
 //-------------------------------------------------------------------------
 
-UserSession::UserSession(Flow* flow) : Session(flow)
+UserSession::UserSession(Flow* f) : Session(f)
 { memory::MemoryCap::update_allocations(sizeof(*this)); }
 
 UserSession::~UserSession()
@@ -498,7 +492,7 @@ int UserSession::process(Packet* p)
 
     UserTracker& ut = p->is_from_client() ? server : client;
 
-    if ( p->ptrs.decode_flags & DECODE_SOF or !ut.splitter )
+    if ( !ut.splitter or p->ptrs.decode_flags & DECODE_SOF )
         start(p, flow);
 
     if ( p->data && p->dsize )

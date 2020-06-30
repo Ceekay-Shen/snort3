@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -23,6 +23,8 @@
 #endif
 
 #include "base_tracker.h"  // FIXIT-W Returning null reference (from <vector>)
+
+#include "managers/module_manager.h"
 
 #ifdef UNIT_TEST
 #include "catch/snort_catch.h"
@@ -52,9 +54,14 @@ void BaseTracker::process(bool summary)
 
     write();
 
-    for ( const ModuleConfig& mod : modules )
-        if ( !summary )
+    if ( !summary )
+    {
+        for ( const ModuleConfig& mod : modules )
+        {
+            lock_guard<mutex> lock(ModuleManager::stats_mutex);
             mod.ptr->sum_stats(false);
+        }
+    }
 }
 
 #ifdef UNIT_TEST

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -81,7 +81,7 @@ bool ACGetStats::execute(Analyzer&, void**)
     // FIXIT-P This incurs locking on all threads to retrieve stats.  It
     // could be reimplemented to optimize for large thread counts by
     // retrieving stats in the command and accumulating in the main thread.
-    ModuleManager::accumulate(SnortConfig::get_conf());
+    ModuleManager::accumulate();
     return true;
 }
 
@@ -91,6 +91,7 @@ ACGetStats::~ACGetStats()
     // FIXIT-L This should track the owner so it can dump stats to the
     // shell instead of the logs when initiated by a shell command
     DropStats();
+    LogMessage("==================================================\n"); // Marking End of stats
 }
 
 ACSwap::ACSwap(Swapper* ps, Request* req, bool from_shell) : ps(ps), request(req), from_shell(from_shell)
@@ -105,7 +106,7 @@ bool ACSwap::execute(Analyzer& analyzer, void** ac_state)
     {
         ps->apply(analyzer);
 
-        SnortConfig* sc = ps->get_new_conf();
+        const SnortConfig* sc = ps->get_new_conf();
         if ( sc )
         {
             std::list<ReloadResourceTuner*>* reload_tuners;
@@ -180,7 +181,7 @@ ACDAQSwap::~ACDAQSwap()
     LogMessage("== daq module reload complete\n");
 }
 
-SFDAQInstance* AnalyzerCommand::get_daq_instance(Analyzer& analyzer) 
+SFDAQInstance* AnalyzerCommand::get_daq_instance(Analyzer& analyzer)
 {
     return analyzer.get_daq_instance();
 }

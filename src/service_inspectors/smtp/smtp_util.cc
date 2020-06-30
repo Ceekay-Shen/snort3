@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -41,7 +41,7 @@ void SMTP_GetEOL(const uint8_t* ptr, const uint8_t* end,
     assert(ptr and end and eol and eolm);
 
     const uint8_t* tmp_eolm;
-    const uint8_t* tmp_eol = (uint8_t*)memchr(ptr, '\n', end - ptr);
+    const uint8_t* tmp_eol = (const uint8_t*)memchr(ptr, '\n', end - ptr);
 
     if (tmp_eol == nullptr)
     {
@@ -107,7 +107,7 @@ int SMTP_CopyToAltBuffer(Packet* p, const uint8_t* start, int length)
     return 0;
 }
 
-void SMTP_LogFuncs(SMTP_PROTO_CONF* config, Packet* p, MimeSession* mime_ssn)
+void SMTP_LogFuncs(SmtpProtoConf* config, Packet* p, MimeSession* mime_ssn)
 {
     if (!mime_ssn)
         return;

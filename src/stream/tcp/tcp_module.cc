@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -81,11 +81,14 @@ const PegInfo tcp_pegs[] =
     { CountType::SUM, "held_packet_rexmits", "number of retransmits of held packets" },
     { CountType::SUM, "held_packets_dropped", "number of held packets dropped" },
     { CountType::SUM, "held_packets_passed", "number of held packets passed" },
+    { CountType::SUM, "held_packet_timeouts", "number of held packets that timed out" },
+    { CountType::SUM, "held_packet_purges", "number of held packets that were purged without flushing" },
     { CountType::NOW, "cur_packets_held", "number of packets currently held" },
     { CountType::MAX, "max_packets_held", "maximum number of packets held simultaneously" },
-    { CountType::SUM, "held_packet_limit_exceeded", "number of times limit of max held packets exceeded" },
     { CountType::SUM, "partial_flushes", "number of partial flushes initiated" },
     { CountType::SUM, "partial_flush_bytes", "partial flush total bytes" },
+    { CountType::SUM, "inspector_fallbacks", "count of fallbacks from assigned service inspector" },
+    { CountType::SUM, "partial_fallbacks", "count of fallbacks from assigned service stream splitter" },
     { CountType::END, nullptr, nullptr }
 };
 
@@ -168,8 +171,6 @@ static const Parameter s_params[] =
     { "max_pdu", Parameter::PT_INT, "1460:32768", "16384",
       "maximum reassembled PDU size" },
 
-    // FIXIT-H: This should become an API call so that
-    // an inspector can enable no-ack processing on specific flows
     { "no_ack", Parameter::PT_BOOL, nullptr, "false",
       "received data is implicitly acked immediately" },
 
@@ -231,7 +232,6 @@ StreamTcpModule::StreamTcpModule() :
 {
     config = nullptr;
 }
-
 
 const RuleMap* StreamTcpModule::get_rules() const
 { return stream_tcp_rules; }

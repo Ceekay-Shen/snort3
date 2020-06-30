@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2003-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -36,6 +36,7 @@
 #include <cassert>
 
 #include "hash/ghash.h"
+#include "hash/hash_defs.h"
 #include "hash/xhash.h"
 #include "main/thread.h"
 #include "sfip/sf_ipvar.h"
@@ -57,20 +58,10 @@ XHash* sfthd_new_hash(unsigned nbytes, size_t key, size_t data)
 
     /* Calc max ip nodes for this memory */
     if ( nbytes < size )
-    {
         nbytes = size;
-    }
-    nrows = nbytes / (size);
+    nrows = nbytes / size;
 
-    return xhash_new(
-        nrows,  /* try one node per row - for speed */
-        key,    /* keys size */
-        data,   /* data size */
-        nbytes, /* memcap **/
-        1,      /* ANR flag - true ?- Automatic Node Recovery=ANR */
-        nullptr,      /* ANR callback - none */
-        nullptr,      /* user freemem callback - none */
-        1);     /* Recycle nodes ?*/
+    return new XHash(nrows, key, data, nbytes);
 }
 
 /*!
@@ -142,7 +133,7 @@ THD_STRUCT* sfthd_new(unsigned lbytes, unsigned gbytes)
 #ifdef THD_DEBUG
         printf("Could not allocate the sfxhash table\n");
 #endif
-        xhash_delete(thd->ip_nodes);
+        delete thd->ip_nodes;
         snort_free(thd);
         return nullptr;
     }
@@ -171,53 +162,48 @@ static void sfthd_node_free(void* node)
 
 void sfthd_objs_free(ThresholdObjects* thd_objs)
 {
-    int i;
-    PolicyId policyId;
-
     if (thd_objs == nullptr)
         return;
 
-    for (i = 0; i < THD_MAX_GENID; i++)
+    for (int i = 0; i < THD_MAX_GENID; i++)
     {
-        if (thd_objs->sfthd_array[i])
-            ghash_delete(thd_objs->sfthd_array[i]);
+        if ( thd_objs->sfthd_array[i] )
+            delete thd_objs->sfthd_array[i];
     }
 
-    for (policyId = 0; policyId < thd_objs->numPoliciesAllocated; policyId++)
+    for (PolicyId policy_id = 0; policy_id < thd_objs->numPoliciesAllocated; policy_id++)
     {
-        if (thd_objs->sfthd_garray[policyId] == nullptr)
+        if ( !thd_objs->sfthd_garray[policy_id] )
             continue;
 
-        if (thd_objs->sfthd_garray[policyId][0] != nullptr)
+        if ( thd_objs->sfthd_garray[policy_id][0] )
         {
-            sfthd_node_free(thd_objs->sfthd_garray[policyId][0]);
+            sfthd_node_free(thd_objs->sfthd_garray[policy_id][0]);
 
             /* Free any individuals */
-            for (i = 0; i < THD_MAX_GENID; i++)
+            for (int i = 0; i < THD_MAX_GENID; i++)
             {
-                if (thd_objs->sfthd_garray[policyId][i] !=
-                    thd_objs->sfthd_garray[policyId][0])
+                if ( thd_objs->sfthd_garray[policy_id][i] !=
+                    thd_objs->sfthd_garray[policy_id][0] )
                 {
-                    sfthd_node_free(thd_objs->sfthd_garray[policyId][i]);
+                    sfthd_node_free(thd_objs->sfthd_garray[policy_id][i]);
                 }
             }
         }
         else
         {
             /* Anything other GID will be allocated individually */
-            for (i = 1; i < THD_MAX_GENID; i++)
+            for (int i = 1; i < THD_MAX_GENID; i++)
             {
-                if (thd_objs->sfthd_garray[policyId][i])
-                {
-                    sfthd_node_free(thd_objs->sfthd_garray[policyId][i]);
-                }
+                if ( thd_objs->sfthd_garray[policy_id][i] )
+                    sfthd_node_free(thd_objs->sfthd_garray[policy_id][i]);
             }
         }
 
-        snort_free(thd_objs->sfthd_garray[policyId]);
+        snort_free(thd_objs->sfthd_garray[policy_id]);
     }
 
-    if (thd_objs->sfthd_garray != nullptr)
+    if ( thd_objs->sfthd_garray )
         snort_free(thd_objs->sfthd_garray);
 
     snort_free(thd_objs);
@@ -235,11 +221,11 @@ void sfthd_free(THD_STRUCT* thd)
     if (thd == nullptr)
         return;
 
-    if (thd->ip_nodes != nullptr)
-        xhash_delete(thd->ip_nodes);
+    if ( thd->ip_nodes )
+        delete thd->ip_nodes;
 
-    if (thd->ip_gnodes != nullptr)
-        xhash_delete(thd->ip_gnodes);
+    if ( thd->ip_gnodes )
+        delete thd->ip_gnodes;
 
     snort_free(thd);
 }
@@ -289,14 +275,12 @@ the current event should be logged or dropped.
 
 */
 static int sfthd_create_threshold_local(
-    SnortConfig*, ThresholdObjects* thd_objs, THD_NODE* config)
+    SnortConfig*, ThresholdObjects* thd_objs, THD_NODE* config, PolicyId policy_id)
 {
     GHash* sfthd_hash;
     THD_ITEM* sfthd_item;
     THD_NODE* sfthd_node;
     tThdItemKey key;
-
-    PolicyId policy_id = get_network_policy()->policy_id;
 
     if (thd_objs == nullptr )
         return -1;
@@ -319,12 +303,7 @@ static int sfthd_create_threshold_local(
         }
 
         /* Create the hash table for this gen_id */
-        sfthd_hash = ghash_new(nrows, sizeof(tThdItemKey), 0, sfthd_item_free);
-        if ( !sfthd_hash )
-        {
-            return -2;
-        }
-
+        sfthd_hash = new GHash(nrows, sizeof(tThdItemKey), false, sfthd_item_free);
         thd_objs->sfthd_array[config->gen_id] = sfthd_hash;
     }
     else
@@ -340,7 +319,7 @@ static int sfthd_create_threshold_local(
     key.policyId = policy_id;
 
     /* Check if sig_id is already in the table - if not allocate and add it */
-    sfthd_item = (THD_ITEM*)ghash_find(sfthd_hash, (void*)&key);
+    sfthd_item = (THD_ITEM*)sfthd_hash->find((void*)&key);
     if ( !sfthd_item )
     {
         /* Create the sfthd_item hash node data */
@@ -358,7 +337,7 @@ static int sfthd_create_threshold_local(
         }
 
         /* Add the sfthd_item to the hash table */
-        if ( ghash_add(sfthd_hash, (void*)&key, sfthd_item) )
+        if ( sfthd_hash->insert((void*)&key, sfthd_item) )
         {
             sflist_free(sfthd_item->sfthd_node_list);
             snort_free(sfthd_item);
@@ -484,10 +463,9 @@ static int sfthd_create_threshold_local(
 /*
  */
 static int sfthd_create_threshold_global(
-    SnortConfig*, ThresholdObjects* thd_objs, THD_NODE* config)
+    SnortConfig*, ThresholdObjects* thd_objs, THD_NODE* config, PolicyId policy_id)
 {
     THD_NODE* sfthd_node;
-    PolicyId policy_id = get_network_policy()->policy_id;
 
     if (thd_objs == nullptr)
         return -1;
@@ -597,10 +575,9 @@ int sfthd_create_threshold(
     int priority,
     int count,
     int seconds,
-    sfip_var_t* ip_address)
+    sfip_var_t* ip_address, PolicyId policy_id)
 {
     //allocate memory fpr sfthd_array if needed.
-    PolicyId policyId = get_network_policy()->policy_id;
     THD_NODE sfthd_node;
     memset(&sfthd_node, 0, sizeof(sfthd_node));
 
@@ -617,24 +594,24 @@ int sfthd_create_threshold(
     sfthd_node.ip_address= ip_address;
 
     // FIXIT-L convert to std::vector
-    sfDynArrayCheckBounds ((void**)&thd_objs->sfthd_garray, policyId,
+    sfDynArrayCheckBounds ((void**)&thd_objs->sfthd_garray, policy_id,
         &thd_objs->numPoliciesAllocated);
 
-    if (thd_objs->sfthd_garray[policyId] == nullptr)
+    if (thd_objs->sfthd_garray[policy_id] == nullptr)
     {
-        thd_objs->sfthd_garray[policyId] =
+        thd_objs->sfthd_garray[policy_id] =
             (THD_NODE**)snort_calloc(THD_MAX_GENID, sizeof(THD_NODE*));
     }
 
     if ( sig_id == 0 )
     {
-        return sfthd_create_threshold_global(sc, thd_objs, &sfthd_node);
+        return sfthd_create_threshold_global(sc, thd_objs, &sfthd_node, policy_id);
     }
 
     if ( gen_id == 0 )
         return -1;
 
-    return sfthd_create_threshold_local(sc, thd_objs, &sfthd_node);
+    return sfthd_create_threshold_local(sc, thd_objs, &sfthd_node, policy_id);
 }
 
 #ifdef THD_DEBUG
@@ -647,12 +624,12 @@ static char* printIP(unsigned u, char* buf, unsigned len)
 #endif
 
 int sfthd_test_rule(XHash* rule_hash, THD_NODE* sfthd_node,
-    const SfIp* sip, const SfIp* dip, long curtime)
+    const SfIp* sip, const SfIp* dip, long curtime, PolicyId policy_id)
 {
     if ((rule_hash == nullptr) || (sfthd_node == nullptr))
         return 0;
 
-    int status = sfthd_test_local(rule_hash, sfthd_node, sip, dip, curtime);
+    int status = sfthd_test_local(rule_hash, sfthd_node, sip, dip, curtime, policy_id);
 
     return (status < -1) ? 1 : status;
 }
@@ -839,13 +816,12 @@ int sfthd_test_local(
     THD_NODE* sfthd_node,
     const SfIp* sip,
     const SfIp* dip,
-    time_t curtime)
+    time_t curtime,
+    PolicyId policy_id)
 {
     THD_IP_NODE_KEY key;
     THD_IP_NODE data,* sfthd_ip_node;
     const SfIp* ip;
-
-    PolicyId policy_id = get_network_policy()->policy_id;
 
 #ifdef THD_DEBUG
     char buf[24];
@@ -904,21 +880,21 @@ int sfthd_test_local(
     /*
      * Check for any Permanent sig_id objects for this gen_id  or add this one ...
      */
-    int status = xhash_add(local_hash, (void*)&key, &data);
-    if (status == XHASH_INTABLE)
+    int status = local_hash->insert((void*)&key, &data);
+    if (status == HASH_INTABLE)
     {
         /* Already in the table */
-        sfthd_ip_node = (THD_IP_NODE*)local_hash->cnode->data;
+        sfthd_ip_node = (THD_IP_NODE*)local_hash->get_user_data();
 
         /* Increment the event count */
         sfthd_ip_node->count++;
     }
-    else if (status == XHASH_NOMEM)
+    else if (status == HASH_NOMEM)
     {
         event_filter_stats.xhash_nomem_peg_local++;
         return 1;
     }
-    else if (status != XHASH_OK)
+    else if (status != HASH_OK)
     {
         /* hash error */
         return 1; /*  check the next threshold object */
@@ -941,14 +917,13 @@ static inline int sfthd_test_global(
     unsigned sig_id,     /* from current event */
     const SfIp* sip,        /* " */
     const SfIp* dip,        /* " */
-    time_t curtime)
+    time_t curtime,
+    PolicyId policy_id)
 {
     THD_IP_GNODE_KEY key;
     THD_IP_NODE data;
     THD_IP_NODE* sfthd_ip_node;
     const SfIp* ip;
-
-    PolicyId policy_id = get_network_policy()->policy_id;
 
 #ifdef THD_DEBUG
     char buf[24];
@@ -1002,21 +977,21 @@ static inline int sfthd_test_global(
     data.tstart = data.tlast = curtime; /* Event time */
 
     /* Check for any Permanent sig_id objects for this gen_id  or add this one ...  */
-    int status = xhash_add(global_hash, (void*)&key, &data);
-    if (status == XHASH_INTABLE)
+    int status = global_hash->insert((void*)&key, &data);
+    if (status == HASH_INTABLE)
     {
         /* Already in the table */
-        sfthd_ip_node = (THD_IP_NODE*)global_hash->cnode->data;
+        sfthd_ip_node = (THD_IP_NODE*)global_hash->get_user_data();
 
         /* Increment the event count */
         sfthd_ip_node->count++;
     }
-    else if (status == XHASH_NOMEM)
+    else if (status == HASH_NOMEM)
     {
         event_filter_stats.xhash_nomem_peg_global++;
         return 1;
     }
-    else if (status != XHASH_OK)
+    else if (status != HASH_OK)
     {
         /* hash error */
         return 1; /*  check the next threshold object */
@@ -1055,7 +1030,8 @@ int sfthd_test_threshold(
     unsigned sig_id,
     const SfIp* sip,
     const SfIp* dip,
-    long curtime)
+    long curtime,
+    PolicyId policy_id)
 {
     tThdItemKey key;
     GHash* sfthd_hash;
@@ -1065,8 +1041,6 @@ int sfthd_test_threshold(
 #ifdef THD_DEBUG
     int cnt;
 #endif
-
-    PolicyId policy_id = get_network_policy()->policy_id;
 
     if ((thd_objs == nullptr) || (thd == nullptr))
         return 0;
@@ -1103,7 +1077,7 @@ int sfthd_test_threshold(
     /*
      * Check for any Permanent sig_id objects for this gen_id
      */
-    sfthd_item = (THD_ITEM*)ghash_find(sfthd_hash, (void*)&key);
+    sfthd_item = (THD_ITEM*)sfthd_hash->find((void*)&key);
     if (sfthd_item == nullptr)
     {
 #ifdef THD_DEBUG
@@ -1142,7 +1116,7 @@ int sfthd_test_threshold(
         /*
          *   Test SUPPRESSION and THRESHOLDING
          */
-        int status = sfthd_test_local(thd->ip_nodes, sfthd_node, sip, dip, curtime);
+        int status = sfthd_test_local(thd->ip_nodes, sfthd_node, sip, dip, curtime, policy_id);
 
         if ( status < 0 ) /* -1 == Don't log and stop looking */
         {
@@ -1183,7 +1157,8 @@ global_test:
 
     if ( g_thd_node )
     {
-        int status = sfthd_test_global(thd->ip_gnodes, g_thd_node, sig_id, sip, dip, curtime);
+        int status = sfthd_test_global(thd->ip_gnodes, g_thd_node, sig_id,
+                sip, dip, curtime, policy_id);
 
         if ( status < 0 ) /* -1 == Don't log and stop looking */
         {
@@ -1235,9 +1210,9 @@ int sfthd_show_objects(ThresholdObjects* thd_objs)
 
         printf("...GEN_ID = %u\n",gen_id);
 
-        for (item_hash_node  = ghash_findfirst(sfthd_hash);
-            item_hash_node != 0;
-            item_hash_node  = ghash_findnext(sfthd_hash) )
+        for (item_hash_node  = sfthd_hash->ghash_findfirst();
+             item_hash_node != 0;
+             item_hash_node  = sfthd_hash->ghash_findnext() )
         {
             /* Check for any Permanent sig_id objects for this gen_id */
             sfthd_item = (THD_ITEM*)item_hash_node->data;

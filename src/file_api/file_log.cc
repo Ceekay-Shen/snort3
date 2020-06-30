@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -190,7 +190,7 @@ void LogHandler::handle(DataEvent&, Flow* f)
 
     uint64_t fsize = file->get_file_size();
     if ( fsize > 0)
-        TextLog_Print(tlog, "[Size: %u] ", fsize);
+        TextLog_Print(tlog, "[Size: %lu] ", fsize);
 
     TextLog_Print(tlog, "\n");
 
@@ -206,7 +206,7 @@ class FileLog : public Inspector
 public:
     FileLog(const FileLogConfig& conf) { config = conf; }
 
-    void show(SnortConfig*) override;
+    void show(const SnortConfig*) const override;
     void eval(Packet*) override { }
 
     bool configure(SnortConfig*) override
@@ -219,11 +219,10 @@ private:
     FileLogConfig config;
 };
 
-void FileLog::show(SnortConfig*)
+void FileLog::show(const SnortConfig*) const
 {
-    LogMessage("%s config:\n", s_name);
-    LogMessage("    Log system time: %s\n", config.log_sys_time ? "true" : "false");
-    LogMessage("    Log packet time: %s\n", config.log_pkt_time ? "true" : "false");
+    ConfigLogger::log_flag("log_pkt_time", config.log_pkt_time);
+    ConfigLogger::log_flag("log_sys_time", config.log_sys_time);
 }
 
 //-------------------------------------------------------------------------

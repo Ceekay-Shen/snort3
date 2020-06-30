@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2013-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -32,15 +32,18 @@
 typedef unsigned char uuid_t[16];
 #endif
 
+#include <algorithm>
 #include <memory>
 #include <unordered_map>
+#include <vector>
 
 #include "framework/data_bus.h"
 
 namespace snort
 {
-struct GHash;
+class GHash;
 struct SnortConfig;
+class ActiveAction;
 }
 
 struct PortTable;
@@ -48,7 +51,7 @@ struct vartable_t;
 struct sfip_var_t;
 
 typedef unsigned int PolicyId;
-typedef struct snort::GHash PortVarTable;
+typedef snort::GHash PortVarTable;
 
 enum PolicyMode
 {
@@ -86,6 +89,21 @@ struct NetworkPolicy
 public:
     NetworkPolicy(PolicyId = 0);
 
+    bool checksum_drops(uint16_t codec_cksum_err_flag)
+    { return (checksum_drop & codec_cksum_err_flag) != 0; }
+
+    bool ip_checksums()
+    { return (checksum_eval & CHECKSUM_FLAG__IP) != 0; }
+
+    bool udp_checksums()
+    { return (checksum_eval & CHECKSUM_FLAG__UDP) != 0; }
+
+    bool tcp_checksums()
+    { return (checksum_eval & CHECKSUM_FLAG__TCP) != 0; }
+
+    bool icmp_checksums()
+    { return (checksum_eval & CHECKSUM_FLAG__ICMP) != 0; }
+
 public:
     PolicyId policy_id;
     uint32_t user_policy_id = 0;
@@ -96,8 +114,6 @@ public:
     uint32_t checksum_eval;
     uint32_t checksum_drop;
     uint32_t normal_mask;
-
-    bool decoder_drop;
 };
 
 //-------------------------------------------------------------------------
@@ -115,7 +131,7 @@ public:
     void clone_dbus(snort::SnortConfig*, const char*);
 
 public:
-    PolicyId policy_id;
+    PolicyId policy_id = 0;
     PolicyMode policy_mode = POLICY_MODE__MAX;
     uint32_t user_policy_id = 0;
     uuid_t uuid{};
@@ -147,6 +163,8 @@ public:
 
     PolicyMode policy_mode = POLICY_MODE__MAX;
     bool enable_builtin_rules;
+    int rules_loaded = 0;
+    int rules_shared = 0;
 
     std::string includer;
     std::string include;
@@ -166,6 +184,10 @@ public:
     Enable default_rule_state = INHERIT_ENABLE;
 
     bool obfuscate_pii;
+
+    // Holds plugin actions associated with this policy (e.g. reject, react, etc.)
+    // Indexed by Actions::Type.
+    std::vector<snort::ActiveAction*> action;
 };
 
 //-------------------------------------------------------------------------
@@ -242,8 +264,19 @@ public:
     unsigned network_policy_count()
     { return network_policy.size(); }
 
+    unsigned shells_count()
+    { return shells.size(); }
+
     void set_cloned(bool state)
     { cloned = state; }
+
+    const Shell* get_shell_by_policy(unsigned id) const
+    {
+        auto it = std::find_if(std::begin(shell_map), std::end(shell_map),
+            [=](auto&& p) { return p.second->ips and p.second->ips->policy_id == id; });
+
+        return (it == std::end(shell_map)) ? nullptr : it->first;
+    }
 
 private:
     std::vector<Shell*> shells;
@@ -272,24 +305,24 @@ namespace snort
 SO_PUBLIC NetworkPolicy* get_network_policy();
 SO_PUBLIC InspectionPolicy* get_inspection_policy();
 SO_PUBLIC IpsPolicy* get_ips_policy();
-SO_PUBLIC InspectionPolicy* get_default_inspection_policy(snort::SnortConfig*);
-SO_PUBLIC void set_ips_policy(IpsPolicy* p);
-SO_PUBLIC void set_network_policy(NetworkPolicy* p);
-SO_PUBLIC IpsPolicy* get_user_ips_policy(snort::SnortConfig* sc, unsigned policy_id);
-SO_PUBLIC IpsPolicy* get_empty_ips_policy(snort::SnortConfig* sc);
-SO_PUBLIC NetworkPolicy* get_user_network_policy(snort::SnortConfig* sc, unsigned policy_id);
+SO_PUBLIC IpsPolicy* get_ips_policy(const snort::SnortConfig*, unsigned i = 0);
+SO_PUBLIC InspectionPolicy* get_default_inspection_policy(const snort::SnortConfig*);
+SO_PUBLIC void set_ips_policy(IpsPolicy*);
+SO_PUBLIC void set_network_policy(NetworkPolicy*);
+SO_PUBLIC IpsPolicy* get_user_ips_policy(const snort::SnortConfig*, unsigned policy_id);
+SO_PUBLIC IpsPolicy* get_empty_ips_policy(const snort::SnortConfig*);
+SO_PUBLIC NetworkPolicy* get_user_network_policy(const snort::SnortConfig*, unsigned policy_id);
 }
 
-void set_network_policy(snort::SnortConfig*, unsigned = 0);
+void set_network_policy(const snort::SnortConfig*, unsigned = 0);
 
 void set_inspection_policy(InspectionPolicy*);
-void set_inspection_policy(snort::SnortConfig*, unsigned = 0);
+void set_inspection_policy(const snort::SnortConfig*, unsigned = 0);
 
-void set_ips_policy(snort::SnortConfig*, unsigned = 0);
+void set_ips_policy(const snort::SnortConfig*, unsigned = 0);
 
-void set_policies(snort::SnortConfig*, Shell*);
-void set_default_policy();
-void set_default_policy(snort::SnortConfig*);
+void set_policies(const snort::SnortConfig*, Shell*);
+void set_default_policy(const snort::SnortConfig*);
 
 bool default_inspection_policy();
 bool only_inspection_policy();
@@ -297,3 +330,4 @@ bool only_ips_policy();
 bool only_network_policy();
 
 #endif
+

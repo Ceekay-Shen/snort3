@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -25,8 +25,8 @@
 
 typedef AppIdHttpSession::pair_t pair_t;
 
-AppIdHttpSession::AppIdHttpSession(AppIdSession& session)
-    : asd(session)
+AppIdHttpSession::AppIdHttpSession(AppIdSession& session, uint32_t http2_stream_id)
+    : asd(session), http2_stream_id(http2_stream_id)
 {
     for ( int i = 0; i < NUM_METADATA_FIELDS; i++)
         meta_data[i] = nullptr;
@@ -34,8 +34,6 @@ AppIdHttpSession::AppIdHttpSession(AppIdSession& session)
 
 AppIdHttpSession::~AppIdHttpSession()
 {
-    delete xff_addr;
-
     for ( int i = 0; i < NUM_METADATA_FIELDS; i++)
     {
         if ( meta_data[i] )
@@ -43,9 +41,8 @@ AppIdHttpSession::~AppIdHttpSession()
     }
 }
 
-int AppIdHttpSession::process_http_packet(AppidSessionDirection, AppidChangeBits&) { return 0; }
+int AppIdHttpSession::process_http_packet(AppidSessionDirection, AppidChangeBits&, HttpPatternMatchers&) { return 0; }
 
-char const* APPID_UT_XFF_IP_ADDR = "192.168.0.1";
 char const* CONTENT_TYPE = "html/text";
 char const* COOKIE = "this is my request cookie content";
 char const* NEW_COOKIE = "request new cookie content is chocolate chip";
@@ -81,12 +78,8 @@ class MockAppIdHttpSession : public AppIdHttpSession
 {
 public:
     MockAppIdHttpSession(AppIdSession& asd)
-        : AppIdHttpSession(asd)
+        : AppIdHttpSession(asd, 0)
     {
-        SfIp* ip = new SfIp;
-        ip->pton(AF_INET, APPID_UT_XFF_IP_ADDR);
-        xff_addr = ip;
-
         meta_data[REQ_AGENT_FID] = new std::string(USERAGENT);
         meta_data[REQ_HOST_FID] = new std::string(HOST);
         meta_data[REQ_REFERER_FID] = new std::string(REFERER);

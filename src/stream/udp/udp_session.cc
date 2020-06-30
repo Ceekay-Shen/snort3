@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -42,6 +42,7 @@ using namespace snort;
 const PegInfo udp_pegs[] =
 {
     SESSION_PEGS("udp"),
+    { CountType::SUM, "total_bytes", "total number of bytes processed" },
     { CountType::SUM, "ignored", "udp packets ignored" },
     { CountType::END, nullptr, nullptr }
 };
@@ -57,8 +58,7 @@ static void UdpSessionCleanup(Flow* lwssn)
         udpStats.released++;
 }
 
-static int ProcessUdp(
-    Flow* lwssn, Packet* p, StreamUdpConfig*, XHashNode*)
+static int ProcessUdp(Flow* lwssn, Packet* p, StreamUdpConfig*)
 {
     assert(lwssn->pkt_type == PktType::UDP);
 
@@ -70,7 +70,7 @@ static int ProcessUdp(
         udpStats.ignored++;
         return 0;
     }
-
+    udpStats.total_bytes += p->dsize;
     /* if both seen, mark established */
     if (p->is_from_server())
     {
@@ -103,7 +103,7 @@ static int ProcessUdp(
 // UdpSession methods
 //-------------------------------------------------------------------------
 
-UdpSession::UdpSession(Flow* flow) : Session(flow)
+UdpSession::UdpSession(Flow* f) : Session(f)
 { memory::MemoryCap::update_allocations(sizeof(*this)); }
 
 UdpSession::~UdpSession()
@@ -122,7 +122,7 @@ bool UdpSession::setup(Packet* p)
     StreamUdpConfig* pc = get_udp_cfg(flow->ssn_server);
     flow->set_default_session_timeout(pc->session_timeout, false);
 
-    SESSION_STATS_ADD(udpStats);
+    SESSION_STATS_ADD(udpStats)
 
     DataBus::publish(FLOW_STATE_EVENT, p);
 
@@ -145,9 +145,6 @@ void UdpSession::clear()
 void UdpSession::update_direction(
     char dir, const SfIp* ip, uint16_t port)
 {
-    SfIp tmpIp;
-    uint16_t tmpPort;
-
     if (flow->client_ip.equals(*ip) && (flow->client_port == port))
     {
         if ((dir == SSN_DIR_FROM_CLIENT) && (flow->ssn_state.direction == FROM_CLIENT))
@@ -165,13 +162,8 @@ void UdpSession::update_direction(
         }
     }
 
-    // Swap them -- leave flow->ssn_state.direction the same
-    tmpIp = flow->client_ip;
-    tmpPort = flow->client_port;
-    flow->client_ip = flow->server_ip;
-    flow->client_port = flow->server_port;
-    flow->server_ip = tmpIp;
-    flow->server_port = tmpPort;
+    // Swap client/server ip, ports, and stats -- leave flow->ssn_state.direction the same
+    flow->swap_roles();
 }
 
 int UdpSession::process(Packet* p)
@@ -191,9 +183,9 @@ int UdpSession::process(Packet* p)
         UdpHAManager::process_deletion(*flow);
     }
 
-    ProcessUdp(flow, p, pc, nullptr);
+    ProcessUdp(flow, p, pc);
     flow->markup_packet_flags(p);
-    
+
     flow->set_expire(p, flow->default_session_timeout);
 
     return 0;

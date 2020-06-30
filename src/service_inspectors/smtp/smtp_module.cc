@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -25,6 +25,7 @@
 #include "smtp_module.h"
 
 #include "log/messages.h"
+#include "packet_io/active.h"
 #include "utils/util.h"
 
 using namespace snort;
@@ -119,13 +120,13 @@ static const Parameter s_params[] =
     { "max_auth_command_line_len", Parameter::PT_INT, "0:65535", "1000",
       "max auth command Line Length" },
 
-    { "max_command_line_len", Parameter::PT_INT, "0:65535", "0",
+    { "max_command_line_len", Parameter::PT_INT, "0:65535", "512",
       "max Command Line Length" },
 
-    { "max_header_line_len", Parameter::PT_INT, "0:65535", "0",
+    { "max_header_line_len", Parameter::PT_INT, "0:65535", "1000",
       "max SMTP DATA header line" },
 
-    { "max_response_line_len", Parameter::PT_INT, "0:65535", "0",
+    { "max_response_line_len", Parameter::PT_INT, "0:65535", "512",
       "max SMTP response line" },
 
     { "normalize", Parameter::PT_ENUM, "none | cmds | all", "none",
@@ -306,7 +307,7 @@ bool SmtpModule::set(const char*, Value& v, SnortConfig*)
         config->max_response_line_len = v.get_uint16();
 
     else if ( v.is("normalize") )
-        config->normalize = (NORM_TYPES)v.get_uint8();
+        config->normalize = (SMTPNormType)v.get_uint8();
 
     else if ( v.is("normalize_cmds"))
         add_commands(v, PCMD_NORM);
@@ -329,7 +330,10 @@ bool SmtpModule::set(const char*, Value& v, SnortConfig*)
     }
 
     else if ( v.is("xlink2state") )
-        config->xlink2state = (XLINK2STATE)v.get_uint8();
+    {
+        config->xlink2state = (SMTPXlinkState)v.get_uint8();
+        Active::set_enabled();
+    }
 
     else
         return false;
@@ -337,9 +341,9 @@ bool SmtpModule::set(const char*, Value& v, SnortConfig*)
     return true;
 }
 
-SMTP_PROTO_CONF* SmtpModule::get_data()
+SmtpProtoConf* SmtpModule::get_data()
 {
-    SMTP_PROTO_CONF* tmp = config;
+    SmtpProtoConf* tmp = config;
     config = nullptr;
     return tmp;
 }
@@ -351,7 +355,7 @@ bool SmtpModule::begin(const char*, int, SnortConfig*)
 
     if(!config)
     {
-        config = new SMTP_PROTO_CONF;
+        config = new SmtpProtoConf;
         config->xlink2state = ALERT_XLINK2STATE;
         config->decode_conf.set_ignore_data(config->ignore_tls_data = false);
         config->normalize = NORMALIZE_NONE;

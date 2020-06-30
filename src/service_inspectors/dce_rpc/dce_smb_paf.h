@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -23,8 +23,6 @@
 #define DCE_SMB_PAF_H
 
 #include "stream/stream_splitter.h"
-
-#define DCE2_SMB_PAF_SHIFT(x64, x8) { (x64) <<= 8; (x64) |= (uint64_t)(x8); }
 
 // Enumerations for PAF states
 enum DCE2_PafSmbStates

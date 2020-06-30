@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -55,7 +55,7 @@ public:
     { return DETECT; }
 
 public:
-    uint32_t sid;
+    uint32_t sid = 0;
 };
 
 bool SidModule::set(const char*, Value& v, SnortConfig*)

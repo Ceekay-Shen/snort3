@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -25,9 +25,11 @@
 #include <string.h>
 
 #include "framework/base_api.h"
+#include "framework/counts.h"
 #include "framework/mpse.h"
 #include "framework/mpse_batch.h"
 #include "main/snort_config.h"
+#include "utils/stats.h"
 
 // must appear after snort_config.h to avoid broken c++ map include
 #include <CppUTest/CommandLineTestRunner.h>
@@ -38,6 +40,7 @@ using namespace snort;
 //-------------------------------------------------------------------------
 // base stuff
 //-------------------------------------------------------------------------
+
 namespace snort
 {
 Mpse::Mpse(const char*) { }
@@ -96,9 +99,7 @@ SnortConfig s_conf;
 THREAD_LOCAL SnortConfig* snort_conf = &s_conf;
 
 static std::vector<void *> s_state;
-
-ScScratchFunc scratch_setup;
-ScScratchFunc scratch_cleanup;
+static ScratchAllocator* scratcher = nullptr;
 
 SnortConfig::SnortConfig(const SnortConfig* const)
 {
@@ -108,16 +109,16 @@ SnortConfig::SnortConfig(const SnortConfig* const)
 
 SnortConfig::~SnortConfig() = default;
 
-int SnortConfig::request_scratch(ScScratchFunc setup, ScScratchFunc cleanup)
+int SnortConfig::request_scratch(ScratchAllocator* s)
 {
-    scratch_setup = setup;
-    scratch_cleanup = cleanup;
+    scratcher = s;
     s_state.resize(1);
-
     return 0;
 }
 
-SnortConfig* SnortConfig::get_conf()
+void SnortConfig::release_scratch(int) { }
+
+const SnortConfig* SnortConfig::get_conf()
 { return snort_conf; }
 
 static unsigned parse_errors = 0;
@@ -131,6 +132,10 @@ unsigned get_instance_id()
 { return 0; }
 
 }
+
+void show_stats(PegCount*, const PegInfo*, unsigned, const char*) { }
+void show_stats(PegCount*, const PegInfo*, const IndexVec&, const char*, FILE*) { }
+
 //-------------------------------------------------------------------------
 // stubs, spies, etc.
 //-------------------------------------------------------------------------
@@ -189,7 +194,7 @@ TEST(mpse_hs_base, base)
 
 TEST(mpse_hs_base, mpse)
 {
-    const MpseApi* mpse_api = (MpseApi*)se_hyperscan;
+    const MpseApi* mpse_api = (const MpseApi*)se_hyperscan;
     CHECK(mpse_api->flags == (MPSE_REGEX | MPSE_MTBLD));
 
     CHECK(mpse_api->ctor);
@@ -212,14 +217,17 @@ TEST(mpse_hs_base, mpse)
 
 TEST_GROUP(mpse_hs_match)
 {
+    Module* mod = nullptr;
     Mpse* hs = nullptr;
-    const MpseApi* mpse_api = (MpseApi*)se_hyperscan;
+    bool do_cleanup = false;
+    const MpseApi* mpse_api = (const MpseApi*)se_hyperscan;
 
     void setup() override
     {
         // FIXIT-L cpputest hangs or crashes in the leak detector
         MemoryLeakWarningPlugin::turnOffNewDeleteOverloads();
         CHECK(se_hyperscan);
+        mod = mpse_api->base.mod_ctor();
         hs = mpse_api->ctor(snort_conf, nullptr, &s_agent);
         CHECK(hs);
         hits = 0;
@@ -228,7 +236,9 @@ TEST_GROUP(mpse_hs_match)
     void teardown() override
     {
         mpse_api->dtor(hs);
-        scratch_cleanup(snort_conf);
+        if ( do_cleanup )
+            scratcher->cleanup(snort_conf);
+        mpse_api->base.mod_dtor(mod);
         MemoryLeakWarningPlugin::turnOnNewDeleteOverloads();
     }
 };
@@ -239,8 +249,10 @@ TEST(mpse_hs_match, empty)
     CHECK(parse_errors == 0);
     CHECK(hs->get_pattern_count() == 0);
 
+    do_cleanup = scratcher->setup(snort_conf);
+
     int state = 0;
-    CHECK(hs->search((uint8_t*)"foo", 3, match, nullptr, &state) == 0);
+    CHECK(hs->search((const uint8_t*)"foo", 3, match, nullptr, &state) == 0);
     CHECK(hits == 0);
 }
 
@@ -248,14 +260,14 @@ TEST(mpse_hs_match, single)
 {
     Mpse::PatternDescriptor desc;
 
-    CHECK(hs->add_pattern(nullptr, (uint8_t*)"foo", 3, desc, s_user) == 0);
+    CHECK(hs->add_pattern((const uint8_t*)"foo", 3, desc, s_user) == 0);
     CHECK(hs->prep_patterns(snort_conf) == 0);
     CHECK(hs->get_pattern_count() == 1);
 
-    scratch_setup(snort_conf);
+    do_cleanup = scratcher->setup(snort_conf);
 
     int state = 0;
-    CHECK(hs->search((uint8_t*)"foo", 3, match, nullptr, &state) == 1);
+    CHECK(hs->search((const uint8_t*)"foo", 3, match, nullptr, &state) == 1);
     CHECK(hits == 1);
 }
 
@@ -263,15 +275,15 @@ TEST(mpse_hs_match, nocase)
 {
     Mpse::PatternDescriptor desc(true, true, false);
 
-    CHECK(hs->add_pattern(nullptr, (uint8_t*)"foo", 3, desc, s_user) == 0);
+    CHECK(hs->add_pattern((const uint8_t*)"foo", 3, desc, s_user) == 0);
     CHECK(hs->prep_patterns(snort_conf) == 0);
     CHECK(hs->get_pattern_count() == 1);
 
-    scratch_setup(snort_conf);
+    do_cleanup = scratcher->setup(snort_conf);
 
     int state = 0;
-    CHECK(hs->search((uint8_t*)"foo", 3, match, nullptr, &state) == 1);
-    CHECK(hs->search((uint8_t*)"fOo", 3, match, nullptr, &state) == 1);
+    CHECK(hs->search((const uint8_t*)"foo", 3, match, nullptr, &state) == 1);
+    CHECK(hs->search((const uint8_t*)"fOo", 3, match, nullptr, &state) == 1);
     CHECK(hits == 2);
 }
 
@@ -279,15 +291,15 @@ TEST(mpse_hs_match, other)
 {
     Mpse::PatternDescriptor desc(false, true, false);
 
-    CHECK(hs->add_pattern(nullptr, (uint8_t*)"foo", 3, desc, s_user) == 0);
+    CHECK(hs->add_pattern((const uint8_t*)"foo", 3, desc, s_user) == 0);
     CHECK(hs->prep_patterns(snort_conf) == 0);
     CHECK(hs->get_pattern_count() == 1);
 
-    scratch_setup(snort_conf);
+    do_cleanup = scratcher->setup(snort_conf);
 
     int state = 0;
-    CHECK(hs->search((uint8_t*)"foo", 3, match, nullptr, &state) == 1);
-    CHECK(hs->search((uint8_t*)"fOo", 3, match, nullptr, &state) == 0);
+    CHECK(hs->search((const uint8_t*)"foo", 3, match, nullptr, &state) == 1);
+    CHECK(hs->search((const uint8_t*)"fOo", 3, match, nullptr, &state) == 0);
     CHECK(hits == 1);
 }
 
@@ -295,16 +307,17 @@ TEST(mpse_hs_match, multi)
 {
     Mpse::PatternDescriptor desc;
 
-    CHECK(hs->add_pattern(nullptr, (uint8_t*)"foo", 3, desc, s_user) == 0);
-    CHECK(hs->add_pattern(nullptr, (uint8_t*)"bar", 3, desc, s_user) == 0);
-    CHECK(hs->add_pattern(nullptr, (uint8_t*)"baz", 3, desc, s_user) == 0);
+    CHECK(hs->add_pattern((const uint8_t*)"foo", 3, desc, s_user) == 0);
+    CHECK(hs->add_pattern((const uint8_t*)"bar", 3, desc, s_user) == 0);
+    CHECK(hs->add_pattern((const uint8_t*)"baz", 3, desc, s_user) == 0);
 
     CHECK(hs->prep_patterns(snort_conf) == 0);
     CHECK(hs->get_pattern_count() == 3);
-    scratch_setup(snort_conf);
+
+    do_cleanup = scratcher->setup(snort_conf);
 
     int state = 0;
-    CHECK(hs->search((uint8_t*)"foo bar baz", 11, match, nullptr, &state) == 3);
+    CHECK(hs->search((const uint8_t*)"foo bar baz", 11, match, nullptr, &state) == 3);
     CHECK(hits == 3);
 }
 
@@ -313,15 +326,15 @@ TEST(mpse_hs_match, regex)
 {
     Mpse::PatternDescriptor desc;
 
-    CHECK(hs->add_pattern(
-            nullptr, (uint8_t*)"(foo)|(bar)|(baz)", 17, desc, s_user) == 0);
+    CHECK(hs->add_pattern((const uint8_t*)"(foo)|(bar)|(baz)", 17, desc, s_user) == 0);
 
     CHECK(hs->prep_patterns(snort_conf) == 0);
     CHECK(hs->get_pattern_count() == 1);
-    scratch_setup(snort_conf);
+
+    do_cleanup = scratcher->setup(snort_conf);
 
     int state = 0;
-    CHECK(hs->search((uint8_t*)"foo bar baz", 11, match, nullptr, &state) == 0);
+    CHECK(hs->search((const uint8_t*)"foo bar baz", 11, match, nullptr, &state) == 0);
     CHECK(hits == 3);
 }
 
@@ -330,18 +343,18 @@ TEST(mpse_hs_match, pcre)
     Mpse::PatternDescriptor desc;
 
     // from sid 23286
-    CHECK(hs->add_pattern(
-            nullptr, (uint8_t*)"\\.definition\\s*\\(", 21, desc, s_user) == 0);
+    CHECK(hs->add_pattern((const uint8_t*)"\\.definition\\s*\\(", 21, desc, s_user) == 0);
 
     CHECK(hs->prep_patterns(snort_conf) == 0);
     CHECK(hs->get_pattern_count() == 1);
-    scratch_setup(snort_conf);
+
+    do_cleanup = scratcher->setup(snort_conf);
 
     int state = 0;
-    CHECK(hs->search((uint8_t*)":definition(", 12, match, nullptr, &state) == 0);
-    CHECK(hs->search((uint8_t*)".definition(", 12, match, nullptr, &state) == 0);
-    CHECK(hs->search((uint8_t*)".definition (", 13, match, nullptr, &state) == 0);
-    CHECK(hs->search((uint8_t*)".definition\r\n(", 16, match, nullptr, &state) == 0);
+    CHECK(hs->search((const uint8_t*)":definition(", 12, match, nullptr, &state) == 0);
+    CHECK(hs->search((const uint8_t*)".definition(", 12, match, nullptr, &state) == 0);
+    CHECK(hs->search((const uint8_t*)".definition (", 13, match, nullptr, &state) == 0);
+    CHECK(hs->search((const uint8_t*)".definition\r\n(", 16, match, nullptr, &state) == 0);
     CHECK(hits == 4);
 }
 #endif
@@ -352,15 +365,19 @@ TEST(mpse_hs_match, pcre)
 
 TEST_GROUP(mpse_hs_multi)
 {
+    Module* mod = nullptr;
     Mpse* hs1 = nullptr;
     Mpse* hs2 = nullptr;
-    const MpseApi* mpse_api = (MpseApi*)se_hyperscan;
+    bool do_cleanup = false;
+    const MpseApi* mpse_api = (const MpseApi*)se_hyperscan;
 
     void setup() override
     {
         // FIXIT-L cpputest hangs or crashes in the leak detector
         MemoryLeakWarningPlugin::turnOffNewDeleteOverloads();
         CHECK(se_hyperscan);
+
+        mod = mpse_api->base.mod_ctor();
 
         hs1 = mpse_api->ctor(snort_conf, nullptr, &s_agent);
         CHECK(hs1);
@@ -375,7 +392,9 @@ TEST_GROUP(mpse_hs_multi)
     {
         mpse_api->dtor(hs1);
         mpse_api->dtor(hs2);
-        scratch_cleanup(snort_conf);
+        if ( do_cleanup )
+            scratcher->cleanup(snort_conf);
+        mpse_api->base.mod_dtor(mod);
         MemoryLeakWarningPlugin::turnOnNewDeleteOverloads();
     }
 };
@@ -384,8 +403,8 @@ TEST(mpse_hs_multi, single)
 {
     Mpse::PatternDescriptor desc;
 
-    CHECK(hs1->add_pattern(nullptr, (uint8_t*)"uba", 3, desc, s_user) == 0);
-    CHECK(hs2->add_pattern(nullptr, (uint8_t*)"tuba", 4, desc, s_user) == 0);
+    CHECK(hs1->add_pattern((const uint8_t*)"uba", 3, desc, s_user) == 0);
+    CHECK(hs2->add_pattern((const uint8_t*)"tuba", 4, desc, s_user) == 0);
 
     CHECK(hs1->prep_patterns(snort_conf) == 0);
     CHECK(hs2->prep_patterns(snort_conf) == 0);
@@ -393,16 +412,16 @@ TEST(mpse_hs_multi, single)
     CHECK(hs1->get_pattern_count() == 1);
     CHECK(hs2->get_pattern_count() == 1);
 
-    scratch_setup(snort_conf);
+    do_cleanup = scratcher->setup(snort_conf);
 
     int state = 0;
-    CHECK(hs1->search((uint8_t*)"fubar", 5, match, nullptr, &state) == 1 );
+    CHECK(hs1->search((const uint8_t*)"fubar", 5, match, nullptr, &state) == 1 );
     CHECK(hits == 1);
 
-    CHECK(hs2->search((uint8_t*)"fubar", 5, match, nullptr, &state) == 0);
+    CHECK(hs2->search((const uint8_t*)"fubar", 5, match, nullptr, &state) == 0);
     CHECK(hits == 1);
 
-    CHECK(hs1->search((uint8_t*)"snafu", 5, match, nullptr, &state) == 0);
+    CHECK(hs1->search((const uint8_t*)"snafu", 5, match, nullptr, &state) == 0);
     CHECK(hits == 1);
 }
 

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 // Copyright (C) 1998-2005 Martin Roesch <roesch@sourcefire.com>
 //
@@ -38,7 +38,7 @@ struct SnortConfig;
 class Snort
 {
 public:
-    static SnortConfig* get_reload_config(const char* fname);
+    static SnortConfig* get_reload_config(const char* fname, const char* plugin_path = nullptr);
     static SnortConfig* get_updated_policy(SnortConfig*, const char* fname, const char* iname);
     static SnortConfig* get_updated_module(SnortConfig*, const char* name);
     static void setup(int argc, char* argv[]);

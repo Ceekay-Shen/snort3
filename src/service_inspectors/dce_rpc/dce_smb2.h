@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -164,7 +164,7 @@ struct Smb2SetInfoRequestHdr
     uint16_t buffer_offset;    /* buffer offset */
     uint16_t reserved;         /* reserved */
     uint32_t additional_info;  /* additional information */
-    uint64_t fileId_persistent;/* fileId that is persistent */
+    uint64_t fileId_persistent; /* fileId that is persistent */
     uint64_t fileId_volatile;  /* fileId that is volatile */
 };
 
@@ -216,6 +216,7 @@ struct Smb2CloseRequestHdr
     uint64_t fileId_volatile;         /* fileId that is volatile */
 };
 
+#define SMB2_SHARE_TYPE_NONE  0x00
 #define SMB2_SHARE_TYPE_DISK  0x01
 #define SMB2_SHARE_TYPE_PIPE  0x02
 #define SMB2_SHARE_TYPE_PRINT 0x03

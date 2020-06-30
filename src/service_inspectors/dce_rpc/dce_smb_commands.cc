@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -1566,13 +1566,13 @@ DCE2_Ret DCE2_SmbNegotiate(DCE2_SmbSsnData* ssd, const SmbNtHdr*,
     if (DCE2_ComInfoIsRequest(com_info))
     {
         // Have at least 2 bytes based on byte count check done earlier
-        uint8_t* term_ptr;
+        const uint8_t* term_ptr;
         int ntlm_index = 0;
         uint16_t com_size = DCE2_ComInfoCommandSize(com_info);
 
         dce2_move(nb_ptr, nb_len, com_size);
 
-        while ((term_ptr = (uint8_t*)memchr(nb_ptr, '\0', nb_len)) != nullptr)
+        while ((term_ptr = (const uint8_t*)memchr(nb_ptr, '\0', nb_len)) != nullptr)
         {
             if (!SmbFmtDialect(*nb_ptr))
             {

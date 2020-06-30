@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -261,19 +261,6 @@ static const ConvertMap enable_deep_teredo_inspection_api =
 };
 
 const ConvertMap* enable_deep_teredo_inspection_map = &enable_deep_teredo_inspection_api;
-
-/*************************************************
- ******************  enable_gtp ******************
- *************************************************/
-
-static const std::string enable_gtp = "enable_gtp";
-static const ConvertMap enable_gtp_api =
-{
-    enable_gtp,
-    config_true_no_opt_ctor<& enable_gtp, & udp>
-};
-
-const ConvertMap* enable_gtp_map = &enable_gtp_api;
 
 /*************************************************
  **********  enable_mpls_overlapping_ip **********

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -91,10 +91,10 @@ static const RuleMap ipv4_rules[] =
     { 0, nullptr }
 };
 
-class Ipv4Module : public CodecModule
+class Ipv4Module : public BaseCodecModule
 {
 public:
-    Ipv4Module() : CodecModule(CD_IPV4_NAME, CD_IPV4_HELP) { }
+    Ipv4Module() : BaseCodecModule(CD_IPV4_NAME, CD_IPV4_HELP) { }
 
     const RuleMap* get_rules() const override
     { return ipv4_rules; }
@@ -169,7 +169,7 @@ bool Ipv4Codec::decode(const RawData& raw, CodecData& codec, DecodeData& snort)
         return false;
     }
 
-    if ( SnortConfig::get_conf()->hit_ip_maxlayers(codec.ip_layer_cnt) )
+    if ( codec.conf->hit_ip_maxlayers(codec.ip_layer_cnt) )
     {
         codec_event(codec, DECODE_IP_MULTIPLE_ENCAPSULATION);
         return false;
@@ -226,7 +226,7 @@ bool Ipv4Codec::decode(const RawData& raw, CodecData& codec, DecodeData& snort)
         /* If the previous layer was not IP-in-IP, this is not a 4-in-6 tunnel */
         if ( codec.codec_flags & CODEC_NON_IP_TUNNEL )
             codec.codec_flags &= ~CODEC_NON_IP_TUNNEL;
-        else if ( SnortConfig::tunnel_bypass_enabled(TUNNEL_4IN6) )
+        else if ( codec.conf->tunnel_bypass_enabled(TUNNEL_4IN6) )
             codec.tunnel_bypass = true;
     }
     else if (snort.ip_api.is_ip4())
@@ -234,7 +234,7 @@ bool Ipv4Codec::decode(const RawData& raw, CodecData& codec, DecodeData& snort)
         /* If the previous layer was not IP-in-IP, this is not a 4-in-4 tunnel */
         if ( codec.codec_flags & CODEC_NON_IP_TUNNEL )
             codec.codec_flags &= ~CODEC_NON_IP_TUNNEL;
-        else if (SnortConfig::tunnel_bypass_enabled(TUNNEL_4IN4))
+        else if (codec.conf->tunnel_bypass_enabled(TUNNEL_4IN4))
             codec.tunnel_bypass = true;
     }
 
@@ -256,7 +256,7 @@ bool Ipv4Codec::decode(const RawData& raw, CodecData& codec, DecodeData& snort)
      */
     IP4AddrTests(iph, codec, snort);
 
-    if (SnortConfig::ip_checksums() && !valid_checksum_from_daq(raw))
+    if (snort::get_network_policy()->ip_checksums() && !valid_checksum_from_daq(raw))
     {
         // routers drop packets with bad IP checksums, we don't really need to check them...
         int16_t csum = checksum::ip_cksum((const uint16_t*)iph, hlen);
@@ -341,7 +341,7 @@ bool Ipv4Codec::decode(const RawData& raw, CodecData& codec, DecodeData& snort)
     /* if this packet isn't a fragment
      * or if it is, its a UDP packet and offset is 0 */
     if (!(snort.decode_flags & DECODE_FRAG) /*||
-        ((frag_off == 0) &&  // FIXIT-H this forces flow to udp instead of ip
+        ((frag_off == 0) &&  // FIXIT-M this forces flow to udp instead of ip
          (iph->proto() == IpProtocol::UDP))*/)
     {
         if (to_utype(iph->proto()) >= to_utype(ProtocolId::MIN_UNASSIGNED_IP_PROTO))
@@ -374,8 +374,8 @@ void Ipv4Codec::IP4AddrTests(
     /* Loopback traffic  - don't use htonl for speed reasons -
      * s_addr is always in network order */
 #ifdef WORDS_BIGENDIAN
-    msb_src = (iph.ip_src >> 24);
-    msb_dst = (iph.ip_dst >> 24);
+    msb_src = (uint8_t)(iph->ip_src >> 24);
+    msb_dst = (uint8_t)(iph->ip_dst >> 24);
 #else
     msb_src = (uint8_t)(iph->ip_src & 0xff);
     msb_dst = (uint8_t)(iph->ip_dst & 0xff);
@@ -399,7 +399,7 @@ void Ipv4Codec::IP4AddrTests(
     if ( msb_src == ip::IP4_MULTICAST )
         codec_event(codec, DECODE_IP4_SRC_MULTICAST);
 
-    if ( SnortConfig::is_address_anomaly_check_enabled() )
+    if ( codec.conf->is_address_anomaly_check_enabled() )
     {
         if ( msb_src == ip::IP4_RESERVED || sfvar_ip_in(MulticastReservedIp, snort.ip_api.get_src()) )
             codec_event(codec, DECODE_IP4_SRC_RESERVED);
@@ -553,13 +553,12 @@ default_case:
  *********************  L O G G E R  ******************************
 *******************************************************************/
 
-void Ipv4Codec::log(TextLog* const text_log, const uint8_t* raw_pkt,
-    const uint16_t lyr_len)
+void Ipv4Codec::log(TextLog* const text_log, const uint8_t* raw_pkt, const uint16_t lyr_len)
 {
     const ip::IP4Hdr* const ip4h = reinterpret_cast<const ip::IP4Hdr*>(raw_pkt);
 
     // FIXIT-RC this does NOT obfuscate correctly
-    if (SnortConfig::obfuscate())
+    if (SnortConfig::get_conf()->obfuscate())
     {
         TextLog_Print(text_log, "xxx.xxx.xxx.xxx -> xxx.xxx.xxx.xxx");
     }

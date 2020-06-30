@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -42,7 +42,7 @@ public:
     StreamTcp(TcpStreamConfig*);
     ~StreamTcp() override;
 
-    void show(SnortConfig*) override;
+    void show(const SnortConfig*) const override;
     bool configure(SnortConfig*) override;
     void tinit() override;
     void tterm() override;
@@ -53,13 +53,20 @@ public:
     TcpStreamConfig* const config;
 };
 
-StreamTcp::StreamTcp (TcpStreamConfig* c) : config(c) {}
+StreamTcp::StreamTcp (TcpStreamConfig* c)
+    : config(c)
+{ }
 
 StreamTcp::~StreamTcp()
 { delete config; }
 
-void StreamTcp::show(SnortConfig*)
-{ TcpStreamConfig::show_config(config); }
+void StreamTcp::show(const SnortConfig*) const
+{
+    if ( !config )
+        return;
+
+    config->show();
+}
 
 bool StreamTcp::configure(SnortConfig* sc)
 {

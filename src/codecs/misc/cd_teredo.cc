@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -87,7 +87,7 @@ bool TeredoCodec::decode(const RawData& raw, CodecData& codec, DecodeData& snort
         codec.proto_bits |= PROTO_BIT__TEREDO;
         codec.codec_flags |= CODEC_TEREDO_SEEN;  // for ipv6 codec
 
-        if ( SnortConfig::tunnel_bypass_enabled(TUNNEL_TEREDO) )
+        if ( codec.conf->tunnel_bypass_enabled(TUNNEL_TEREDO) )
             codec.tunnel_bypass = true;
 
         if ( (!teredo::is_teredo_port(snort.sp)) && (!teredo::is_teredo_port(snort.dp)) )

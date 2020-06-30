@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -50,7 +50,7 @@ extern THREAD_LOCAL snort::ProfileStats rulePerfStats;
 
 struct RuleTreeNode;
 int fpLogEvent(const RuleTreeNode*, const OptTreeNode*, snort::Packet*);
-int fpEvalRTN(RuleTreeNode*, snort::Packet*, int check_ports);
+bool fp_eval_rtn(RuleTreeNode*, snort::Packet*, int check_ports);
 int fp_eval_option(void*, Cursor&, snort::Packet*);
 
 #define MAX_NUM_RULE_TYPES 16   // max number of allowed rule types
@@ -70,9 +70,9 @@ int fp_eval_option(void*, Cursor&, snort::Packet*);
 struct MatchInfo
 {
     const OptTreeNode* MatchArray[MAX_EVENT_MATCH];
-    int iMatchCount;
-    int iMatchIndex;
-    int iMatchMaxLen;
+    unsigned iMatchCount;
+    unsigned iMatchIndex;
+    unsigned iMatchMaxLen;
 };
 
 /*

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 // Copyright (C) 1998-2002 Martin Roesch <roesch@sourcefire.com>
 //
@@ -28,9 +28,6 @@
 // FIXIT-L convert tags to use flow instead of hash table.
 
 #include <cstdint>
-
-#include "main/snort_debug.h"
-extern Trace TRACE_NAME(detection);
 
 namespace snort
 {

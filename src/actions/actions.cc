@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -25,6 +25,7 @@
 #include "detection/detect.h"
 #include "detection/tag.h"
 #include "packet_io/active.h"
+#include "packet_io/active_action.h"
 #include "parser/parser.h"
 #include "utils/stats.h"
 
@@ -120,18 +121,20 @@ void Actions::execute(Actions::Type action, Packet* p, const OptTreeNode* otn,
 
     case Actions::DROP:
         p->active->drop_packet(p);
+        p->active->set_drop_reason("ips");
         alert(p, otn);
         SetTags(p, otn, event_id);
         break;
 
     case Actions::BLOCK:
         p->active->block_session(p);
+        p->active->set_drop_reason("ips");
         alert(p, otn);
         SetTags(p, otn, event_id);
         break;
 
     case Actions::RESET:
-        p->active->reset_session(p);
+        p->active->reset_session(p, get_ips_policy()->action[action]);
         alert(p, otn);
         SetTags(p, otn, event_id);
         break;
@@ -154,7 +157,7 @@ void Actions::apply(Actions::Type action, Packet* p)
         break;
 
     case Actions::RESET:
-        p->active->reset_session(p);
+        p->active->reset_session(p, get_ips_policy()->action[action]);
         break;
 
     default:

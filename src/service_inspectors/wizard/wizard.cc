@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -23,6 +23,7 @@
 
 #include "flow/flow.h"
 #include "log/messages.h"
+#include "main/snort_debug.h"
 #include "profiler/profiler.h"
 #include "protocols/packet.h"
 #include "stream/stream_splitter.h"
@@ -117,9 +118,6 @@ public:
     Wizard(WizardModule*);
     ~Wizard() override;
 
-    void show(SnortConfig*) override
-    { LogMessage("Wizard\n"); }
-
     void eval(Packet*) override;
 
     StreamSplitter* get_splitter(bool) override;
@@ -172,7 +170,10 @@ StreamSplitter::Status MagicSplitter::scan(
     count_scan(pkt->flow);
 
     if ( wizard->cast_spell(wand, pkt->flow, data, len) )
+    {
+        trace_logf(wizard_trace, pkt, "service set to %s\n", pkt->flow->service);
         count_hit(pkt->flow);
+    }
 
     else if ( wizard->finished(wand) )
         return ABORT;
@@ -247,7 +248,10 @@ void Wizard::eval(Packet* p)
     reset(wand, false, p->is_from_client());
 
     if ( cast_spell(wand, p->flow, p->data, p->dsize) )
+    {
+        trace_logf(wizard_trace, p, "service set to %s\n", p->flow->service);
         ++tstats.udp_hits;
+    }
 
     ++tstats.udp_scans;
 }

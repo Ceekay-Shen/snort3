@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2004-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -174,36 +174,6 @@ static int snort_telnet(TELNET_PROTO_CONF* GlobalConf, Packet* p)
     return FTPP_INVALID_PROTO;
 }
 
-/*
- * Function: PrintTelnetConf(TELNET_PROTO_CONF *TelnetConf,
- *                          char *Option)
- *
- * Purpose: Prints the telnet configuration
- *
- * Arguments: TelnetConf    => pointer to the telnet configuration
- *
- * Returns: int     => an error code integer (0 = success,
- *                     >0 = non-fatal error, <0 = fatal error)
- *
- */
-static int PrintTelnetConf(TELNET_PROTO_CONF* TelnetConf)
-{
-    if (!TelnetConf)
-    {
-        return FTPP_INVALID_ARG;
-    }
-
-    LogMessage("    TELNET CONFIG:\n");
-    LogMessage("      Are You There Threshold: %d\n",
-        TelnetConf->ayt_threshold);
-    LogMessage("      Normalize: %s\n", TelnetConf->normalize ? "YES" : "NO");
-    PrintConfOpt(TelnetConf->detect_encrypted, "Check for Encrypted Traffic");
-    LogMessage("      Continue to check encrypted data: %s\n",
-        TelnetConf->check_encrypted_data ? "YES" : "NO");
-
-    return FTPP_SUCCESS;
-}
-
 //-------------------------------------------------------------------------
 // class stuff
 //-------------------------------------------------------------------------
@@ -215,7 +185,7 @@ public:
     ~Telnet() override;
 
     bool configure(SnortConfig*) override;
-    void show(SnortConfig*) override;
+    void show(const SnortConfig*) const override;
     void eval(Packet*) override;
 
     bool get_buf(InspectionBuffer::Type, Packet*, InspectionBuffer&) override;
@@ -241,9 +211,15 @@ bool Telnet::configure(SnortConfig* sc)
     return !TelnetCheckConfigs(sc, config);
 }
 
-void Telnet::show(SnortConfig*)
+void Telnet::show(const SnortConfig*) const
 {
-    PrintTelnetConf(config);
+    if ( !config )
+        return;
+
+    ConfigLogger::log_value("ayt_attack_thresh", config->ayt_threshold);
+    ConfigLogger::log_flag("check_encrypted", config->detect_encrypted);
+    ConfigLogger::log_flag("encrypted_traffic", config->check_encrypted_data);
+    ConfigLogger::log_flag("normalize", config->normalize);
 }
 
 void Telnet::eval(Packet* p)

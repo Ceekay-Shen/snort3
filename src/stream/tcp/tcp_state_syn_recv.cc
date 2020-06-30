@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -67,6 +67,7 @@ bool TcpStateSynRecv::syn_ack_sent(TcpSegmentDescriptor& tsd, TcpStreamTracker& 
     Flow* flow = tsd.get_flow();
 
     // FIXIT-H verify ack being sent is valid...
+    // norm/drop + discard
     trk.finish_server_init(tsd);
     trk.normalizer.ecn_tracker(tsd.get_tcph(), trk.session->config->require_3whs());
     flow->session_state |= STREAM_STATE_SYN_ACK;
@@ -121,6 +122,14 @@ bool TcpStateSynRecv::ack_recv(TcpSegmentDescriptor& tsd, TcpStreamTracker& trk)
     return true;
 }
 
+bool TcpStateSynRecv::data_seg_sent(TcpSegmentDescriptor& tsd, TcpStreamTracker& trk)
+{
+    trk.update_tracker_ack_sent(tsd);
+    if ( trk.session->no_ack_mode_enabled() )
+        trk.update_tracker_no_ack_recv(tsd);
+    return true;
+}
+
 bool TcpStateSynRecv::data_seg_recv(TcpSegmentDescriptor& tsd, TcpStreamTracker& trk)
 {
     if ( trk.is_ack_valid(tsd.get_seg_ack()) )
@@ -171,8 +180,8 @@ bool TcpStateSynRecv::rst_recv(TcpSegmentDescriptor& tsd, TcpStreamTracker& trk)
     else
     {
         inc_tcp_discards();
-        trk.normalizer.packet_dropper(tsd, NORM_TCP_BLOCK);
         trk.session->tel.set_tcp_event(EVENT_BAD_RST);
+        trk.normalizer.packet_dropper(tsd, NORM_TCP_BLOCK);
     }
 
     // FIXIT-L might be good to create alert specific to RST with data

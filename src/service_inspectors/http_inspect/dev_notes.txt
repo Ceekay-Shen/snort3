@@ -14,6 +14,14 @@ one packet in a TCP stream effectively blocks all subsequent packets from being 
 delivered to a target application. Once a packet is detained no attempt is made to detain
 additional packets.
 
+The core functions of detained inspection are implemented in the message body cutters. They search
+for the beginning of Javascripts by finding the string "<script". The raw packet containing the 't'
+will be detained as well the beginning of every subsequent message section. No attempt is made to
+find the end of a script--it is assumed to continue through the rest of the message body. The
+cutter will decompress gzip data to search for "<script". This unzip is unrelated and in addition
+to the unzip done in reassemble(). The decision was made to accept the performance cost of
+unzipping twice to avoid using memory to store uncompressed data waiting for reassembly.
+
 Splitter init_partial_flush() is called by Stream when a previously detained packet must be dropped
 or released immediately. It sets up reassembly and inspection of a partial message section
 containing all available data. Once inspection of this partial message section is complete, for
@@ -42,7 +50,7 @@ processed together. There are seven types of message section:
 7. Trailers (all header lines following a chunked body as a group)
 
 Message sections are represented by message section objects that contain and process them. There
-are eleven message section classes that inherit as follows. An asterisk denotes a virtual class.
+are twelve message section classes that inherit as follows. An asterisk denotes a virtual class.
 
 1. HttpMsgSection* - top level with all common elements
 2. HttpMsgStart* : HttpMsgSection - common elements of request and status
@@ -55,6 +63,7 @@ are eleven message section classes that inherit as follows. An asterisk denotes 
 9. HttpMsgBodyCl : HttpMsgBody
 10. HttpMsgBodyChunk : HttpMsgBody
 11. HttpMsgBodyOld : HttpMsgBody
+12. HttpMsgBodyH2 : HttpMsgBody
 
 An HttpTransaction is a container that keeps all the sections of a message together and associates
 the request message with the response message. Transactions may be organized into pipelines when an
@@ -157,9 +166,17 @@ simplify_path.
 
 Test tool usage instructions:
 
-The HI internal test tool is the HttpTestInput class. It allows the developer to write tests that
+The HI test tool consists of two features. test_output provides extensive information about the
+inner workings of HI. It is strongly focused on showing work products (Fields) rather than being a
+tracing feature. Given a problematic pcap, the developer can see what the input is, how HI
+interprets it, and what the output to rule options will be. Several related configuration options
+(see help) allow the developer to customize the output.
+
+test_input is provided by the HttpTestInput class. It allows the developer to write tests that
 simulate HTTP messages split into TCP segments at specified points. The tests cover all of splitter
-and inspector and the impact on downstream customers such as detection and file processing.
+and inspector and the impact on downstream customers such as detection and file processing. The
+test_input option activates a modifed form of test_output. It is not necessary to also specify
+test_output.
 
 The test input comes from the file http_test_msgs.txt in the current directory. Enter HTTP test
 message text as you want it to be presented to the StreamSplitter.
@@ -173,8 +190,9 @@ Each paragraph represents a TCP segment. The splitter can be tested by putting m
 the same paragraph (splitter must split) or continuing a section in the next paragraph (splitter
 must search and reassemble).
 
-Lines beginning with # are comments. Lines beginning with @ are commands. This does not apply to
-lines in the middle of a paragraph.
+Lines beginning with # are comments. Lines beginning with @ are commands. These do not apply to
+lines in the middle of a paragraph. Lines that begin with $ are insert commands - a special class of
+commands that may be used within a paragraph to insert data into the message buffer.
 
 Commands:
   @break resets HTTP Inspect data structures and begins a new test. Use it liberally to prevent
@@ -182,20 +200,32 @@ Commands:
   @tcpclose simulates a half-duplex TCP close.
   @request and @response set the message direction. Applies to subsequent paragraphs until changed.
      The initial direction is always request and the break command resets the direction to request.
-  @fill <decimal number> create a paragraph consisting of <number> octets of auto-fill data
-     ABCDEFGHIJABC ....
   @partial causes a partial flush, simulating a retransmission of a detained packet
   @fileset <pathname> specifies a file from which the tool will read data into the message buffer.
      This may be used to include a zipped or other binary file into a message body. Data is read
      beginning at the start of the file. The file is closed automatically whenever a new file is
      set or there is a break command.
-  @fileread <decimal number> read the specified number of bytes from the included file into the
-     message buffer. Each read corresponds to one TCP section.
   @fileskip <decimal number> skips over the specified number of bytes in the included file. This
      must be a positive number. To move backward do a new fileset and skip forward from the
      beginning.
   @<decimal number> sets the test number and hence the test output file name. Applies to subsequent
      sections until changed. Don't reuse numbers.
+
+Insert commands:
+  $fill <decimal number> create a paragraph consisting of <number> octets of auto-fill data
+     ABCDEFGHIJABC ....
+  $fileread <decimal number> read the specified number of bytes from the included file into the
+     message buffer. Each read corresponds to one TCP section.
+  $h2preface creates the HTTP/2 connection preface "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
+  $h2frameheader <frame_type> <frame_length> <flags> <stream_id> generates an HTTP/2 frame header.
+    The frame type may be the frame type name in all lowercase or the numeric frame type code:
+      (data|headers|priority|rst_stream|settings|push_promise|ping|goaway|window_update|
+      continuation|{0:9})
+    The frame length is the length of the frame payload, may be in decimal or test tool hex value
+      (\xnn, see below under escape sequence for more details)
+    The frame flags are represented as a single test tool hex byte (\xnn)
+    The stream id is optional. If provided it must be a decimal number. If not included it defaults
+      to 0.
 
 Escape sequences begin with '\'. They may be used within a paragraph or to begin a paragraph.
   \r - carriage return
@@ -204,6 +234,7 @@ Escape sequences begin with '\'. They may be used within a paragraph or to begin
   \\ - backslash
   \# - #
   \@ - @
+  \$ - $
   \xnn or \Xnn - where nn is a two-digit hexadecimal number. Insert an arbitrary 8-bit number as
      the next character. a-f and A-F are both acceptable.
 
@@ -221,5 +252,6 @@ This test tool does not implement the feature of being hardened against bad inpu
 badly formatted or improper test case the program may assert or crash. The responsibility is on the
 developer to get it right.
 
-Test input is currently designed for single-threaded operation only.
+The test tool is designed for single-threaded operation only.
 
+The test tool is only available when compiled with REG_TEST.

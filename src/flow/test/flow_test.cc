@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2019-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2019-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -23,17 +23,17 @@
 #include "config.h"
 #endif
 
-#include "protocols/ip.h"
-#include "protocols/layer.h"
-#include "protocols/packet.h"
+#include "detection/detection_engine.h"
 #include "flow/flow.h"
 #include "flow/flow_stash.h"
 #include "flow/ha.h"
-#include "main/snort_debug.h"
 #include "framework/inspector.h"
 #include "framework/data_bus.h"
+#include "main/snort_config.h"
 #include "memory/memory_cap.h"
-#include "detection/detection_engine.h"
+#include "protocols/ip.h"
+#include "protocols/layer.h"
+#include "protocols/packet.h"
 
 #include <CppUTest/CommandLineTestRunner.h>
 #include <CppUTest/TestHarness.h>
@@ -82,6 +82,8 @@ const Layer* layer::get_mpls_layer(const Packet* const) { return nullptr; }
 
 void DataBus::publish(const char*, Packet*, Flow*) {}
 
+const SnortConfig* SnortConfig::get_conf() { return nullptr; }
+
 TEST_GROUP(nondefault_timeout)
 {
     void setup() override
@@ -106,10 +108,10 @@ TEST(nondefault_timeout, hard_expiration)
     flow->set_default_session_timeout(validate, true);
     flow->set_hard_expiration();
     flow->set_expire(&pkt, validate);
-    
+
     CHECK( flow->is_hard_expiration() == true);
     CHECK( flow->expire_time == validate );
-    
+
     delete flow;
 }
 

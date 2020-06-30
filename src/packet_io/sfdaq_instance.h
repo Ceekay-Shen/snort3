@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -39,7 +39,7 @@ struct SfIp;
 class SFDAQInstance
 {
 public:
-    SFDAQInstance(const char* intf, const SFDAQConfig*);
+    SFDAQInstance(const char* intf, unsigned id, const SFDAQConfig*);
     ~SFDAQInstance();
 
     bool init(DAQ_Config_h, const std::string& bpf_string);
@@ -76,17 +76,18 @@ public:
 
     SO_PUBLIC int ioctl(DAQ_IoctlCmd cmd, void *arg, size_t arglen);
     SO_PUBLIC int modify_flow_opaque(DAQ_Msg_h, uint32_t opaque);
-    int modify_flow_pkt_trace(DAQ_Msg_h, uint8_t verdict_reason,
-        uint8_t* buff, uint32_t buff_len);
+    int set_packet_verdict_reason(DAQ_Msg_h msg, uint8_t verdict_reason);
+    int set_packet_trace_data(DAQ_Msg_h, uint8_t* buff, uint32_t buff_len);
     int add_expected(const Packet* ctrlPkt, const SfIp* cliIP, uint16_t cliPort,
             const SfIp* srvIP, uint16_t srvPort, IpProtocol, unsigned timeout_ms,
             unsigned /* flags */);
-    bool get_tunnel_bypass(uint8_t proto);
+    bool get_tunnel_bypass(uint16_t proto);
 
 private:
     void get_tunnel_capabilities();
 
     std::string input_spec;
+    uint32_t instance_id;
     DAQ_Instance_h instance = nullptr;
     DAQ_Msg_h* daq_msgs;
     unsigned curr_batch_size = 0;
@@ -96,7 +97,7 @@ private:
     uint32_t pool_available = 0;
     int dlt = -1;
     DAQ_Stats_t daq_instance_stats = { };
-    uint8_t daq_tunnel_mask = 0;
+    uint16_t daq_tunnel_mask = 0;
 };
 }
 #endif

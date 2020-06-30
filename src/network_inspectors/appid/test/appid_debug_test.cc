@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2018-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2018-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -52,8 +52,12 @@ public:
     AppIdInspector() = default;
 };
 
+AppIdConfig::~AppIdConfig() { }
+
+AppIdConfig stub_config;
+AppIdContext stub_ctxt(stub_config);
 AppIdSession::AppIdSession(IpProtocol, const SfIp*, uint16_t, AppIdInspector&)
-    : FlowData(0) { }
+    : FlowData(0), ctxt(stub_ctxt) { }
 AppIdSession::~AppIdSession() = default;
 
 // Utility functions

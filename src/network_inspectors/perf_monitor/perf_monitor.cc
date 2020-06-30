@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -28,19 +28,16 @@
 #include "config.h"
 #endif
 
+#include "perf_monitor.h"
+
 #include "framework/data_bus.h"
+#include "hash/hash_defs.h"
 #include "hash/xhash.h"
 #include "log/messages.h"
-#include "managers/inspector_manager.h"
+#include "main/analyzer_command.h"
+#include "main/thread.h"
 #include "profiler/profiler.h"
 #include "protocols/packet.h"
-
-#include "base_tracker.h"
-#include "cpu_tracker.h"
-#include "flow_ip_tracker.h"
-#include "flow_tracker.h"
-#include "perf_module.h"
-
 
 #ifdef UNIT_TEST
 #include "catch/snort_catch.h"
@@ -54,34 +51,11 @@ THREAD_LOCAL ProfileStats perfmonStats;
 static THREAD_LOCAL std::vector<PerfTracker*>* trackers;
 static THREAD_LOCAL FlowIPTracker* flow_ip_tracker = nullptr;
 
+static THREAD_LOCAL PerfConstraints* t_constraints;
+
 //-------------------------------------------------------------------------
 // class stuff
 //-------------------------------------------------------------------------
-
-class FlowIPDataHandler;
-class PerfMonitor : public Inspector
-{
-public:
-    PerfMonitor(PerfConfig*);
-    ~PerfMonitor() override { delete config;}
-
-    bool configure(SnortConfig*) override;
-    void show(SnortConfig*) override;
-
-    void eval(Packet*) override;
-    bool ready_to_process(Packet* p);
-
-    void tinit() override;
-    void tterm() override;
-
-    void rotate();
-
-    FlowIPTracker* get_flow_ip();
-
-private:
-    PerfConfig* const config;
-    void disable_tracker(size_t);
-};
 
 class PerfIdleHandler : public DataHandler
 {
@@ -117,6 +91,11 @@ public:
 
     void handle(DataEvent&, Flow* flow) override
     {
+        FlowIPTracker* tracker = perf_monitor.get_flow_ip();
+
+        if (!tracker)
+            return;
+
         FlowState state = SFS_STATE_MAX;
 
         if ( flow->pkt_type == PktType::UDP )
@@ -134,9 +113,7 @@ public:
         if ( state == SFS_STATE_MAX )
             return;
 
-        FlowIPTracker* tracker = perf_monitor.get_flow_ip();
-        if (tracker)
-            tracker->update_state(&flow->client_ip, &flow->server_ip, state);
+        tracker->update_state(&flow->client_ip, &flow->server_ip, state);
     }
 
 private:
@@ -146,59 +123,58 @@ private:
 PerfMonitor::PerfMonitor(PerfConfig* pcfg) : config(pcfg)
 { assert (config != nullptr); }
 
-void PerfMonitor::show(SnortConfig*)
+static const char* to_string(const PerfOutput& po)
 {
-    LogMessage("PerfMonitor config:\n");
-    LogMessage("  Sample Time:      %d seconds\n", config->sample_interval);
-    LogMessage("  Packet Count:     %d\n", config->pkt_cnt);
-    LogMessage("  Max File Size:    " STDu64 "\n", config->max_file_size);
-    LogMessage("  Summary Mode:     %s\n",
-        (config->perf_flags & PERF_SUMMARY) ? "ACTIVE" : "INACTIVE");
-    LogMessage("  Base Stats:       %s\n",
-        (config->perf_flags & PERF_BASE) ? "ACTIVE" : "INACTIVE");
-    LogMessage("  Flow Stats:       %s\n",
-        (config->perf_flags & PERF_FLOW) ? "ACTIVE" : "INACTIVE");
-    if (config->perf_flags & PERF_FLOW)
+    switch (po)
     {
-        LogMessage("    Max Flow Port:    %u\n", config->flow_max_port_to_track);
+    case PerfOutput::TO_CONSOLE:
+        return "console";
+    case PerfOutput::TO_FILE:
+        return "file";
     }
-    LogMessage("  Event Stats:      %s\n",
-        (config->perf_flags & PERF_EVENT) ? "ACTIVE" : "INACTIVE");
-    LogMessage("  Flow IP Stats:    %s\n",
-        (config->perf_flags & PERF_FLOWIP) ? "ACTIVE" : "INACTIVE");
-    if (config->perf_flags & PERF_FLOWIP)
+
+    return "";
+}
+
+static const char* to_string(const PerfFormat& pf)
+{
+    switch (pf)
     {
-        LogMessage("    Flow IP Memcap:   %zu\n", config->flowip_memcap);
-    }
-    LogMessage("  CPU Stats:    %s\n",
-        (config->perf_flags & PERF_CPU) ? "ACTIVE" : "INACTIVE");
-    switch ( config->output )
-    {
-        case PerfOutput::TO_CONSOLE:
-            LogMessage("    Output Location:  console\n");
-            break;
-        case PerfOutput::TO_FILE:
-            LogMessage("    Output Location:  file\n");
-            break;
-    }
-    switch(config->format)
-    {
-        case PerfFormat::TEXT:
-            LogMessage("    Output Format:  text\n");
-            break;
-        case PerfFormat::CSV:
-            LogMessage("    Output Format:  csv\n");
-            break;
-        case PerfFormat::JSON:
-            LogMessage("    Output Format:  json\n");
-            break;
+    case PerfFormat::TEXT:
+        return "text";
+    case PerfFormat::CSV:
+        return "csv";
+    case PerfFormat::JSON:
+        return "json";
 #ifdef HAVE_FLATBUFFERS
-        case PerfFormat::FBS:
-            LogMessage("    Output Format:  flatbuffers\n");
-            break;
+    case PerfFormat::FBS:
+        return "flatbuffers";
 #endif
-        default: break;
+    case PerfFormat::MOCK:
+        return "mock";
     }
+
+    return "";
+}
+
+void PerfMonitor::show(const SnortConfig*) const
+{
+    ConfigLogger::log_flag("base", config->perf_flags & PERF_BASE);
+    ConfigLogger::log_flag("cpu", config->perf_flags & PERF_CPU);
+    ConfigLogger::log_flag("summary", config->perf_flags & PERF_SUMMARY);
+
+    if ( ConfigLogger::log_flag("flow", config->perf_flags & PERF_FLOW) )
+        ConfigLogger::log_value("flow_ports", config->flow_max_port_to_track);
+
+    if ( ConfigLogger::log_flag("flow_ip", config->perf_flags & PERF_FLOWIP) )
+        ConfigLogger::log_value("flow_ip_memcap", config->flowip_memcap);
+
+    ConfigLogger::log_value("packets", config->pkt_cnt);
+    ConfigLogger::log_value("seconds", config->sample_interval);
+    ConfigLogger::log_value("max_file_size", config->max_file_size);
+
+    ConfigLogger::log_value("output", to_string(config->output));
+    ConfigLogger::log_value("format", to_string(config->format));
 }
 
 void PerfMonitor::disable_tracker(size_t i)
@@ -222,9 +198,7 @@ bool PerfMonitor::configure(SnortConfig* sc)
 {
     new PerfIdleHandler(*this, sc);
     new PerfRotateHandler(*this, sc);
-
-    if ( config->perf_flags & PERF_FLOWIP )
-        new FlowIPDataHandler(*this, sc);
+    new FlowIPDataHandler(*this, sc);
 
     return config->resolve();
 }
@@ -233,17 +207,17 @@ void PerfMonitor::tinit()
 {
     trackers = new std::vector<PerfTracker*>();
 
+    t_constraints = config->constraints;
+
     if (config->perf_flags & PERF_BASE)
         trackers->emplace_back(new BaseTracker(config));
 
     if (config->perf_flags & PERF_FLOW)
         trackers->emplace_back(new FlowTracker(config));
 
+    flow_ip_tracker = new FlowIPTracker(config);
     if (config->perf_flags & PERF_FLOWIP)
-    {
-        flow_ip_tracker = new FlowIPTracker(config);
         trackers->emplace_back(flow_ip_tracker);
-    }
 
     if (config->perf_flags & PERF_CPU )
         trackers->emplace_back(new CPUTracker(config));
@@ -260,26 +234,31 @@ void PerfMonitor::tinit()
 
 bool PerfMonReloadTuner::tinit()
 {
-    if (flow_ip_tracker)
+    PerfMonitor* pm = (PerfMonitor*)InspectorManager::get_inspector(PERF_NAME, true);
+    auto* new_constraints = pm->get_constraints();
+
+    if (new_constraints->flow_ip_enabled)
+    {
+        pm->enable_profiling(new_constraints);
         return flow_ip_tracker->initialize(memcap);
+    }
     else
-        return false;
+        pm->disable_profiling(new_constraints);
+
+    return false;
 }
 
 bool PerfMonReloadTuner::tune_resources(unsigned work_limit)
 {
-    if (flow_ip_tracker)
+    if (t_constraints->flow_ip_enabled)
     {
         unsigned num_freed = 0;
-        int result = xhash_free_overallocations(flow_ip_tracker->get_ip_map(), work_limit, &num_freed);
-        pmstats.total_frees += num_freed;
-        pmstats.reload_frees += num_freed;
-        return (result == XHASH_OK);
+        int result = flow_ip_tracker->get_ip_map()->tune_memory_resources(work_limit, num_freed);
+        pmstats.flow_tracker_reload_deletes += num_freed;
+        return (result == HASH_OK);
     }
-    else
-    {
-        return false;
-    }
+
+    return true;
 }
 
 void PerfMonitor::tterm()
@@ -291,11 +270,17 @@ void PerfMonitor::tterm()
             auto back = trackers->back();
             if ( config->perf_flags & PERF_SUMMARY )
                 back->process(true);
+            if (back == flow_ip_tracker)
+                flow_ip_tracker = nullptr;
             delete back;
             trackers->pop_back();
         }
         delete trackers;
-        flow_ip_tracker = nullptr;
+        if (flow_ip_tracker)
+        {
+            delete flow_ip_tracker;
+            flow_ip_tracker = nullptr;
+        }
     }
 }
 
@@ -304,6 +289,50 @@ void PerfMonitor::rotate()
     for ( unsigned i = 0; i < trackers->size(); i++ )
         if ( !(*trackers)[i]->rotate() )
             disable_tracker(i--);
+}
+
+void PerfMonitor::swap_constraints(PerfConstraints* constraints)
+{
+    PerfConstraints* tmp = config->constraints;
+
+    config->constraints = constraints;
+    delete tmp;
+}
+
+PerfConstraints* PerfMonitor::get_original_constraints()
+{
+    auto* new_constraints = new PerfConstraints(false, config->sample_interval,
+        config->pkt_cnt);
+
+    return new_constraints;
+}
+
+void PerfMonitor::enable_profiling(PerfConstraints* constraints)
+{
+    t_constraints = constraints;
+
+    auto itr = std::find(trackers->begin(), trackers->end(), flow_ip_tracker);
+
+    if (itr != trackers->end())
+        return;
+
+    trackers->emplace_back(flow_ip_tracker);
+
+    if (!flow_ip_tracker->is_open())
+        flow_ip_tracker->open(true);
+}
+
+void PerfMonitor::disable_profiling(PerfConstraints* constraints)
+{
+    t_constraints = constraints;
+
+    auto itr = std::find(trackers->begin(), trackers->end(), flow_ip_tracker);
+
+    if (itr != trackers->end())
+    {
+        trackers->erase(itr);
+        flow_ip_tracker->close();
+    }
 }
 
 void PerfMonitor::eval(Packet* p)
@@ -358,9 +387,9 @@ bool PerfMonitor::ready_to_process(Packet* p)
     if (!sample_time)
         sample_time = cur_time;
 
-    if ( cnt >= config->pkt_cnt )
+    if ( cnt >= t_constraints->pkt_cnt )
     {
-        if ((cur_time - sample_time) >= config->sample_interval)
+        if ((cur_time - sample_time) >= t_constraints->sample_interval)
         {
             if (cnt == 0)
                 for (auto& tracker : *trackers)
@@ -375,7 +404,7 @@ bool PerfMonitor::ready_to_process(Packet* p)
 }
 
 FlowIPTracker* PerfMonitor::get_flow_ip()
-{ return flow_ip_tracker; }
+{ return t_constraints->flow_ip_enabled ? flow_ip_tracker : nullptr; }
 
 //-------------------------------------------------------------------------
 // api stuff
@@ -443,22 +472,24 @@ TEST_CASE("Process timing logic", "[perfmon]")
     DAQ_PktHdr_t pkth;
     p.pkth = &pkth;
 
-    config->pkt_cnt = 0;
-    config->sample_interval = 0;
+    t_constraints = config->constraints;
+
+    t_constraints->pkt_cnt = 0;
+    t_constraints->sample_interval = 0;
     pkth.ts.tv_sec = 0;
     REQUIRE((perfmon.ready_to_process(&p) == true));
     pkth.ts.tv_sec = 1;
     REQUIRE((perfmon.ready_to_process(&p) == true));
 
-    config->pkt_cnt = 2;
-    config->sample_interval = 0;
+    t_constraints->pkt_cnt = 2;
+    t_constraints->sample_interval = 0;
     pkth.ts.tv_sec = 2;
     REQUIRE((perfmon.ready_to_process(&p) == false));
     pkth.ts.tv_sec = 3;
     REQUIRE((perfmon.ready_to_process(&p) == true));
 
-    config->pkt_cnt = 0;
-    config->sample_interval = 2;
+    t_constraints->pkt_cnt = 0;
+    t_constraints->sample_interval = 2;
     pkth.ts.tv_sec = 4;
     REQUIRE((perfmon.ready_to_process(&p) == false));
     pkth.ts.tv_sec = 8;
@@ -466,8 +497,8 @@ TEST_CASE("Process timing logic", "[perfmon]")
     pkth.ts.tv_sec = 10;
     REQUIRE((perfmon.ready_to_process(&p) == true));
 
-    config->pkt_cnt = 5;
-    config->sample_interval = 4;
+    t_constraints->pkt_cnt = 5;
+    t_constraints->sample_interval = 4;
     pkth.ts.tv_sec = 11;
     REQUIRE((perfmon.ready_to_process(&p) == false));
     pkth.ts.tv_sec = 14;

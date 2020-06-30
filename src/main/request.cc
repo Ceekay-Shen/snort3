@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2017-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2017-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -27,29 +27,23 @@
 #include "utils/util.h"
 
 using namespace snort;
+using namespace std;
 
 //-------------------------------------------------------------------------
 // request foo
 //-------------------------------------------------------------------------
 
-Request::Request(int f)
-{
-    fd = f;
-    bytes_read = 0;
-}
-
-bool Request::read(const int& f)
+bool Request::read()
 {
     bool newline_found = false;
     char buf;
     ssize_t n = 0;
 
-    fd = f;
     while ( (bytes_read < sizeof(read_buf)) and ((n = ::read(fd, &buf, 1)) > 0) )
     {
-        read_buf[bytes_read++] = buf; 
+        read_buf[bytes_read++] = buf;
 
-        if (buf == '\n') 
+        if (buf == '\n')
         {
             newline_found = true;
             break;
@@ -87,7 +81,7 @@ void Request::respond(const char* s, bool queue_response, bool remote_only)
 {
     if (remote_only && (fd == STDOUT_FILENO))
         return;
- 
+
     if ( fd < 1 )
     {
         if (!remote_only)
@@ -97,19 +91,24 @@ void Request::respond(const char* s, bool queue_response, bool remote_only)
 
     if ( queue_response )
     {
-        queued_response = s;
+        lock_guard<mutex> lock(queued_response_mutex);
+        queued_response.emplace(s);
         return;
     }
     write_response(s);
 }
 
 #ifdef SHELL
-void Request::send_queued_response()
+bool Request::send_queued_response()
 {
-    if ( queued_response )
+    const char* qr;
     {
-        write_response(queued_response);
-        queued_response = nullptr;
+        lock_guard<mutex> lock(queued_response_mutex);
+        if ( queued_response.empty() )
+            return false;
+        qr = queued_response.front();
+        queued_response.pop();
     }
+    return write_response(qr);
 }
 #endif

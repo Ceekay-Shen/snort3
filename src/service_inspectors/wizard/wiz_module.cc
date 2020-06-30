@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -24,11 +24,15 @@
 
 #include "wiz_module.h"
 
+#include "trace/trace.h"
+
 #include "curses.h"
 #include "magic.h"
 
 using namespace snort;
 using namespace std;
+
+THREAD_LOCAL const Trace* wizard_trace = nullptr;
 
 //-------------------------------------------------------------------------
 // wizard module
@@ -124,6 +128,15 @@ WizardModule::~WizardModule()
     delete curses;
 }
 
+void WizardModule::set_trace(const Trace* trace) const
+{ wizard_trace = trace; }
+
+const TraceOption* WizardModule::get_trace_options() const
+{
+    static const TraceOption wizard_trace_options(nullptr, 0, nullptr);
+    return &wizard_trace_options;
+}
+
 ProfileStats* WizardModule::get_profile() const
 { return &wizPerfStats; }
 
@@ -147,9 +160,6 @@ bool WizardModule::set(const char*, Value& v, SnortConfig*)
 
     else if ( v.is("curses") )
         curses->add_curse(v.get_string());
-
-    else
-        return false;
 
     return true;
 }

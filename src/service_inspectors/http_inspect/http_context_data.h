@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2018-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2018-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -33,6 +33,8 @@ public:
     static void init()
     { ips_id = IpsContextData::get_ips_id(); }
     static HttpMsgSection* get_snapshot(const snort::Packet* p);
+    static HttpMsgSection* get_snapshot(const snort::Flow* flow,
+        snort::IpsContext* context = nullptr);
     static void save_snapshot(HttpMsgSection* section);
     static HttpMsgSection* clear_snapshot(snort::IpsContext* context);
     static unsigned ips_id;

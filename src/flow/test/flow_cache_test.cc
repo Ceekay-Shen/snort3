@@ -1,5 +1,5 @@
 
-// Copyright (C) 2019-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2019-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -53,12 +53,13 @@ THREAD_LOCAL bool Active::s_suspend = false;
 
 THREAD_LOCAL PacketTracer* snort::s_pkt_trace = nullptr;
 
-PacketTracer::PacketTracer() { }
+void Active::drop_packet(snort::Packet const*, bool) { }
 PacketTracer::~PacketTracer() { }
 void PacketTracer::log(const char*, ...) { }
 void PacketTracer::open_file() { }
 void PacketTracer::dump_to_daq(Packet*) { }
 void PacketTracer::reset() { }
+void Active::set_drop_reason(char const*) { }
 Packet::Packet(bool) { }
 Packet::~Packet() { }
 Flow::Flow() { memset(this, 0, sizeof(*this)); }
@@ -69,13 +70,14 @@ DetectionEngine::~DetectionEngine() { }
 void Flow::init(PktType) { }
 void Flow::term() { }
 void Flow::reset(bool) { }
-void set_network_policy(SnortConfig*, unsigned) { }
+void Flow::free_flow_data() { }
+void set_network_policy(const SnortConfig*, unsigned) { }
 void DataBus::publish(const char*, const uint8_t*, unsigned, Flow*) { }
 void DataBus::publish(const char*, Packet*, Flow*) { }
-SnortConfig* SnortConfig::get_conf() { return nullptr; }
+const SnortConfig* SnortConfig::get_conf() { return nullptr; }
 void Flow::set_direction(Packet*) { }
-void set_inspection_policy(SnortConfig*, unsigned) { }
-void set_ips_policy(SnortConfig*, unsigned) { }
+void set_inspection_policy(const SnortConfig*, unsigned) { }
+void set_ips_policy(const SnortConfig*, unsigned) { }
 void Flow::set_mpls_layer_per_dir(Packet*) { }
 void DetectionEngine::disable_all(Packet*) { }
 void Stream::drop_traffic(const Packet*, char) { }
@@ -88,8 +90,8 @@ bool HighAvailabilityManager::in_standby(Flow*) { return true; }
 SfIpRet SfIp::set(void const*, int) { return SFIP_SUCCESS; }
 namespace memory
 {
-void MemoryCap::update_allocations(unsigned long) { }
-void MemoryCap::update_deallocations(unsigned long) { }
+void MemoryCap::update_allocations(size_t) { }
+void MemoryCap::update_deallocations(size_t) { }
 bool MemoryCap::over_threshold() { return true; }
 }
 
@@ -115,8 +117,8 @@ void Stream::stop_inspection(Flow*, Packet*, char, int32_t, int) { }
 
 int ExpectCache::add_flow(const Packet*, PktType, IpProtocol, const SfIp*, uint16_t,
     const SfIp*, uint16_t, char, FlowData*, SnortProtocolId)
-{ 
-    return 1; 
+{
+    return 1;
 }
 
 TEST_GROUP(flow_prune) { };
@@ -136,7 +138,7 @@ TEST(flow_prune, empty_cache_prune_flows)
 
 // Do not delete blocked flow
 TEST(flow_prune, blocked_flow_prune_flows)
-{   
+{
     FlowCacheConfig fcg;
     fcg.max_flows = 2;
     FlowCache *cache = new FlowCache(fcg);
@@ -148,7 +150,7 @@ TEST(flow_prune, blocked_flow_prune_flows)
     FlowKey flow_key;
     memset(&flow_key, 0, sizeof(FlowKey));
     flow_key.pkt_type = PktType::TCP;
-    
+
     flow_key.port_l = first_port;
     cache->allocate(&flow_key);
 
@@ -165,7 +167,7 @@ TEST(flow_prune, blocked_flow_prune_flows)
     flow_key.port_l = first_port;
     CHECK(cache->find(&flow_key) != nullptr);
 
-    // Prune one flow. This should delete the MRU flow, since 
+    // Prune one flow. This should delete the MRU flow, since
     // LRU flow is blocked
     CHECK(cache->delete_flows(1) == 1);
 
@@ -255,4 +257,4 @@ TEST(flow_prune, prune_all_blocked_flows)
 int main(int argc, char** argv)
 {
     return CommandLineTestRunner::RunAllTests(argc, argv);
-} 
+}

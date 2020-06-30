@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -304,6 +304,19 @@ static const ConvertMap enable_decode_oversized_drops_api =
 const ConvertMap* enable_decode_oversized_drops_map = &enable_decode_oversized_drops_api;
 
 /*************************************************
+ ******************  enable_gtp ******************
+ *************************************************/
+
+static const std::string enable_gtp = "enable_gtp";
+static const ConvertMap enable_gtp_api =
+{
+    enable_gtp,
+    deleted_ctor<& enable_gtp>
+};
+
+const ConvertMap* enable_gtp_map = &enable_gtp_api;
+
+/*************************************************
  **************  enable_ipopt_drops  *************
  *************************************************/
 
@@ -562,7 +575,7 @@ const ConvertMap* protected_content_map = &protected_content_api;
  *************  sidechannel ****************
  *************************************************/
 
-// FIXIT-H: This is temporary and needs to be translated to an appropriate `side_channel = {}`
+// FIXIT-L: This is temporary and needs to be translated to an appropriate `side_channel = {}`
 
 static const std::string sidechannel = "sidechannel";
 static const ConvertMap sidechannel_api =

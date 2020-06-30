@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -22,6 +22,7 @@
 
 #include <functional>
 
+#include "detection/ips_context.h"
 #include "flow/expect_cache.h"
 #include "flow/flow_control.h"
 #include "flow/prune_stats.h"
@@ -34,6 +35,7 @@
 #include "protocols/packet.h"
 #include "protocols/tcp.h"
 #include "stream/flush_bucket.h"
+#include "stream/tcp/tcp_stream_tracker.h"
 
 #include "stream_ha.h"
 #include "stream_module.h"
@@ -61,6 +63,7 @@ const PegInfo base_pegs[] =
     { CountType::SUM, "preemptive_prunes", "sessions pruned during preemptive pruning" },
     { CountType::SUM, "memcap_prunes", "sessions pruned due to memcap" },
     { CountType::SUM, "ha_prunes", "sessions pruned by high availability sync" },
+    { CountType::SUM, "stale_prunes", "sessions pruned due to stale connection" },
     { CountType::SUM, "expected_flows", "total expected flows created within snort" },
     { CountType::SUM, "expected_realized", "number of expected flows realized" },
     { CountType::SUM, "expected_pruned", "number of expected flows pruned" },
@@ -77,7 +80,7 @@ const PegInfo base_pegs[] =
 };
 
 // FIXIT-L dependency on stats define in another file
-void base_sum()
+void base_prep()
 {
     if ( !flow_con )
         return;
@@ -90,6 +93,7 @@ void base_sum()
     stream_base_stats.preemptive_prunes = flow_con->get_prunes(PruneReason::PREEMPTIVE);
     stream_base_stats.memcap_prunes = flow_con->get_prunes(PruneReason::MEMCAP);
     stream_base_stats.ha_prunes = flow_con->get_prunes(PruneReason::HA);
+    stream_base_stats.stale_prunes = flow_con->get_prunes(PruneReason::STALE);
     stream_base_stats.reload_freelist_flow_deletes = flow_con->get_deletes(FlowDeleteState::FREELIST);
     stream_base_stats.reload_allowed_flow_deletes = flow_con->get_deletes(FlowDeleteState::ALLOWED);
     stream_base_stats.reload_offloaded_flow_deletes= flow_con->get_deletes(FlowDeleteState::OFFLOADED);
@@ -103,7 +107,10 @@ void base_sum()
         stream_base_stats.expected_pruned = exp_cache->get_prunes();
         stream_base_stats.expected_overflows = exp_cache->get_overflows();
     }
+}
 
+void base_sum()
+{
     sum_stats((PegCount*)&g_stats, (PegCount*)&stream_base_stats,
         array_size(base_pegs) - 1);
     base_reset();
@@ -147,7 +154,7 @@ class StreamBase : public Inspector
 {
 public:
     StreamBase(const StreamModuleConfig*);
-    void show(SnortConfig*) override;
+    void show(const SnortConfig*) const override;
 
     void tinit() override;
     void tterm() override;
@@ -191,8 +198,14 @@ void StreamBase::tinit()
 
     if ( config.flow_cache_cfg.max_flows > 0 )
         flow_con->init_exp(config.flow_cache_cfg.max_flows);
- 
+
+    TcpStreamTracker::set_held_packet_timeout(config.held_packet_timeout);
+
+#ifdef REG_TEST
     FlushBucket::set(config.footprint);
+#else
+    FlushBucket::set();
+#endif
 }
 
 void StreamBase::tterm()
@@ -201,11 +214,11 @@ void StreamBase::tterm()
     FlushBucket::clear();
 }
 
-void StreamBase::show(SnortConfig*)
+void StreamBase::show(const SnortConfig* sc) const
 {
-    LogMessage("Stream Base config:\n");
-    LogMessage("    Max flows: %d\n", config.flow_cache_cfg.max_flows);
-    LogMessage("    Pruning timeout: %d\n", config.flow_cache_cfg.pruning_timeout);
+    if ( sc )
+        ConfigLogger::log_flag("ip_frags_only", sc->ip_frags_only());
+    config.show();
 }
 
 void StreamBase::eval(Packet* p)
@@ -222,7 +235,7 @@ void StreamBase::eval(Packet* p)
 
     case PktType::IP:
         if ( p->has_ip() and ((p->ptrs.decode_flags & DECODE_FRAG) or
-            !SnortConfig::get_conf()->ip_frags_only()) )
+            !p->context->conf->ip_frags_only()) )
         {
             bool new_flow = false;
             flow_con->process(PktType::IP, p, &new_flow);
@@ -270,7 +283,7 @@ void StreamBase::eval(Packet* p)
 
     case PktType::MAX:
         break;
-    };
+    }
 }
 
 //-------------------------------------------------------------------------
@@ -294,11 +307,20 @@ static void base_dtor(Inspector* p)
     delete p;
 }
 
+static void base_tinit()
+{
+    TcpStreamTracker::thread_init();
+}
+
 static void base_tterm()
 {
+    StreamHAManager::tterm();
+    FlushBucket::clear();
+
     // this can't happen sooner because the counts haven't been harvested yet
     delete flow_con;
     flow_con = nullptr;
+    TcpStreamTracker::thread_term();
 }
 
 static const InspectApi base_api =
@@ -321,7 +343,7 @@ static const InspectApi base_api =
     nullptr, // service
     nullptr, // init
     nullptr, // term
-    nullptr, // tinit
+    base_tinit,
     base_tterm,
     base_ctor,
     base_dtor,

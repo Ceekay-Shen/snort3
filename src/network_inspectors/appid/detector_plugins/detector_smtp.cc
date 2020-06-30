@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -89,7 +89,9 @@ struct SMTPDetectorData
 };
 
 #define HELO "HELO "
+#define helo "helo "
 #define EHLO "EHLO "
+#define ehlo "ehlo "
 #define MAILFROM "MAIL FROM:"
 #define RCPTTO "RCPT TO:"
 #define DATA "DATA"
@@ -137,7 +139,9 @@ SmtpClientDetector::SmtpClientDetector(ClientDiscovery* cdm)
     tcp_patterns =
     {
         { (const uint8_t*)HELO, sizeof(HELO)-1, -1, 0, APP_ID_SMTP },
+        { (const uint8_t*)helo, sizeof(helo)-1, -1, 0, APP_ID_SMTP },
         { (const uint8_t*)EHLO, sizeof(EHLO)-1, -1, 0, APP_ID_SMTP },
+        { (const uint8_t*)ehlo, sizeof(ehlo)-1, -1, 0, APP_ID_SMTP },
         { APP_SMTP_OUTLOOK,         sizeof(APP_SMTP_OUTLOOK)-1,        -1, 0, APP_ID_OUTLOOK },
         { APP_SMTP_OUTLOOK_EXPRESS, sizeof(APP_SMTP_OUTLOOK_EXPRESS)-1,-1, 0, APP_ID_OUTLOOK_EXPRESS },
         { APP_SMTP_IMO,             sizeof(APP_SMTP_IMO)-1,            -1, 0, APP_ID_SMTP_IMO },
@@ -594,7 +598,7 @@ done:
     if(args.asd.get_session_flags(APPID_SESSION_SERVICE_DETECTED))
         args.asd.clear_session_flags(APPID_SESSION_CONTINUE | APPID_SESSION_CLIENT_GETS_SERVER_PACKETS);
     else
-        args.asd.clear_session_flags(APPID_SESSION_CLIENT_GETS_SERVER_PACKETS); 
+        args.asd.clear_session_flags(APPID_SESSION_CLIENT_GETS_SERVER_PACKETS);
     args.asd.set_client_detected();
     return APPID_SUCCESS;
 }
@@ -835,17 +839,14 @@ int SmtpServiceDetector::validate(AppIdDiscoveryArgs& args)
             {
                 dd->client.flags |= CLIENT_FLAG_STARTTLS_SUCCESS;
 
-                // FIXIT-M: Revisit SSL decryption countdown after isSSLPolicyEnabled()
-                // is ported.  Can we use Flow::is_proxied() here?
-#if 0
-                if (_dpd.isSSLPolicyEnabled(NULL))
-#endif
-
+                #ifndef REG_TEST
+                if (args.asd.get_session_flags(APPID_SESSION_DECRYPT_MONITOR))
+                #endif
                     dd->client.decryption_countdown = SSL_WAIT_PACKETS; // start a countdown
-#if 0
+                #ifndef REG_TEST
                 else
-                    dd->client.decryption_countdown = 1
-#endif
+                    dd->client.decryption_countdown = 1;
+                #endif
 
                 add_service(args.change_bits, args.asd, args.pkt, args.dir,  APP_ID_SMTPS);
 

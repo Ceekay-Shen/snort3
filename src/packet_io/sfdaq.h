@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -42,20 +42,20 @@ public:
 
     static void print_types(std::ostream&);
     static const char* verdict_to_string(DAQ_Verdict verdict);
-    static bool init(const SFDAQConfig*);
+    static bool init(const SFDAQConfig*, unsigned total_instances);
     static void term();
 
     static bool init_instance(SFDAQInstance*, const std::string& bpf_string);
 
     static const char* get_input_spec(const SFDAQConfig*, unsigned instance_id);
     static const char* default_type();
-    static const DAQ_Stats_t* get_stats();
+    SO_PUBLIC static const DAQ_Stats_t* get_stats();
 
     static bool can_inject();
     static bool can_inject_raw();
     static bool can_replace();
     static bool can_run_unprivileged();
-    SO_PUBLIC static bool get_tunnel_bypass(uint8_t proto);
+    SO_PUBLIC static bool get_tunnel_bypass(uint16_t proto);
 
     // FIXIT-M X Temporary thread-local instance helpers to be removed when no longer needed
     static void set_local_instance(SFDAQInstance*);

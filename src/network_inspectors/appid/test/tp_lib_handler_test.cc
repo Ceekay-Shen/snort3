@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2018-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2018-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -29,7 +29,6 @@
 
 #include "tp_lib_handler.h"
 #include "appid_config.h"
-#include "main/snort_debug.h"
 #include "log_message_mock.h"
 
 #include <CppUTest/CommandLineTestRunner.h>
@@ -37,9 +36,33 @@
 
 using namespace std;
 
-TPLibHandler* tph = nullptr;
+static TPLibHandler* tph = nullptr;
+static AppIdConfig config;
+static AppIdContext ctxt(config);
+static OdpContext stub_odp_ctxt(config, nullptr);
+OdpContext* AppIdContext::odp_ctxt = &stub_odp_ctxt;
+ThirdPartyAppIdContext* AppIdContext::tp_appid_ctxt = nullptr;
 
-AppIdModuleConfig::~AppIdModuleConfig() { }
+snort::SearchTool::SearchTool(char const*, bool) { }
+snort::SearchTool::~SearchTool() { }
+
+AppIdDiscovery::AppIdDiscovery() { }
+AppIdDiscovery::~AppIdDiscovery() { }
+void ClientDiscovery::initialize() { }
+void AppIdDiscovery::register_detector(const string&, AppIdDetector*, IpProtocol) { }
+void AppIdDiscovery::add_pattern_data(AppIdDetector*, snort::SearchTool*, int, unsigned char const*, unsigned int, unsigned int) { }
+void AppIdDiscovery::register_tcp_pattern(AppIdDetector*, unsigned char const*, unsigned int, int, unsigned int) { }
+void AppIdDiscovery::register_udp_pattern(AppIdDetector*, unsigned char const*, unsigned int, int, unsigned int) { }
+int AppIdDiscovery::add_service_port(AppIdDetector*, ServiceDetectorPort const&) { return 0; }
+DnsPatternMatchers::~DnsPatternMatchers() { }
+HttpPatternMatchers::~HttpPatternMatchers() { }
+SipPatternMatchers::~SipPatternMatchers() { }
+SslPatternMatchers::~SslPatternMatchers() { }
+AppIdConfig::~AppIdConfig() { }
+OdpContext::OdpContext(AppIdConfig&, snort::SnortConfig*) { }
+void ServiceDiscovery::initialize() { }
+int ServiceDiscovery::add_service_port(AppIdDetector*, const ServiceDetectorPort&)
+{ return 0; }
 
 TEST_GROUP(tp_lib_handler)
 {
@@ -47,53 +70,40 @@ TEST_GROUP(tp_lib_handler)
 
 TEST(tp_lib_handler, load_unload)
 {
-    AppIdModuleConfig config;
     config.tp_appid_path="./libtp_mock.so";
     config.tp_appid_config="./tp.config";
 
     tph = TPLibHandler::get();
-    tph->pinit(&config);
-    CHECK_TRUE(tph->have_tp());
+    ThirdPartyAppIdContext* tp_appid_ctxt = TPLibHandler::create_tp_appid_ctxt(config, ctxt.get_odp_ctxt());
+    CHECK_TRUE(tp_appid_ctxt != nullptr);
 
-    CreateThirdPartyAppIDSession_t asf = tph->tpsession_factory();
-    ThirdPartyAppIDSession* tpsession = asf();
+    TpAppIdCreateSession asf = tph->tpsession_factory();
+    ThirdPartyAppIdSession* tpsession = asf(*tp_appid_ctxt);
 
     CHECK_TRUE(tpsession != nullptr);
 
     delete tpsession;
+    delete tp_appid_ctxt;
 
-    tph->pfini();
+    TPLibHandler::pfini();
 }
 
 TEST(tp_lib_handler, tp_lib_handler_get)
 {
-    tph=TPLibHandler::get();
-    TPLibHandler* tph2=TPLibHandler::get();
-    CHECK_EQUAL(tph,tph2);
+    tph = TPLibHandler::get();
+    TPLibHandler* tph2 = TPLibHandler::get();
+    CHECK_EQUAL(tph, tph2);
     TPLibHandler::pfini();
 }
 
 TEST(tp_lib_handler, load_error)
 {
     // Trigger load error:
-    AppIdModuleConfig config;
     config.tp_appid_path="nonexistent.so";
     TPLibHandler::get();
-    TPLibHandler::pinit(&config);
-    CHECK_FALSE(TPLibHandler::have_tp());
+    ThirdPartyAppIdContext* tp_appid_ctxt = TPLibHandler::create_tp_appid_ctxt(config, ctxt.get_odp_ctxt());
+    CHECK_TRUE(tp_appid_ctxt == nullptr);
     TPLibHandler::pfini();
-}
-
-TEST(tp_lib_handler, tp_appid_module_pinit_error)
-{
-    // Trigger MODULE pinit error:
-    AppIdModuleConfig config;
-    config.tp_appid_path="./libtp_mock.so";
-    config.tp_appid_config="";  // forces MODULE::pinit() to return 1.
-    tph=TPLibHandler::get();
-    tph->pinit(&config);
-    CHECK_FALSE(tph->have_tp());
-    tph->pfini(1);                      // print stats too.
 }
 
 int main(int argc, char** argv)

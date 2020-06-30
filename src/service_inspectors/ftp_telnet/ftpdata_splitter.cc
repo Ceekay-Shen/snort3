@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2017-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2017-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -114,7 +114,7 @@ bool FtpDataSplitter::finish(Flow* flow)
             FileFlows* file_flows = FileFlows::get_file_flows(flow);
             if ( file_flows )
             {
-                file_flows->file_process(DetectionEngine::get_current_packet(), 
+                file_flows->file_process(DetectionEngine::get_current_packet(),
                     nullptr, 0, SNORT_FILE_END, to_server(), fdfd->session.path_hash);
             }
         }

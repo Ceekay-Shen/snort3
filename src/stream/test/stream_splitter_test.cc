@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2017-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2017-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -38,7 +38,8 @@ using namespace snort;
 namespace snort
 {
 THREAD_LOCAL SnortConfig* snort_conf = nullptr;
-SnortConfig* SnortConfig::get_conf()
+
+const SnortConfig* SnortConfig::get_conf()
 { return snort_conf; }
 
 static StreamSplitter* next_splitter = nullptr;
@@ -65,10 +66,8 @@ void Stream::flush_server(Packet*)
 { flushed = 2; }
 }
 
-
 uint16_t FlushBucket::get_size()
 { return 1; }
-
 
 //--------------------------------------------------------------------------
 // atom splitter tests

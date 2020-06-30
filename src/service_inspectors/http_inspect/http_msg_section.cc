@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -21,17 +21,24 @@
 #include "config.h"
 #endif
 
+#include <cstring>
+
+#include "service_inspectors/http2_inspect/http2_flow_data.h"
+
 #include "http_msg_section.h"
 
 #include "http_context_data.h"
 #include "http_common.h"
 #include "http_enum.h"
+#include "http_module.h"
 #include "http_msg_body.h"
 #include "http_msg_head_shared.h"
 #include "http_msg_header.h"
 #include "http_msg_request.h"
 #include "http_msg_status.h"
 #include "http_msg_trailer.h"
+#include "http_param.h"
+#include "http_query_parser.h"
 #include "http_test_manager.h"
 #include "stream/flush_bucket.h"
 
@@ -55,6 +62,17 @@ HttpMsgSection::HttpMsgSection(const uint8_t* buffer, const uint16_t buf_size,
     tcp_close(session_data->tcp_close[source_id])
 {
     assert((source_id == SRC_CLIENT) || (source_id == SRC_SERVER));
+
+    if (Http2FlowData::inspector_id != 0)
+    {
+        Http2FlowData* const h2i_flow_data = (Http2FlowData*)flow->get_flow_data(Http2FlowData::inspector_id);
+        if (h2i_flow_data != nullptr)
+        {
+            h2i_flow_data->set_hi_msg_section(this);
+            return;
+        }
+    }
+
     HttpContextData::save_snapshot(this);
 }
 
@@ -65,7 +83,7 @@ void HttpMsgSection::add_infraction(int infraction)
 
 void HttpMsgSection::create_event(int sid)
 {
-    transaction->get_events(source_id)->create_event(sid);
+    session_data->events[source_id]->create_event(sid);
 }
 
 void HttpMsgSection::update_depth() const
@@ -79,6 +97,9 @@ void HttpMsgSection::update_depth() const
         session_data->detection_status[source_id] = DET_DEACTIVATING;
     }
 
+    const unsigned target_size = (session_data->compression[source_id] == CMP_NONE) ?
+        SnortConfig::get_conf()->max_pdu : GZIP_BLOCK_SIZE;
+
     if (detect_depth_remaining <= 0)
     {
         if (file_depth_remaining <= 0)
@@ -88,15 +109,12 @@ void HttpMsgSection::update_depth() const
         }
         else
         {
-            // Just for file processing
-            session_data->section_size_target[source_id] = SnortConfig::get_conf()->max_pdu;
+            // Just for file processing.
+            session_data->section_size_target[source_id] = target_size;
             session_data->stretch_section_to_packet[source_id] = true;
         }
         return;
     }
-
-    const unsigned target_size = (session_data->compression[source_id] == CMP_NONE) ?
-        SnortConfig::get_conf()->max_pdu : GZIP_BLOCK_SIZE;
 
     if (detect_depth_remaining <= target_size)
     {
@@ -116,26 +134,34 @@ void HttpMsgSection::update_depth() const
 }
 
 const Field& HttpMsgSection::classic_normalize(const Field& raw, Field& norm,
-    const HttpParaList::UriParam& uri_param)
+    bool do_path, const HttpParaList::UriParam& uri_param)
 {
     if (norm.length() != STAT_NOT_COMPUTE)
         return norm;
 
-    if ((raw.length() <= 0) || !UriNormalizer::classic_need_norm(raw, true, uri_param))
+    if ((raw.length() <= 0) || !UriNormalizer::classic_need_norm(raw, do_path, uri_param))
     {
         norm.set(raw);
         return norm;
     }
-    UriNormalizer::classic_normalize(raw, norm, uri_param);
+    UriNormalizer::classic_normalize(raw, norm, do_path, uri_param);
     return norm;
 }
 
 const Field& HttpMsgSection::get_classic_buffer(unsigned id, uint64_t sub_id, uint64_t form)
 {
-    // buffer_side replaces source_id for buffers that support the request option
-    const SourceId buffer_side = (form & FORM_REQUEST) ? SRC_CLIENT : source_id;
+    Cursor c;
+    HttpBufferInfo buffer_info(id, sub_id, form);
 
-    switch (id)
+    return get_classic_buffer(c, buffer_info);
+}
+
+const Field& HttpMsgSection::get_classic_buffer(Cursor& c, HttpBufferInfo& buf)
+{
+    // buffer_side replaces source_id for buffers that support the request option
+    const SourceId buffer_side = (buf.form & FORM_REQUEST) ? SRC_CLIENT : source_id;
+
+    switch (buf.type)
     {
     case HTTP_BUFFER_CLIENT_BODY:
       {
@@ -148,24 +174,138 @@ const Field& HttpMsgSection::get_classic_buffer(unsigned id, uint64_t sub_id, ui
       {
         if (header[buffer_side] == nullptr)
             return Field::FIELD_NULL;
-        return (id == HTTP_BUFFER_COOKIE) ? header[buffer_side]->get_classic_norm_cookie() :
+        return (buf.type == HTTP_BUFFER_COOKIE) ? header[buffer_side]->get_classic_norm_cookie() :
             header[buffer_side]->get_classic_raw_cookie();
       }
     case HTTP_BUFFER_HEADER:
     case HTTP_BUFFER_TRAILER:
       {
         // FIXIT-L Someday want to be able to return field name or raw field value
-        HttpMsgHeadShared* const head = (id == HTTP_BUFFER_HEADER) ?
+        HttpMsgHeadShared* const head = (buf.type == HTTP_BUFFER_HEADER) ?
             (HttpMsgHeadShared*)header[buffer_side] : (HttpMsgHeadShared*)trailer[buffer_side];
         if (head == nullptr)
             return Field::FIELD_NULL;
-        if (sub_id == 0)
+        if (buf.sub_id == 0)
             return head->get_classic_norm_header();
-        return head->get_header_value_norm((HeaderId)sub_id);
+        return head->get_header_value_norm((HeaderId)buf.sub_id);
       }
     case HTTP_BUFFER_METHOD:
       {
         return (request != nullptr) ? request->get_method() : Field::FIELD_NULL;
+      }
+    case HTTP_BUFFER_PARAM:
+      {
+        if (buf.param == nullptr || request == nullptr)
+            return Field::FIELD_NULL;
+
+        HttpUri* query = request->get_http_uri();
+        HttpMsgBody* body = (source_id == SRC_CLIENT) ? get_body() : nullptr;
+
+        if (query == nullptr && body == nullptr)
+            return Field::FIELD_NULL;
+
+        const HttpParaList::UriParam& uri_config = params->uri_param;
+
+        ParameterMap& query_params = request->get_query_params();
+        ParameterMap& body_params = request->get_body_params();
+
+        // cache lookup
+        HttpParam& param = *buf.param;
+        ParameterData& query_data = query_params[param.str_upper()];
+        ParameterData& body_data = body_params[param.str_upper()];
+
+        if (!query_data.parsed && query != nullptr)
+        {
+            // query has not been parsed for this parameter
+            const Field& rq = query->get_query();
+            const Field& nq = query->get_norm_query();
+
+            if (rq.length() > 0 && nq.length() > 0)
+            {
+                HttpQueryParser parser(rq.start(), rq.length(),
+                    nq.start(), nq.length(), uri_config,
+                    session_data, source_id);
+
+                parser.parse(param, query_data);
+                query_data.parsed = true;
+            }
+        }
+
+        if (!body_data.parsed && body != nullptr)
+        {
+            // body has not been parsed for this parameter
+            const Field& rb = body->get_detect_data();
+            const Field& nb = body->get_classic_client_body();
+
+            if (rb.length() > 0 && nb.length() > 0 && body->is_first())
+            {
+                HttpQueryParser parser(rb.start(), rb.length(),
+                    nb.start(), nb.length(), uri_config,
+                    session_data, source_id);
+
+                parser.parse(param, body_data);
+                body_data.parsed = true;
+            }
+        }
+
+        KeyValueVec& query_kv = query_data.kv_vec;
+        KeyValueVec& body_kv = body_data.kv_vec;
+
+        unsigned num_query_params = query_kv.size();
+        unsigned num_body_params = body_kv.size();
+
+        if (num_query_params == 0 && num_body_params == 0)
+            return Field::FIELD_NULL;
+
+        // get data stored on the cursor
+        HttpCursorData* cd = (HttpCursorData*)c.get_data(HttpCursorData::id);
+
+        if (!cd)
+        {
+            cd = new HttpCursorData();
+            c.set_data(cd);
+        }
+
+        // save the parameter count on the cursor
+        cd->num_query_params = num_query_params;
+        cd->num_body_params = num_body_params;
+
+        unsigned& query_index = cd->query_index;
+        unsigned& body_index = cd->body_index;
+
+        while (query_index < num_query_params)
+        {
+            KeyValue* fields = query_kv[query_index];
+
+            Field& key = fields->key;
+            Field& value = fields->value;
+
+            ++query_index;
+
+            if (param.is_nocase())
+                return value;
+
+            if (!memcmp(key.start(), param.c_str(), key.length()))
+                return value;
+        }
+
+        while (body_index < num_body_params)
+        {
+            KeyValue* fields = body_kv[body_index];
+
+            Field& key = fields->key;
+            Field& value = fields->value;
+
+            ++body_index;
+
+            if (param.is_nocase())
+                return value;
+
+            if (!memcmp(key.start(), param.c_str(), key.length()))
+                return value;
+        }
+
+        return Field::FIELD_NULL;
       }
     case HTTP_BUFFER_RAW_BODY:
       {
@@ -205,15 +345,15 @@ const Field& HttpMsgSection::get_classic_buffer(unsigned id, uint64_t sub_id, ui
     case HTTP_BUFFER_URI:
     case HTTP_BUFFER_RAW_URI:
       {
-        const bool raw = (id == HTTP_BUFFER_RAW_URI);
+        const bool raw = (buf.type == HTTP_BUFFER_RAW_URI);
         if (request == nullptr)
             return Field::FIELD_NULL;
-        if (sub_id == 0)
+        if (buf.sub_id == 0)
             return raw ? request->get_uri() : request->get_uri_norm_classic();
         HttpUri* const uri = request->get_http_uri();
         if (uri == nullptr)
             return Field::FIELD_NULL;
-        switch ((UriComponent)sub_id)
+        switch ((UriComponent)buf.sub_id)
         {
         case UC_SCHEME:
             return uri->get_scheme();
@@ -255,6 +395,21 @@ void HttpMsgSection::get_related_sections()
     trailer[SRC_SERVER] = transaction->get_trailer(SRC_SERVER);
 }
 
+uint32_t HttpMsgSection::get_h2_stream_id(HttpCommon::SourceId source_id)
+{
+    if (h2_stream_id != STAT_NOT_COMPUTE)
+        return h2_stream_id;
+    if (session_data->for_http2)
+    {
+        Http2FlowData* h2i_flow_data = (Http2FlowData*)flow->get_flow_data(Http2FlowData::inspector_id);
+        assert(h2i_flow_data);
+        h2_stream_id = h2i_flow_data->get_current_stream_id(source_id);
+    }
+    else
+       h2_stream_id = 0;
+    return h2_stream_id;
+}
+
 void HttpMsgSection::clear()
 {
     transaction->clear_section();
@@ -271,13 +426,13 @@ void HttpMsgSection::print_section_title(FILE* output, const char* title) const
 
 void HttpMsgSection::print_section_wrapup(FILE* output) const
 {
-    fprintf(output, "Infractions: %016" PRIx64 " %016" PRIx64 ", Events: %016" PRIx64 " %016" PRIx64 " %016"
-        PRIx64 ", TCP Close: %s\n\n",
+    fprintf(output, "Infractions: %016" PRIx64 " %016" PRIx64 ", Events: %016" PRIx64 " %016"
+        PRIx64 " %016" PRIx64 ", TCP Close: %s\n\n",
         transaction->get_infractions(source_id)->get_raw2(),
         transaction->get_infractions(source_id)->get_raw(),
-        transaction->get_events(source_id)->get_raw3(),
-        transaction->get_events(source_id)->get_raw2(),
-        transaction->get_events(source_id)->get_raw(),
+        session_data->events[source_id]->get_raw3(),
+        session_data->events[source_id]->get_raw2(),
+        session_data->events[source_id]->get_raw(),
         tcp_close ? "True" : "False");
     if (HttpTestManager::get_show_pegs())
     {

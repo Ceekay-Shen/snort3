@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2019-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2019-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -45,7 +45,7 @@ void Http2StatusLine::process_pseudo_header_name(const uint8_t* const& name, uin
         value_coming = STATUS;
     else
     {
-        infractions += INF_INVALID_PSEUDO_HEADER;
+        *infractions += INF_INVALID_PSEUDO_HEADER;
         events->create_event(EVENT_INVALID_HEADER);
         value_coming = HEADER__INVALID;
     }
@@ -64,13 +64,13 @@ void Http2StatusLine::process_pseudo_header_value(const uint8_t* const& value, c
 bool Http2StatusLine::generate_start_line()
 {
     uint32_t bytes_written = 0;
-    
+
     // Account for one space and trailing crlf
     static const uint8_t NUM_RESPONSE_LINE_EXTRA_CHARS = 3;
 
     if (status.length() <= 0)
     {
-        infractions += INF_RESPONSE_WITHOUT_STATUS;
+        *infractions += INF_RESPONSE_WITHOUT_STATUS;
         events->create_event(EVENT_RESPONSE_WITHOUT_STATUS);
         return false;
     }

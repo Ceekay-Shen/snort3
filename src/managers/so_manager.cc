@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -30,36 +30,38 @@
 #include <cstring>
 #include <iomanip>
 #include <iostream>
-#include <list>
 #include <sstream>
 
 #include "log/messages.h"
+#include "framework/decode_data.h"
+#include "framework/inspector.h"
+#include "framework/module.h"
+#include "main/snort_config.h"
 #include "parser/parse_so_rule.h"
 
 using namespace snort;
 using namespace std;
 
-static list<const SoApi*> s_rules;
-
 //-------------------------------------------------------------------------
 // plugins
 //-------------------------------------------------------------------------
-
-void SoManager::add_plugin(const SoApi* api)
+SoRules::~SoRules()
 {
-    s_rules.emplace_back(api);
+    api.clear();
+    handles.clear();
 }
 
-void SoManager::release_plugins()
+void SoManager::add_plugin(const SoApi* api, SnortConfig* sc, SoHandlePtr handle)
 {
-    s_rules.clear();
+    sc->so_rules->api.emplace_back(api);
+    sc->so_rules->handles.emplace_back(handle);
 }
 
 void SoManager::dump_plugins()
 {
     Dumper d("SO Rules");
 
-    for ( auto* p : s_rules )
+    for ( auto* p : SnortConfig::get_conf()->so_rules->api )
         d.dump(p->base.name, p->base.version);
 }
 
@@ -186,18 +188,18 @@ static const char* revert(const uint8_t* data, unsigned len)
 
 //-------------------------------------------------------------------------
 
-static const SoApi* get_so_api(const char* soid)
+static const SoApi* get_so_api(const char* soid, SoRules* so_rules)
 {
-    for ( auto* p : s_rules )
+    for ( auto* p : so_rules->api )
         if ( !strcmp(p->base.name, soid) )
             return p;
 
     return nullptr;
 }
 
-const char* SoManager::get_so_rule(const char* soid)
+const char* SoManager::get_so_rule(const char* soid, SnortConfig* sc)
 {
-    const SoApi* api = get_so_api(soid);
+    const SoApi* api = get_so_api(soid, sc->so_rules);
 
     if ( !api )
         return nullptr;
@@ -207,9 +209,9 @@ const char* SoManager::get_so_rule(const char* soid)
     return rule;
 }
 
-SoEvalFunc SoManager::get_so_eval(const char* soid, const char* so, void** data)
+SoEvalFunc SoManager::get_so_eval(const char* soid, const char* so, void** data, SnortConfig* sc)
 {
-    const SoApi* api = get_so_api(soid);
+    const SoApi* api = get_so_api(soid, sc->so_rules);
 
     if ( !api || !api->ctor )
         return nullptr;
@@ -217,9 +219,11 @@ SoEvalFunc SoManager::get_so_eval(const char* soid, const char* so, void** data)
     return api->ctor(so, data);
 }
 
-void SoManager::delete_so_data(const char* soid, void* pv)
+void SoManager::delete_so_data(const char* soid, void* pv, SoRules* so_rules)
 {
-    const SoApi* api = get_so_api(soid);
+    if (!pv or !so_rules)
+        return;
+    const SoApi* api = get_so_api(soid, so_rules);
 
     if ( api && api->dtor )
         api->dtor(pv);
@@ -227,11 +231,11 @@ void SoManager::delete_so_data(const char* soid, void* pv)
 
 //-------------------------------------------------------------------------
 
-void SoManager::dump_rule_stubs(const char*)
+void SoManager::dump_rule_stubs(const char*, SnortConfig* sc)
 {
     unsigned c = 0;
 
-    for ( auto* p : s_rules )
+    for ( auto* p : sc->so_rules->api )
     {
         const char* rule = revert(p->rule, p->length);
 
@@ -292,6 +296,7 @@ void SoManager::rule_to_hex(const char*)
 
     const unsigned hex_per_row = 16;
 
+    std::ios_base::fmtflags f(cout.flags());
     cout << "static const uint8_t rule_" << var;
     cout << "[] =" << endl;
     cout << "{" << endl << "   ";
@@ -312,6 +317,7 @@ void SoManager::rule_to_hex(const char*)
     cout << "};" << endl;
     cout << "static const unsigned rule_" << var << "_len = ";
     cout << data.size() << ";" << endl;
+    cout.flags(f);
 }
 
 void SoManager::rule_to_text(const char* delim)
@@ -336,3 +342,92 @@ void SoManager::rule_to_text(const char* delim)
     cout << "static const unsigned rule_" << var << "_len = 0;" << endl;
 }
 
+//-------------------------------------------------------------------------
+// so_proxy inspector
+//-------------------------------------------------------------------------
+static const char* sp_name = "so_proxy";
+static const char* sp_help = "a proxy inspector to track flow data from SO rules (internal use only)";
+class SoProxy : public Inspector
+{
+public:
+    void eval(Packet*) override { }
+    bool configure(SnortConfig* sc) override
+    {
+        for( auto i : sc->so_rules->handles )
+            handles.emplace_back(i);
+        sc->so_rules->proxy = this;
+        return true;
+    }
+    ~SoProxy() override { handles.clear(); }
+
+private:
+    std::list<SoHandlePtr> handles;
+};
+
+static const Parameter sp_params[] =
+{
+    { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
+};
+
+class SoProxyModule : public Module
+{
+public:
+    SoProxyModule() : Module(sp_name, sp_help, sp_params) { }
+    Usage get_usage() const override
+    { return GLOBAL; }
+};
+
+static Module* mod_ctor()
+{ return new SoProxyModule; }
+
+static void mod_dtor(Module* m)
+{ delete m; }
+
+static Inspector* sp_ctor(Module*)
+{
+    return new SoProxy;
+}
+
+static void sp_dtor(Inspector* p)
+{
+    delete p;
+}
+
+static const InspectApi so_proxy_api
+{
+    {
+        PT_INSPECTOR,
+        sizeof(InspectApi),
+        INSAPI_VERSION,
+        0,
+        API_RESERVED,
+        API_OPTIONS,
+        sp_name,
+        sp_help,
+        mod_ctor,
+        mod_dtor
+    },
+    IT_PASSIVE,
+    PROTO_BIT__NONE,
+    nullptr, // buffers
+    nullptr, // service
+    nullptr, // pinit
+    nullptr, // pterm
+    nullptr, // tinit,
+    nullptr, // tterm,
+    sp_ctor,
+    sp_dtor,
+    nullptr, // ssn
+    nullptr  // reset
+};
+
+const BaseApi* so_proxy_plugins[] =
+{
+    &so_proxy_api.base,
+    nullptr
+};
+
+void SoManager::load_so_proxy()
+{
+    PluginManager::load_plugins(so_proxy_plugins);
+}

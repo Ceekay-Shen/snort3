@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2018-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2018-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -25,6 +25,7 @@
 
 #include "http_msg_section.h"
 #include "protocols/packet.h"
+#include "service_inspectors/http2_inspect/http2_flow_data.h"
 
 using namespace snort;
 
@@ -32,9 +33,24 @@ unsigned HttpContextData::ips_id = 0;
 
 HttpMsgSection* HttpContextData::get_snapshot(const Packet* p)
 {
-    IpsContext* context = p ? p->context : nullptr;
+    assert(p != nullptr);
+    return get_snapshot(p->flow, p->context);
+}
+
+HttpMsgSection* HttpContextData::get_snapshot(const Flow* flow, IpsContext* context)
+{
+    assert(flow != nullptr);
+
+    if (Http2FlowData::inspector_id != 0)
+    {
+        const Http2FlowData* const h2i_flow_data =
+            (Http2FlowData*)flow->get_flow_data(Http2FlowData::inspector_id);
+        if (h2i_flow_data != nullptr)
+            return h2i_flow_data->get_hi_msg_section();
+    }
+
     HttpContextData* hcd = (HttpContextData*)DetectionEngine::get_data(HttpContextData::ips_id,
-            context);
+        context);
 
     if ( !hcd )
         return nullptr;

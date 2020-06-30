@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -34,22 +34,22 @@ class SO_PUBLIC ActiveEvent : public DataEvent
 {
 public:
     ActiveEvent
-        (const Active::ActiveAction current, const Active::ActiveAction previous, const Packet* p)
+        (const Active::ActiveActionType current, const Active::ActiveActionType previous, const Packet* p)
         : current_action(current), previous_action(previous), pkt(p)
     { }
 
-    Active::ActiveAction get_current_action() const
+    Active::ActiveActionType get_current_action() const
     { return current_action; }
 
-    Active::ActiveAction get_previous_action() const
+    Active::ActiveActionType get_previous_action() const
     { return previous_action; }
 
     const Packet* get_pkt() const
     { return pkt; }
 
 private:
-    const Active::ActiveAction current_action;
-    const Active::ActiveAction previous_action;
+    const Active::ActiveActionType current_action;
+    const Active::ActiveActionType previous_action;
     const Packet* pkt;
 };
 }

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -97,19 +97,6 @@ SSLData* get_ssl_session_data(Flow* flow)
 {
     SslFlowData* fd = (SslFlowData*)flow->get_flow_data(SslFlowData::inspector_id);
     return fd ? &fd->session : nullptr;
-}
-
-static void PrintSslConf(SSL_PROTO_CONF* config)
-{
-    if (config == nullptr)
-        return;
-    LogMessage("SSL config:\n");
-    if ( config->trustservers )
-    {
-        LogMessage("    Server side data is trusted\n");
-    }
-
-    LogMessage("\n");
 }
 
 static void SSL_UpdateCounts(const uint32_t new_flags)
@@ -423,7 +410,7 @@ public:
     Ssl(SSL_PROTO_CONF*);
     ~Ssl() override;
 
-    void show(SnortConfig*) override;
+    void show(const SnortConfig*) const override;
     void eval(Packet*) override;
 
     StreamSplitter* get_splitter(bool c2s) override
@@ -444,9 +431,13 @@ Ssl::~Ssl()
         delete config;
 }
 
-void Ssl::show(SnortConfig*)
+void Ssl::show(const SnortConfig*) const
 {
-    PrintSslConf(config);
+    if ( !config )
+        return;
+
+    ConfigLogger::log_flag("trust_servers", config->trustservers);
+    ConfigLogger::log_value("max_heartbeat_length", config->max_heartbeat_len);
 }
 
 void Ssl::eval(Packet* p)

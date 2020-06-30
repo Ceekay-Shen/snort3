@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2012-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -115,7 +115,8 @@ public:
     //    true: continue processing/log/block this file
     //    false: ignore this file
     bool process(Packet*, const uint8_t* file_data, int data_size, FilePosition, FilePolicyBase*);
-    bool process(Packet*, const uint8_t* file_data, int data_size, uint64_t offset, FilePolicyBase*);
+    bool process(Packet*, const uint8_t* file_data, int data_size, uint64_t offset, FilePolicyBase*,
+        FilePosition position=SNORT_FILE_POSITION_UNKNOWN);
     void process_file_type(const uint8_t* file_data, int data_size, FilePosition);
     void process_file_signature_sha256(const uint8_t* file_data, int data_size, FilePosition);
     void update_file_size(int data_size, FilePosition position);

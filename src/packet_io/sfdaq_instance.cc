@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2019-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2019-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -36,10 +36,12 @@
 
 using namespace snort;
 
-SFDAQInstance::SFDAQInstance(const char* input, const SFDAQConfig* cfg)
+SFDAQInstance::SFDAQInstance(const char* input, unsigned id, const SFDAQConfig* cfg)
 {
     if (input)
         input_spec = input;
+    // The Snort instance ID is 0-based while the DAQ ID is 1-based, so adjust accordingly.
+    instance_id = id + 1;
     batch_size = cfg->get_batch_size();
     daq_msgs = new DAQ_Msg_h[batch_size];
 }
@@ -55,7 +57,7 @@ static bool DAQ_ValidateInstance(DAQ_Instance_h instance)
 {
     uint32_t caps = daq_instance_get_capabilities(instance);
 
-    if (!SnortConfig::adaptor_inline_mode())
+    if (!SnortConfig::get_conf()->adaptor_inline_mode())
         return true;
 
     if (!(caps & DAQ_CAPA_BLOCK))
@@ -69,8 +71,11 @@ bool SFDAQInstance::init(DAQ_Config_h daqcfg, const std::string& bpf_string)
     char buf[256] = "";
     int rval;
 
-    /* Reuse the main DAQ instance configuration with the input specification specific to this instance. */
+    // Reuse the main DAQ instance configuration with the input specification specific to this
+    // instance.  Also, configure the DAQ instance ID in the multi-instance case.
     daq_config_set_input(daqcfg, input_spec.c_str());
+    if (daq_config_get_total_instances(daqcfg) > 0)
+        daq_config_set_instance_id(daqcfg, instance_id);
     if ((rval = daq_instance_instantiate(daqcfg, &instance, buf, sizeof(buf))) != DAQ_SUCCESS)
     {
         ErrorMessage("Couldn't construct a DAQ instance: %s (%d)\n", buf, rval);
@@ -167,7 +172,11 @@ bool SFDAQInstance::start()
     pool_size = mpool_info.size;
     pool_available = mpool_info.available;
     assert(pool_size == pool_available);
-
+    if (SnortConfig::get_conf()->log_verbose())
+    {
+        LogMessage("Instance %d daq pool size: %d\n", get_instance_id(), pool_size);
+        LogMessage("Instance %d daq batch size: %d\n", get_instance_id(), batch_size);
+    }
     dlt = daq_instance_get_datalink_type(instance);
     get_tunnel_capabilities();
 
@@ -213,6 +222,8 @@ void SFDAQInstance::get_tunnel_capabilities()
             daq_tunnel_mask |= TUNNEL_GTP;
         if (caps & DAQ_CAPA_DECODE_TEREDO)
             daq_tunnel_mask |= TUNNEL_TEREDO;
+        if (caps & DAQ_CAPA_DECODE_VXLAN)
+            daq_tunnel_mask |= TUNNEL_VXLAN;
         if (caps & DAQ_CAPA_DECODE_GRE)
             daq_tunnel_mask |= TUNNEL_GRE;
         if (caps & DAQ_CAPA_DECODE_4IN4)
@@ -228,7 +239,7 @@ void SFDAQInstance::get_tunnel_capabilities()
     }
 }
 
-bool SFDAQInstance::get_tunnel_bypass(uint8_t proto)
+bool SFDAQInstance::get_tunnel_bypass(uint16_t proto)
 {
     return (daq_tunnel_mask & proto) != 0;
 }
@@ -306,12 +317,21 @@ int SFDAQInstance::modify_flow_opaque(DAQ_Msg_h msg, uint32_t opaque)
     return daq_instance_ioctl(instance, DIOCTL_SET_FLOW_OPAQUE, &d_sfo, sizeof(d_sfo));
 }
 
-int SFDAQInstance::modify_flow_pkt_trace(DAQ_Msg_h msg, uint8_t verdict_reason, uint8_t* buff, uint32_t buff_len)
+int SFDAQInstance::set_packet_verdict_reason(DAQ_Msg_h msg, uint8_t verdict_reason)
+{
+    DIOCTL_SetPacketVerdictReason d_spvr;
+
+    d_spvr.msg = msg;
+    d_spvr.verdict_reason = verdict_reason;
+
+    return daq_instance_ioctl(instance, DIOCTL_SET_PACKET_VERDICT_REASON, &d_spvr, sizeof(d_spvr));
+}
+
+int SFDAQInstance::set_packet_trace_data(DAQ_Msg_h msg, uint8_t* buff, uint32_t buff_len)
 {
     DIOCTL_SetPacketTraceData d_sptd;
 
     d_sptd.msg = msg;
-    d_sptd.verdict_reason = verdict_reason;
     d_sptd.trace_data_len = buff_len;
     d_sptd.trace_data = buff;
 

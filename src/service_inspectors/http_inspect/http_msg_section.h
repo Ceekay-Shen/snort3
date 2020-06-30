@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -21,12 +21,15 @@
 #define HTTP_MSG_SECTION_H
 
 #include "detection/detection_util.h"
+#include "framework/cursor.h"
 
+#include "http_buffer_info.h"
 #include "http_common.h"
+#include "http_cursor_data.h"
 #include "http_enum.h"
 #include "http_field.h"
-#include "http_module.h"
 #include "http_flow_data.h"
+#include "http_module.h"
 #include "http_transaction.h"
 
 //-------------------------------------------------------------------------
@@ -64,6 +67,7 @@ public:
     virtual void update_flow() = 0;
 
     const Field& get_classic_buffer(unsigned id, uint64_t sub_id, uint64_t form);
+    const Field& get_classic_buffer(Cursor& c, HttpBufferInfo& buf);
 
     HttpEnums::MethodId get_method_id() const { return method_id; }
 
@@ -74,6 +78,8 @@ public:
 
     void clear();
     bool is_clear() { return cleared; }
+
+    uint64_t get_transaction_id() { return trans_num; }
 
     HttpMsgSection* next = nullptr;
 
@@ -101,6 +107,9 @@ protected:
     HttpEnums::MethodId method_id;
     const bool tcp_close;
 
+    int64_t h2_stream_id = HttpCommon::STAT_NOT_COMPUTE;
+    uint32_t get_h2_stream_id(HttpCommon::SourceId source_id);
+
     // Pointers to related message sections in the same transaction
     HttpMsgRequest* request;
     HttpMsgStatus* status;
@@ -114,7 +123,7 @@ protected:
     void create_event(int sid);
     void update_depth() const;
     static const Field& classic_normalize(const Field& raw, Field& norm,
-        const HttpParaList::UriParam& uri_param);
+        bool do_path, const HttpParaList::UriParam& uri_param);
 #ifdef REG_TEST
     void print_section_title(FILE* output, const char* title) const;
     void print_section_wrapup(FILE* output) const;

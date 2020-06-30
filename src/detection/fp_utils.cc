@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -252,7 +252,7 @@ FpSelector::FpSelector(CursorActionType c, PatternMatchData* p)
     cat = c;
     pmd = p;
 
-    // FIXIT-H unconditional trim is bad mkay? see fpGetFinalPattern
+    // FIXIT-M unconditional trim is bad mkay? see fpGetFinalPattern
     size = flp_trim(pmd->pattern_buf, pmd->pattern_size, nullptr);
 }
 
@@ -356,7 +356,7 @@ PatternMatchVector get_fp_content(
         }
     }
 
-    if ( best.pmd and best.cat != CAT_SET_RAW and !srvc and otn->sigInfo.num_services > 0 )
+    if ( best.pmd and best.cat != CAT_SET_RAW and !srvc and !otn->sigInfo.services.empty() )
     {
         pmds.clear();  // just include in service group
         exclude = true;

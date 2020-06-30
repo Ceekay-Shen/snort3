@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -82,7 +82,7 @@ void DaqMessageEventHandler::handle(DataEvent& event, Flow*)
     int vlan_tag = fs->vlan_tag == 0xfff ?  0 : fs->vlan_tag;
 
     TextLog_Print(hext_log,
-        "\n$%s %d %d %d %d %s %d %s %d %d %d %d %d %d %d %d %d %d %d %d %d %d\n",
+        "\n$%s %d %d %d %d %s %d %s %d %u %lu %lu %lu %lu %lu %lu %d %lu %lu %d %d %d\n",
         cmd,
         fs->ingressZone,
         fs->egressZone,
@@ -193,13 +193,13 @@ public:
     bool begin(const char*, int, SnortConfig*) override;
 
     Usage get_usage() const override
-    { return CONTEXT; }
+    { return GLOBAL; }
 
 public:
-    bool file;
-    bool raw;
-    size_t limit;
-    unsigned width;
+    bool file = false;
+    bool raw = false;
+    size_t limit = 0;
+    unsigned width = 20;
 };
 
 bool HextModule::set(const char*, Value& v, SnortConfig*)
@@ -298,7 +298,7 @@ static Module* mod_ctor()
 static void mod_dtor(Module* m)
 { delete m; }
 
-static Logger* hext_ctor(SnortConfig*, Module* mod)
+static Logger* hext_ctor(Module* mod)
 {
     return new HextLogger((HextModule*)mod);
 }

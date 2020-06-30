@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -30,18 +30,17 @@
 #include "search_engines/search_tool.h"
 #include "utils/util.h"
 
-#include "appid_http_session.h"
+#include "appid_types.h"
 #include "appid_utils/sf_mlmp.h"
-#include "appid_utils/sf_multi_mpse.h"
 #include "application_ids.h"
 
 namespace snort
 {
-struct AppIdServiceSubtype;
 struct Packet;
 }
 class AppIdHttpSession;
-class AppIdModuleConfig;
+class AppIdContext;
+class OdpContext;
 
 enum httpPatternType
 {
@@ -216,16 +215,6 @@ typedef std::vector<CHPMatchCandidate> CHPMatchTally;
 class ChpMatchDescriptor
 {
 public:
-    void free_rewrite_buffers()
-    {
-        for (unsigned i = 0; i < NUM_HTTP_FIELDS; i++)
-            if (chp_rewritten[i])
-            {
-                snort_free((void*)chp_rewritten[i]);
-                chp_rewritten[i] = nullptr;
-            }
-    }
-
     void sort_chp_matches()
     {
         chp_matches[cur_ptype].sort(ChpMatchDescriptor::comp_chp_actions);
@@ -234,7 +223,6 @@ public:
     HttpFieldIds cur_ptype;
     const char* buffer[NUM_HTTP_FIELDS] = { nullptr };
     uint16_t length[NUM_HTTP_FIELDS] = { 0 };
-    const char* chp_rewritten[NUM_HTTP_FIELDS] = { nullptr };
     std::list<MatchedCHPAction> chp_matches[NUM_HTTP_FIELDS];
     CHPMatchTally match_tally;
 
@@ -287,7 +275,6 @@ public:
     { }
     ~HttpPatternMatchers();
 
-    static HttpPatternMatchers* get_instance();
     int finalize_patterns();
     void insert_chp_pattern(CHPListElement*);
     void insert_http_pattern(enum httpPatternType, DetectorHTTPPattern&);
@@ -302,13 +289,13 @@ public:
 
     void scan_key_chp(ChpMatchDescriptor&);
     AppId scan_chp(ChpMatchDescriptor&, char**, char**, int*, AppIdHttpSession*,
-           const AppIdModuleConfig*);
+           const AppIdContext&);
     AppId scan_header_x_working_with(const char*, uint32_t, char**);
     int get_appid_by_pattern(const char*, unsigned, char**);
-    bool get_appid_from_url(char*, const char*, char**, const char*, AppId*, AppId*,
-        AppId*, AppId*, bool);
+    bool get_appid_from_url(const char*, const char*, char**, const char*, AppId*, AppId*,
+        AppId*, AppId*, bool, OdpContext&);
     AppId get_appid_by_content_type(const char*, int);
-    void get_server_vendor_version(const char*, int, char**, char**, snort::AppIdServiceSubtype**);
+    void get_server_vendor_version(const char*, int, char**, char**, AppIdServiceSubtype**);
     void identify_user_agent(const char*, int, AppId&, AppId&, char**);
     void get_http_offsets(snort::Packet*, AppIdHttpSession*);
     uint32_t parse_multiple_http_patterns(const char* pattern, tMlmpPattern*,

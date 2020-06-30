@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2018-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2018-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -114,7 +114,7 @@ void S7commplus::eval(Packet* p)
     // evaluating on the first PDU. Setting this flag stops the caching.
     p->packet_flags |= PKT_ALLOW_MULTIPLE_DETECT;
 
-    if ( !S7commplusDecode(p) )
+    if ( !S7commplusDecode(p, mfd))
         mfd->reset();
 }
 

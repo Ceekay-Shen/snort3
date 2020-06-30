@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -24,9 +24,28 @@
 //  Loads host cache configuration data.
 
 #include "framework/module.h"
+#include "main/snort.h"
+#include "main/snort_config.h"
+
+#include "host_cache.h"
 
 #define HOST_CACHE_NAME "host_cache"
 #define HOST_CACHE_HELP "global LRU cache of host_tracker data about hosts"
+
+class HostCacheReloadTuner : public snort::ReloadResourceTuner
+{
+public:
+    bool tinit() override
+    { return host_cache.reload_resize(memcap); }
+
+    bool tune_idle_context() override
+    { return host_cache.reload_prune(memcap, max_work_idle); }
+
+    bool tune_packet_context() override
+    { return host_cache.reload_prune(memcap, max_work); }
+
+    size_t memcap;
+};
 
 class HostCacheModule : public snort::Module
 {
@@ -50,7 +69,7 @@ public:
 
 private:
     const char* dump_file = nullptr;
-    uint32_t host_cache_size;
+    HostCacheReloadTuner hc_rrt;
 };
 
 #endif

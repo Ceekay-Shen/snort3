@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2013-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -109,7 +109,7 @@ public:
     unsigned long get_overflows() { return overflows; }
 
 private:
-    void prune();
+    void prune_lru();
 
     ExpectNode* get_node(snort::FlowKey&, bool&);
     snort::ExpectFlow* get_flow(ExpectNode*, uint32_t, int16_t);
@@ -123,8 +123,10 @@ private:
     snort::ExpectFlow* pool;
     snort::ExpectFlow* free_list;
 
-    unsigned long expects, realized;
-    unsigned long prunes, overflows;
+    unsigned long expects = 0;
+    unsigned long realized = 0;
+    unsigned long prunes = 0;
+    unsigned long overflows = 0;
 };
 
 #endif

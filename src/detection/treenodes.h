@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2008-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -88,6 +88,19 @@ struct RuleFpList
     RuleFpList* next = nullptr;
 };
 
+struct RuleHeader
+{
+    RuleHeader(const char* s) : action(s) { }
+
+    std::string action;
+    std::string proto;
+    std::string src_nets;
+    std::string src_ports;
+    std::string dir;
+    std::string dst_nets;
+    std::string dst_ports;
+};
+
 // one of these per rule per policy
 // represents head part of rule
 struct RuleTreeNode
@@ -103,6 +116,7 @@ struct RuleTreeNode
     static constexpr Flag USER_MODE     = 0x80;
 
     RuleFpList* rule_func = nullptr; /* match functions.. (Bidirectional etc.. ) */
+    RuleHeader* header = nullptr;
 
     sfip_var_t* sip = nullptr;
     sfip_var_t* dip = nullptr;
@@ -131,18 +145,30 @@ struct RuleTreeNode
     bool enabled() const
     { return (flags & ENABLED) != 0; }
 
-    bool user_mode()
+    bool user_mode() const
     { return (flags & USER_MODE) != 0; }
+
+    bool any_src_port() const
+    { return (flags & ANY_SRC_PORT) != 0; }
+
+    bool any_dst_port() const
+    { return (flags & ANY_DST_PORT) != 0; }
+
+    bool any_any_port() const
+    { return any_src_port() and any_dst_port(); }
 };
 
 // one of these for each rule
 // represents body part of rule
 struct OptTreeNode
 {
+    ~OptTreeNode();
+
     using Flag = uint8_t;
     static constexpr Flag WARNED_FP  = 0x01;
     static constexpr Flag STATELESS  = 0x02;
     static constexpr Flag RULE_STATE = 0x04;
+    static constexpr Flag META_MATCH = 0x08;
 
     /* metadata about signature */
     SigInfo sigInfo;
@@ -158,23 +184,14 @@ struct OptTreeNode
 
     // ptr to list of RTNs (head part); indexed by policyId
     RuleTreeNode** proto_nodes = nullptr;
-
     OtnState* state = nullptr;
 
-    int chain_node_number = 0;
-    int evalIndex = 0;       /* where this rule sits in the evaluation sets */
-
+    unsigned evalIndex = 0;       /* where this rule sits in the evaluation sets */
     unsigned ruleIndex = 0; // unique index
-
     uint32_t num_detection_opts = 0;
-    uint32_t plugins = 0;
-
-    // Added for integrity checks during rule parsing.
-    SnortProtocolId snort_protocol_id = 0;
-
+    SnortProtocolId snort_protocol_id = 0;    // Added for integrity checks during rule parsing.
     unsigned short proto_node_num = 0;
     uint16_t longestPatternLen = 0;
-
     IpsPolicy::Enable enable;
     Flag flags = 0;
 
@@ -182,19 +199,19 @@ struct OptTreeNode
     { flags |= WARNED_FP; }
 
     bool warned_fp() const
-    { return flags & WARNED_FP; }
+    { return (flags & WARNED_FP) != 0; }
 
     void set_stateless()
     { flags |= STATELESS; }
 
     bool stateless() const
-    { return flags & STATELESS; }
+    { return (flags & STATELESS) != 0; }
 
     void set_enabled(IpsPolicy::Enable e)
     { enable = e; flags |= RULE_STATE; }
 
-    bool is_rule_state_stub()
-    { return flags & RULE_STATE; }
+    bool is_rule_state_stub() const
+    { return (flags & RULE_STATE) != 0; }
 
     bool enabled_somewhere() const
     {
@@ -204,6 +221,12 @@ struct OptTreeNode
 
         return false;
     }
+
+    void set_metadata_match()
+    { flags |= META_MATCH; }
+
+    bool metadata_matched() const
+    { return (flags & META_MATCH) != 0; }
 };
 
 typedef int (* RuleOptEvalFunc)(void*, Cursor&, snort::Packet*);
@@ -215,12 +238,6 @@ namespace snort
 {
 SO_PUBLIC bool otn_has_plugin(OptTreeNode* otn, const char* name);
 }
-
-inline bool otn_has_plugin(OptTreeNode* otn, int id)
-{ return (otn->plugins & (0x1 << id)) != 0; }
-
-inline void otn_set_plugin(OptTreeNode* otn, int id)
-{ otn->plugins |= (0x1 << id); }
 
 bool otn_set_agent(OptTreeNode*, snort::IpsOption*);
 

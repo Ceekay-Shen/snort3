@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2017-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2017-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -29,49 +29,13 @@
 #include "pub_sub/appid_events.h"
 #include "sfip/sf_ip.h"
 
+#include "appid_app_descriptor.h"
 #include "appid_types.h"
 #include "application_ids.h"
-#include "http_xff_fields.h"
 
 class AppIdSession;
 class ChpMatchDescriptor;
 class HttpPatternMatchers;
-
-// These values are used in Lua code as raw numbers. Do NOT reassign new values.
-// 0 - 8 (inclusive)       : used heavily in CHP code. DO NOT CHANGE.
-// 9 - NUM_METADATA_FIELDS : extra metadata buffers, beyond CHP.
-// NUM_METADATA_FIELDS     : must always follow the last metadata FID.
-// NUM_HTTP_FIELDS         : number of CHP fields, so always RSP_BODY_FID + 1
-enum HttpFieldIds : uint8_t
-{
-    // 0-8: CHP fields. DO NOT CHANGE
-
-    // Request-side headers
-    REQ_AGENT_FID,          // 0
-    REQ_HOST_FID,           // 1
-    REQ_REFERER_FID,        // 2
-    REQ_URI_FID,            // 3
-    REQ_COOKIE_FID,         // 4
-    REQ_BODY_FID,           // 5
-    // Response-side headers
-    RSP_CONTENT_TYPE_FID,   // 6
-    RSP_LOCATION_FID,       // 7
-    RSP_BODY_FID,           // 8
-
-    // extra (non-CHP) metadata fields.
-    MISC_VIA_FID,           // 9
-    MISC_RESP_CODE_FID,     // 10
-    MISC_SERVER_FID,        // 11
-    MISC_XWW_FID,           // 12
-    MISC_URL_FID,           // 13
-
-    // Total number of metadata fields, always first after actual FIDs.
-    NUM_METADATA_FIELDS,    // 14
-
-    // Number of CHP fields, always 1 past RSP_BODY_FIELD
-    NUM_HTTP_FIELDS = MISC_VIA_FID,
-    MAX_KEY_PATTERN = REQ_URI_FID,     // DO NOT CHANGE, used in CHP
-};
 
 #define RESPONSE_CODE_PACKET_THRESHHOLD 0
 
@@ -96,42 +60,25 @@ class AppIdHttpSession
 public:
     typedef std::pair<uint16_t,uint16_t> pair_t;
 
-    AppIdHttpSession(AppIdSession&);
+    AppIdHttpSession(AppIdSession&, uint32_t);
     virtual ~AppIdHttpSession();
+    ClientAppDescriptor client;
+    PayloadAppDescriptor payload;
+    AppId referred_payload_app_id = APP_ID_NONE;
+    AppId misc_app_id = APP_ID_NONE;
 
-    int process_http_packet(AppidSessionDirection direction, AppidChangeBits& change_bits);
-    void update_http_xff_address(struct XffFieldValue*, uint32_t, AppidChangeBits&);
+    int process_http_packet(AppidSessionDirection direction, AppidChangeBits& change_bits,
+        HttpPatternMatchers& http_matchers);
 
     void update_url(AppidChangeBits& change_bits);
-
-    snort::SfIp* get_xff_addr()
-    { return xff_addr; }
+    void set_field(HttpFieldIds id, const std::string* str, AppidChangeBits& change_bits);
+    void set_field(HttpFieldIds id, const uint8_t* str, int32_t len, AppidChangeBits& change_bits);
 
     const std::string* get_field(HttpFieldIds id)
     { return meta_data[id]; }
 
     const char* get_cfield(HttpFieldIds id)
     { return meta_data[id] != nullptr ? meta_data[id]->c_str() : nullptr; }
-
-    void set_field(HttpFieldIds id, const std::string* str, AppidChangeBits& change_bits)
-    {
-        delete meta_data[id];
-        meta_data[id] = str;
-        if (str)
-            set_http_change_bits(change_bits, id);
-    }
-
-    void set_field(HttpFieldIds id, const uint8_t* str, int32_t len, AppidChangeBits& change_bits)
-    {
-        delete meta_data[id];
-        if (str and len)
-        {
-            meta_data[id] = new std::string((const char*)str, len);
-            set_http_change_bits(change_bits, id);
-        }
-        else
-            meta_data[id] = nullptr;
-    }
 
     bool get_offset(int id, uint16_t& start, uint16_t& end)
     {
@@ -157,12 +104,6 @@ public:
 
     void set_is_webdav(bool webdav)
     { is_webdav = webdav; }
-
-    bool is_rebuilt_offsets() const
-    { return rebuilt_offsets; }
-
-    void set_rebuilt_offsets(bool use_rebuilt_offsets = false)
-    { rebuilt_offsets = use_rebuilt_offsets; }
 
     AppId get_chp_candidate() const
     { return chp_candidate; }
@@ -197,7 +138,10 @@ public:
     { return tun_dest; }
 
     void free_tun_dest()
-    { delete tun_dest; }
+    {
+        delete tun_dest;
+        tun_dest = nullptr;
+    }
 
     void reset_ptype_scan_counts();
 
@@ -207,16 +151,23 @@ public:
     virtual void custom_init() { }
 
     void clear_all_fields();
+    void set_client(AppId, AppidChangeBits&, const char*, const char* version = nullptr);
+    void set_payload(AppId, AppidChangeBits&, const char* type = nullptr, const char* version = nullptr);
+    void set_referred_payload(AppId, AppidChangeBits&);
+
+    uint32_t get_http2_stream_id() const
+    {
+        return http2_stream_id;
+    }
 
 protected:
 
     void init_chp_match_descriptor(ChpMatchDescriptor& cmd);
-    int initial_chp_sweep(ChpMatchDescriptor&);
-    void process_chp_buffers(AppidChangeBits&);
+    bool initial_chp_sweep(ChpMatchDescriptor&, HttpPatternMatchers&);
+    void process_chp_buffers(AppidChangeBits&, HttpPatternMatchers&);
     void free_chp_matches(ChpMatchDescriptor& cmd, unsigned max_matches);
     void set_http_change_bits(AppidChangeBits& change_bits, HttpFieldIds id);
-
-    HttpPatternMatchers* http_matchers = nullptr;
+    void print_field(HttpFieldIds id, const std::string* str);
 
     AppIdSession& asd;
 
@@ -239,17 +190,14 @@ protected:
     unsigned app_type_flags = 0;
     int num_matches = 0;
     int num_scans = 0;
-    bool rebuilt_offsets = false;
     bool skip_simple_detect = false;
-    snort::SfIp* xff_addr = nullptr;
-    const char** xffPrecedence = nullptr;
-    unsigned numXffFields = 0;
     int ptype_req_counts[NUM_HTTP_FIELDS] = { 0 };
     int ptype_scan_counts[NUM_HTTP_FIELDS] = { 0 };
     const TunnelDest* tun_dest = nullptr;
 #if RESPONSE_CODE_PACKET_THRESHHOLD
     unsigned response_code_packets = 0;
 #endif
+    uint32_t http2_stream_id = 0;
 };
 
 #endif

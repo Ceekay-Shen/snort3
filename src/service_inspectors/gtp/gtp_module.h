@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -22,7 +22,6 @@
 #define GTP_MODULE_H
 
 #include "framework/module.h"
-#include "main/snort_debug.h"
 
 #define GID_GTP 143
 
@@ -34,8 +33,13 @@
 #define GTP_NAME "gtp_inspect"
 #define GTP_HELP "gtp control channel inspection"
 
+namespace snort
+{
+class Trace;
+}
+
 extern THREAD_LOCAL snort::ProfileStats gtp_inspect_prof;
-extern Trace TRACE_NAME(gtp_inspect);
+extern THREAD_LOCAL const snort::Trace* gtp_inspect_trace;
 
 struct GtpStuff
 {
@@ -67,6 +71,9 @@ public:
 
     Usage get_usage() const override
     { return INSPECT; }
+
+    void set_trace(const snort::Trace*) const override;
+    const snort::TraceOption* get_trace_options() const override;
 
 public:
     GtpStuff stuff;

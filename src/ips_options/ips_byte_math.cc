@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -27,7 +27,7 @@
 #include "framework/endianness.h"
 #include "framework/ips_option.h"
 #include "framework/module.h"
-#include "hash/hashfcn.h"
+#include "hash/hash_key_operations.h"
 #include "log/messages.h"
 #include "profiler/profiler.h"
 #include "protocols/packet.h"
@@ -249,23 +249,44 @@ IpsOption::EvalStatus ByteMathOption::eval(Cursor& c, Packet* p)
     // If the rule isn't written correctly, there is a risk for wrap around.
     switch (config.oper)
     {
-    case BM_PLUS: value += rvalue;
-        break;
-
-    case BM_MINUS: value -= rvalue;
-        break;
-
-    case BM_MULTIPLY: value *= rvalue;
-        break;
-
+    case BM_PLUS:
+        if( value + rvalue < value )
+        {
+            return NO_MATCH;
+        }
+        else
+        {
+            value += rvalue;
+            break;
+        }
+    case BM_MINUS:
+        if( value < rvalue )
+        {
+            return NO_MATCH;
+        }
+        else
+        {
+            value -= rvalue;
+            break;
+        }
+    case BM_MULTIPLY:
+        if ( value != 0 and rvalue != 0 and (((value * rvalue) / rvalue) != value) )
+        {
+            return NO_MATCH;
+        }
+        else
+        {
+            value *= rvalue;
+            break;
+        }
     case BM_DIVIDE: value /= rvalue;
-        break;
+            break;
 
     case BM_LEFT_SHIFT: value <<= rvalue;
-        break;
+            break;
 
     case BM_RIGHT_SHIFT: value >>= rvalue;
-        break;
+            break;
     }
 
     SetVarValueByIndex(value, config.result_var);
@@ -346,7 +367,7 @@ public:
     { return DETECT; }
 
 public:
-    ByteMathData data;
+    ByteMathData data = {};
     string rvalue_var;
     string off_var;
 };

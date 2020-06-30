@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -27,7 +27,6 @@
 #include "side_channel/side_channel_module.h"
 
 #include "log/messages.h"
-#include "main/snort_debug.h"
 #include "profiler/profiler.h"
 
 #include <CppUTest/CommandLineTestRunner.h>

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2003-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -70,7 +70,9 @@ static inline bool is_eligible_udp(const Packet* p)
     {
         const SfIp* src = p->ptrs.ip_api.get_src();
         const SfIp* dst = p->ptrs.ip_api.get_dst();
-        if ( !src->is_set() and IN6_IS_ADDR_MULTICAST(dst->get_ip6_ptr()) and
+        // FIXIT-M this code checking the v6 address unconditionally is almost certainly wrong,
+        //          especially since it's looking for an IPv4-specific protocol
+        if ( !src->is_set() and ((const uint8_t *) dst->get_ip6_ptr())[0] == 0XFF and
             p->ptrs.sp == 68 and p->ptrs.dp == 67 )
             return false; // skip BOOTP
     }
@@ -135,13 +137,14 @@ void RnaPnd::discover_network_tcp(const Packet* p)
 void RnaPnd::discover_network_udp(const Packet* p)
 {
     const auto& ip_api = p->ptrs.ip_api;
-    if ( IN6_IS_ADDR_MULTICAST(ip_api.get_dst()->get_ip6_ptr()) )
+    // FIXIT-L this used to be IN6_IS_ADDR_MULTICAST(), SfIp should implement something comparable
+    if ( ((const uint8_t *) ip_api.get_dst()->get_ip6_ptr())[0] == 0XFF )
         discover_network(p, 0);
     else
         discover_network(p, ip_api.ttl());
 }
 
-void RnaPnd::discover_network(const Packet* p, u_int8_t ttl)
+void RnaPnd::discover_network(const Packet* p, uint8_t ttl)
 {
     bool new_host = false;
     const auto& src_ip = p->ptrs.ip_api.get_src();

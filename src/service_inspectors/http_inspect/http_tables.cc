@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -379,6 +379,19 @@ const RuleMap HttpModule::http_events[] =
     { EVENT_BAD_HEADER_WHITESPACE,      "white space embedded in critical header value" },
     { EVENT_GZIP_EARLY_END,             "gzip compressed data followed by unexpected non-gzip "
                                         "data" },
+    { EVENT_EXCESS_REPEAT_PARAMS,       "excessive HTTP parameter key repeats" },
+    { EVENT_H2_NON_IDENTITY_TE,         "HTTP/2 Transfer-Encoding header other than identity" },
+    { EVENT_H2_DATA_OVERRUNS_CL,        "HTTP/2 message body overruns Content-Length header "
+                                        "value" },
+    { EVENT_H2_DATA_UNDERRUNS_CL,       "HTTP/2 message body smaller than Content-Length header "
+                                        "value" },
+    { EVENT_CONNECT_REQUEST_BODY,       "HTTP CONNECT request with a message body" },
+    { EVENT_EARLY_C2S_TRAFFIC_AFTER_CONNECT, "HTTP client-to-server traffic after CONNECT request "
+                                        "but before CONNECT response" },
+    { EVENT_200_CONNECT_RESP_WITH_CL,   "HTTP CONNECT 2XX response with Content-Length header" },
+    { EVENT_200_CONNECT_RESP_WITH_TE,   "HTTP CONNECT 2XX response with Transfer-Encoding header" },
+    { EVENT_100_CONNECT_RESP,           "HTTP CONNECT response with 1XX status code" },
+    { EVENT_EARLY_CONNECT_RESPONSE,     "HTTP CONNECT response before request message completed" },
     { 0, nullptr }
 };
 
@@ -406,8 +419,11 @@ const PegInfo HttpModule::peg_names[PEG_COUNT_MAX+1] =
     { CountType::SUM, "uri_coding", "URIs with character coding problems" },
     { CountType::NOW, "concurrent_sessions", "total concurrent http sessions" },
     { CountType::MAX, "max_concurrent_sessions", "maximum concurrent http sessions" },
-    { CountType::SUM, "detained_packets", "TCP packets delayed by detained inspection" },
+    { CountType::SUM, "detains_requested", "packet hold requests for detained inspection" },
     { CountType::SUM, "partial_inspections", "pre-inspections for detained inspection" },
+    { CountType::SUM, "excess_parameters", "repeat parameters exceeding max" },
+    { CountType::SUM, "parameters", "HTTP parameters inspected" },
+    { CountType::SUM, "connect_tunnel_cutovers", "CONNECT tunnel flow cutovers to wizard" },
     { CountType::END, nullptr, nullptr }
 };
 

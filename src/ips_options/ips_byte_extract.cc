@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2010-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -27,7 +27,7 @@
 #include "framework/endianness.h"
 #include "framework/ips_option.h"
 #include "framework/module.h"
-#include "hash/hashfcn.h"
+#include "hash/hash_key_operations.h"
 #include "log/messages.h"
 #include "protocols/packet.h"
 #include "profiler/profiler.h"
@@ -342,7 +342,7 @@ static const Parameter s_params[] =
 class ExtractModule : public Module
 {
 public:
-    ExtractModule() : Module(s_name, s_help, s_params) { }
+    ExtractModule() : Module(s_name, s_help, s_params) { data.multiplier = 1; }
 
     bool begin(const char*, int, SnortConfig*) override;
     bool end(const char*, int, SnortConfig*) override;
@@ -355,7 +355,7 @@ public:
     { return DETECT; }
 
 public:
-    ByteExtractData data;
+    ByteExtractData data = {};
 };
 
 bool ExtractModule::begin(const char*, int, SnortConfig*)

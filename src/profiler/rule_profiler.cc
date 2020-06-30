@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -194,14 +194,15 @@ static void consolidate_otn_states(OtnState* states)
 
 static std::vector<View> build_entries()
 {
-    assert(SnortConfig::get_conf());
+    const SnortConfig* sc = SnortConfig::get_conf();
+    assert(sc);
 
-    detection_option_tree_update_otn_stats(SnortConfig::get_conf()->detection_option_tree_hash_table);
-    auto* otn_map = SnortConfig::get_conf()->otn_map;
+    detection_option_tree_update_otn_stats(sc->detection_option_tree_hash_table);
+    auto* otn_map = sc->otn_map;
 
     std::vector<View> entries;
 
-    for ( auto* h = ghash_findfirst(otn_map); h; h = ghash_findnext(otn_map) )
+    for ( auto* h = otn_map->find_first(); h; h = otn_map->find_next() )
     {
         auto* otn = static_cast<OptTreeNode*>(h->data);
         assert(otn);
@@ -313,10 +314,12 @@ void show_rule_profiler_stats(const RuleProfilerConfig& config)
 
 void reset_rule_profiler_stats()
 {
-    assert(SnortConfig::get_conf());
-    auto* otn_map = SnortConfig::get_conf()->otn_map;
+    const SnortConfig* sc = SnortConfig::get_conf();
+    assert(sc);
 
-    for ( auto* h = ghash_findfirst(otn_map); h; h = ghash_findnext(otn_map) )
+    auto* otn_map = sc->otn_map;
+
+    for ( auto* h = otn_map->find_first(); h; h = otn_map->find_next() )
     {
         auto* otn = static_cast<OptTreeNode*>(h->data);
         assert(otn);
@@ -524,21 +527,21 @@ TEST_CASE( "rule entry", "[profiler][rule_profiler]" )
     SECTION( "avg_match" )
     {
         auto ticks = entry.avg_match();
-        INFO( ticks.count() << " == " << (1_ticks).count() );
+        INFO( ticks.count() << " == " << (1_ticks).count() )
         CHECK( (ticks == 1_ticks) );
     }
 
     SECTION( "avg_no_match" )
     {
         auto ticks = entry.avg_no_match();
-        INFO( ticks.count() << " == " << (1_ticks).count() );
+        INFO( ticks.count() << " == " << (1_ticks).count() )
         CHECK( (ticks == 1_ticks) );
     }
 
     SECTION( "avg_check" )
     {
         auto ticks = entry.avg_check();
-        INFO( ticks.count() << " == " << (1_ticks).count() );
+        INFO( ticks.count() << " == " << (1_ticks).count() )
         CHECK( (ticks == 1_ticks) );
     }
 }
@@ -697,10 +700,10 @@ TEST_CASE( "rule profiler time context", "[profiler][rule_profiler]" )
             avoid_optimization();
         }
 
-        INFO( "elapsed: " << stats.elapsed.count() );
+        INFO( "elapsed: " << stats.elapsed.count() )
         CHECK( (stats.elapsed > 0_ticks) );
         CHECK( stats.checks == 1 );
-        INFO( "elapsed_match: " << stats.elapsed_match.count() );
+        INFO( "elapsed_match: " << stats.elapsed_match.count() )
         CHECK( (stats.elapsed_match == 0_ticks) );
     }
 
@@ -715,7 +718,7 @@ TEST_CASE( "rule profiler time context", "[profiler][rule_profiler]" )
                 avoid_optimization();
                 ctx.stop(true);
 
-                INFO( "elapsed: " << stats.elapsed.count() );
+                INFO( "elapsed: " << stats.elapsed.count() )
                 CHECK( (stats.elapsed > 0_ticks) );
                 CHECK( stats.checks == 1 );
                 CHECK( stats.elapsed_match == stats.elapsed );
@@ -730,7 +733,7 @@ TEST_CASE( "rule profiler time context", "[profiler][rule_profiler]" )
                 avoid_optimization();
                 ctx.stop(false);
 
-                INFO( "elapsed: " << stats.elapsed.count() );
+                INFO( "elapsed: " << stats.elapsed.count() )
                 CHECK( (stats.elapsed > 0_ticks) );
                 CHECK( stats.checks == 1 );
                 CHECK( (stats.elapsed_match == 0_ticks) );
@@ -738,7 +741,7 @@ TEST_CASE( "rule profiler time context", "[profiler][rule_profiler]" )
             }
         }
 
-        INFO( "elapsed: " << stats.elapsed.count() );
+        INFO( "elapsed: " << stats.elapsed.count() )
         CHECK( stats.elapsed == save.elapsed );
         CHECK( stats.elapsed_match == save.elapsed_match );
         CHECK( stats.checks == save.checks );

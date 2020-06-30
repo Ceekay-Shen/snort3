@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -28,6 +28,7 @@
 #include "detection/detection_util.h"
 #include "file_api/file_flows.h"
 #include "file_api/file_service.h"
+#include "main/snort_debug.h"
 #include "utils/util.h"
 
 #include "dce_smb_module.h"
@@ -36,6 +37,7 @@
 using namespace snort;
 
 #define   UNKNOWN_FILE_SIZE                  ~0
+#define   SMB2_MAX_OUTSTANDING_REQUESTS      128
 
 // FIXIT-L port fileCache related code along with
 // DCE2_Smb2Init, DCE2_Smb2Close and DCE2_Smb2UpdateStats
@@ -60,24 +62,19 @@ static int DCE2_Smb2TidCompare(const void* a, const void* b)
     return -1;
 }
 
-static inline void DCE2_Smb2InsertTid(DCE2_SmbSsnData* ssd, const uint32_t tid,
+static inline DCE2_Ret DCE2_Smb2InsertTid(DCE2_SmbSsnData* ssd, const uint32_t tid,
     const uint8_t share_type)
 {
-    bool is_ipc = (share_type != SMB2_SHARE_TYPE_DISK);
+    DCE2_Ret ret = DCE2_RET__ERROR;
 
-    if ( !is_ipc and
-        ssd->max_file_depth == -1 and DCE2_ScSmbFileDepth((dce2SmbProtoConf*)ssd->sd.config) == -1 )
+    if ( (share_type == SMB2_SHARE_TYPE_DISK)and
+            (ssd->max_file_depth ==
+            -1 and DCE2_ScSmbFileDepth((dce2SmbProtoConf*)ssd->sd.config) == -1) )
     {
-        trace_logf(dce_smb, "Not inserting TID (%u) because it's "
-            "not IPC and not inspecting normal file data.\n", tid);
-        return;
-    }
-
-    if (is_ipc)
-    {
-        trace_logf(dce_smb, "Not inserting TID (%u) "
-            "because it's IPC and only inspecting normal file data.\n", tid);
-        return;
+        debug_logf(dce_smb_trace, nullptr, "Not inserting TID (%u) for DISK share type "
+            "as mandatory configuration max_file_depth is not present."
+            "This will result in non-inspection of file data.\n", tid);
+        return ret;
     }
 
     if (ssd->tids == nullptr)
@@ -87,32 +84,42 @@ static inline void DCE2_Smb2InsertTid(DCE2_SmbSsnData* ssd, const uint32_t tid,
 
         if (ssd->tids == nullptr)
         {
-            return;
+            return ret;
         }
     }
 
-    DCE2_ListInsert(ssd->tids, (void*)(uintptr_t)tid, (void*)(uintptr_t)share_type);
+    if (ssd->outstanding_requests >= SMB2_MAX_OUTSTANDING_REQUESTS)
+    {
+        return ret;
+    }
+
+    ret = DCE2_ListInsert(ssd->tids, (void*)(uintptr_t)tid, (void*)(uintptr_t)share_type);
+    if (DCE2_RET__SUCCESS == ret)
+    {
+        ssd->outstanding_requests++;
+    }
+
+    return ret;
 }
 
-static DCE2_Ret DCE2_Smb2FindTid(DCE2_SmbSsnData* ssd, const Smb2Hdr* smb_hdr)
+static inline uint8_t DCE2_Smb2GetShareType(DCE2_SmbSsnData* ssd, const uint32_t tid)
 {
-    /* Still process async commands*/
-    if (alignedNtohl(&(smb_hdr->flags)) & SMB2_FLAGS_ASYNC_COMMAND)
-        return DCE2_RET__SUCCESS;
+    if ( DCE2_RET__SUCCESS == DCE2_ListFindKey(ssd->tids, (void*)(uintptr_t)tid) )
+        return ((uint8_t)(uintptr_t)DCE2_ListFind(ssd->tids, (void*)(uintptr_t)tid));
 
-    return DCE2_ListFindKey(ssd->tids, (void*)(uintptr_t)Smb2Tid(smb_hdr));
+    return SMB2_SHARE_TYPE_NONE;
 }
 
 static inline void DCE2_Smb2RemoveTid(DCE2_SmbSsnData* ssd, const uint32_t tid)
 {
-    DCE2_ListRemove(ssd->tids, (void*)(uintptr_t)tid);
+    if ( DCE2_RET__SUCCESS == DCE2_ListRemove(ssd->tids, (void*)(uintptr_t)tid) )
+        ssd->outstanding_requests--;
 }
 
 static inline void DCE2_Smb2StoreRequest(DCE2_SmbSsnData* ssd,
     uint64_t message_id, uint64_t offset, uint64_t file_id)
 {
     Smb2Request* request = ssd->smb2_requests;
-    ssd->max_outstanding_requests = 128; /* windows client max */
 
     while (request)
     {
@@ -121,17 +128,16 @@ static inline void DCE2_Smb2StoreRequest(DCE2_SmbSsnData* ssd,
         request = request->next;
     }
 
-    request = (Smb2Request*)snort_calloc(sizeof(*request));
-
-    ssd->outstanding_requests++;
-
-    if (ssd->outstanding_requests >= ssd->max_outstanding_requests)
+    if (ssd->outstanding_requests >= SMB2_MAX_OUTSTANDING_REQUESTS)
     {
         dce_alert(GID_DCE2, DCE2_SMB_MAX_REQS_EXCEEDED, (dce2CommonStats*)&dce2_smb_stats,
             ssd->sd);
-        snort_free((void*)request);
         return;
     }
+
+    request = ( Smb2Request* )snort_alloc( sizeof( *request ) );
+
+    ssd->outstanding_requests++;
 
     request->message_id = message_id;
     request->offset = offset;
@@ -255,7 +261,8 @@ static void DCE2_Smb2TreeConnect(DCE2_SmbSsnData* ssd, const Smb2Hdr* smb_hdr,
 {
     /* Using structure size to decide whether it is response or request*/
     uint16_t structure_size;
-    const Smb2TreeConnectResponseHdr* smb_tree_connect_hdr = (const Smb2TreeConnectResponseHdr*)smb_data;
+    const Smb2TreeConnectResponseHdr* smb_tree_connect_hdr =
+        (const Smb2TreeConnectResponseHdr*)smb_data;
 
     if ((const uint8_t*)smb_tree_connect_hdr + SMB2_TREE_CONNECT_RESPONSE_STRUC_SIZE > end)
         return;
@@ -336,7 +343,6 @@ static void DCE2_Smb2CreateResponse(DCE2_SmbSsnData* ssd, const Smb2Hdr*,
 {
     uint64_t fileId_persistent;
     uint64_t file_size = UNKNOWN_FILE_SIZE;
-
 
     fileId_persistent = alignedNtohq((const uint64_t*)(&(smb_create_hdr->fileId_persistent)));
     ssd->ftracker.fid_v2 = fileId_persistent;
@@ -456,7 +462,8 @@ static void DCE2_Smb2SetInfo(DCE2_SmbSsnData* ssd, const Smb2Hdr*,
 
     if (structure_size == SMB2_SET_INFO_REQUEST_STRUC_SIZE)
     {
-        const uint8_t* file_data =  (const uint8_t*)smb_set_info_hdr + SMB2_SET_INFO_REQUEST_STRUC_SIZE - 1;
+        const uint8_t* file_data =  (const uint8_t*)smb_set_info_hdr +
+            SMB2_SET_INFO_REQUEST_STRUC_SIZE - 1;
         if (smb_set_info_hdr->file_info_class == SMB2_FILE_ENDOFFILE_INFO)
         {
             uint64_t file_size = alignedNtohq((const uint64_t*)file_data);
@@ -618,7 +625,6 @@ static void DCE2_Smb2WriteRequest(DCE2_SmbSsnData* ssd, const Smb2Hdr* smb_hdr,
         ssd->pdu_state = DCE2_SMB_PDU_STATE__RAW_DATA;
 }
 
-
 /********************************************************************
  *
  * Process write command
@@ -656,35 +662,49 @@ static void DCE2_Smb2Inspect(DCE2_SmbSsnData* ssd, const Smb2Hdr* smb_hdr, const
 {
     const uint8_t* smb_data = (const uint8_t*)smb_hdr + SMB2_HEADER_LENGTH;
     uint16_t command = alignedNtohs(&(smb_hdr->command));
+    uint8_t share_type = DCE2_Smb2GetShareType(ssd, Smb2Tid(smb_hdr));
     switch (command)
     {
     case SMB2_COM_CREATE:
         dce2_smb_stats.smb2_create++;
-        if (DCE2_Smb2FindTid(ssd, smb_hdr) != DCE2_RET__SUCCESS)
-            return;
-        DCE2_Smb2Create(ssd, smb_hdr, smb_data, end);
+
+        if ( SMB2_SHARE_TYPE_NONE == share_type )
+        {
+            if ( DCE2_RET__SUCCESS ==
+                DCE2_Smb2InsertTid(ssd, Smb2Tid(smb_hdr), SMB2_SHARE_TYPE_DISK) )
+                DCE2_Smb2Create(ssd, smb_hdr, smb_data, end);
+        }
+        else if ( SMB2_SHARE_TYPE_DISK == share_type )
+        {
+            DCE2_Smb2Create(ssd, smb_hdr, smb_data, end);
+        }
+        else
+        {
+            debug_logf(dce_smb_trace, nullptr, "Not handling create request for IPC with TID (%u)\n",
+                Smb2Tid(smb_hdr));
+        }
         break;
     case SMB2_COM_READ:
         dce2_smb_stats.smb2_read++;
-        if (DCE2_Smb2FindTid(ssd, smb_hdr) != DCE2_RET__SUCCESS)
+        if ( SMB2_SHARE_TYPE_DISK != share_type )
             return;
         DCE2_Smb2Read(ssd, smb_hdr, smb_data, end);
         break;
     case SMB2_COM_WRITE:
         dce2_smb_stats.smb2_write++;
-        if (DCE2_Smb2FindTid(ssd, smb_hdr) != DCE2_RET__SUCCESS)
+        if ( SMB2_SHARE_TYPE_DISK != share_type )
             return;
         DCE2_Smb2Write(ssd, smb_hdr, smb_data, end);
         break;
     case SMB2_COM_SET_INFO:
         dce2_smb_stats.smb2_set_info++;
-        if (DCE2_Smb2FindTid(ssd, smb_hdr) != DCE2_RET__SUCCESS)
+        if ( SMB2_SHARE_TYPE_DISK != share_type )
             return;
         DCE2_Smb2SetInfo(ssd, smb_hdr, smb_data, end);
         break;
     case SMB2_COM_CLOSE:
         dce2_smb_stats.smb2_close++;
-        if (DCE2_Smb2FindTid(ssd, smb_hdr) != DCE2_RET__SUCCESS)
+        if ( SMB2_SHARE_TYPE_DISK != share_type )
             return;
         DCE2_Smb2CloseCmd(ssd, smb_hdr, smb_data, end);
         break;
@@ -724,7 +744,7 @@ void DCE2_Smb2Process(DCE2_SmbSsnData* ssd)
         uint32_t next_command_offset;
         /* SMB protocol allows multiple smb commands to be grouped in a single packet.
            So loop through to parse all the smb commands.
-		   Reference: https://msdn.microsoft.com/en-us/library/cc246614.aspx
+           Reference: https://msdn.microsoft.com/en-us/library/cc246614.aspx
            "A nonzero value for the NextCommand field in the SMB2 header indicates a compound
            request. NextCommand in the SMB2 header of a request specifies an offset, in bytes,
            from the beginning of the SMB2 header under consideration to the start of the 8-byte
@@ -735,18 +755,19 @@ void DCE2_Smb2Process(DCE2_SmbSsnData* ssd)
             DCE2_Smb2Inspect(ssd, smb_hdr, data_ptr +  data_len);
             /* In case of message compounding, find the offset of the next smb command */
             next_command_offset = alignedNtohl(&(smb_hdr->next_command));
-            if (next_command_offset + (const uint8_t *)smb_hdr > (data_ptr + data_len))
+            if (next_command_offset + (const uint8_t*)smb_hdr > (data_ptr + data_len))
             {
                 dce_alert(GID_DCE2, DCE2_SMB_BAD_NEXT_COMMAND_OFFSET,
-                        (dce2CommonStats*)&dce2_smb_stats, ssd->sd);
+                    (dce2CommonStats*)&dce2_smb_stats, ssd->sd);
 
                 return;
             }
             if (next_command_offset)
             {
-                smb_hdr = (const Smb2Hdr *)((const uint8_t *)smb_hdr + next_command_offset);
+                smb_hdr = (const Smb2Hdr*)((const uint8_t*)smb_hdr + next_command_offset);
             }
-        } while (next_command_offset && smb_hdr);
+        }
+        while (next_command_offset && smb_hdr);
     }
     else if (ssd->pdu_state == DCE2_SMB_PDU_STATE__RAW_DATA)
     {
@@ -781,7 +802,7 @@ DCE2_SmbVersion DCE2_Smb2Version(const Packet* p)
 {
     /* Only check reassembled SMB2 packet*/
     if ( p->has_paf_payload() and
-        (p->dsize > sizeof(NbssHdr) + 4) ) // DCE2_SMB_ID is u32
+            (p->dsize > sizeof(NbssHdr) + DCE2_SMB_ID_SIZE) ) // DCE2_SMB_ID is u32
     {
         const Smb2Hdr* smb_hdr = (const Smb2Hdr*)(p->data + sizeof(NbssHdr));
         uint32_t smb_version_id = SmbId((const SmbNtHdr*)smb_hdr);

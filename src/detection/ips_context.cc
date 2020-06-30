@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -32,6 +32,7 @@
 #include "events/event_queue.h"
 #include "events/sfeventq.h"
 #include "main/snort_config.h"
+#include "stream/stream.h"
 
 #ifdef UNIT_TEST
 #include "catch/snort_catch.h"
@@ -57,7 +58,8 @@ IpsContext::IpsContext(unsigned size) :
     pkth = new DAQ_PktHdr_t;
     buf = new uint8_t[buf_size];
 
-    const EventQueueConfig* qc = SnortConfig::get_conf()->event_queue_config;
+    conf = SnortConfig::get_conf();
+    const EventQueueConfig* qc = conf->event_queue_config;
     equeue = sfeventq_new(qc->max_events, qc->log_events, sizeof(EventNode));
 
     packet->context = this;
@@ -88,6 +90,31 @@ IpsContext::~IpsContext()
     delete packet;
 }
 
+void IpsContext::setup()
+{
+    conf = SnortConfig::get_conf();
+    remove_gadget = false;
+}
+
+void IpsContext::clear()
+{
+    for ( auto id : ids_in_use )
+    {
+        auto* p = data[id];
+        if ( p )
+            p->clear();
+    }
+    if ( remove_gadget and packet->flow and !packet->is_rebuilt() )
+    {
+       Stream::disable_reassembly(packet->flow);
+
+       if ( packet->flow->gadget )
+           packet->flow->clear_gadget();
+    }
+    remove_gadget = false;
+    assert(post_callbacks.empty());
+}
+
 void IpsContext::set_context_data(unsigned id, IpsContextData* cd)
 {
     assert(id < data.size());
@@ -99,16 +126,6 @@ IpsContextData* IpsContext::get_context_data(unsigned id) const
 {
     assert(id < data.size());
     return data[id];
-}
-
-void IpsContext::clear_context_data()
-{
-    for ( auto id : ids_in_use )
-    {
-        auto* p = data[id];
-        if ( p )
-            p->clear();
-    }
 }
 
 void IpsContext::snapshot_flow(Flow* f)
@@ -124,6 +141,26 @@ void IpsContext::post_detection()
 
     post_callbacks.clear();
 }
+
+void IpsContext::disable_detection()
+{
+    if ( active_rules == IpsContext::NONE )
+        return;
+
+    IpsPolicy* empty_policy = get_empty_ips_policy(conf);
+    set_ips_policy(empty_policy);
+
+    if ( Flow* f = packet->flow )
+    {
+        f->ips_policy_id = empty_policy->policy_id;
+        f->set_to_client_detection(false);
+        f->set_to_server_detection(false);
+    }
+    active_rules = IpsContext::NONE;
+}
+
+void IpsContext::disable_inspection()
+{ remove_gadget = true; }
 
 //--------------------------------------------------------------------------
 // unit tests
@@ -181,8 +218,8 @@ TEST_CASE("IpsContext basic", "[IpsContext]")
     CHECK(TestData::count == num_data);
 }
 
-IpsContext* post_val;
-void test_post(IpsContext* c)
+static IpsContext* post_val;
+static void test_post(IpsContext* c)
 { post_val = c; }
 
 TEST_CASE("IpsContext post detection", "[IpsContext]")
@@ -204,7 +241,7 @@ TEST_CASE("IpsContext post detection", "[IpsContext]")
 TEST_CASE("IpsContext Link", "[IpsContext]")
 {
     IpsContext c0, c1, c2;
-    
+
     CHECK(c0.dependencies() == nullptr);
     CHECK(c0.next() == nullptr);
 
@@ -256,7 +293,7 @@ TEST_CASE("IpsContext Abort, [IpsContext]")
     c0.link(&c1);
     c1.link(&c2);
     c2.link(&c3);
-    
+
     // mid list
     // c0 <- c1 <- c2 <- c3
     // c0 <- c2 <- c3
@@ -289,7 +326,7 @@ TEST_CASE("IpsContext Abort, [IpsContext]")
     CHECK(c2.next() == nullptr);
     CHECK(c3.dependencies() == nullptr);
     CHECK(c3.next() == nullptr);
-    
+
     // only
     c2.abort();
     CHECK(c2.dependencies() == nullptr);

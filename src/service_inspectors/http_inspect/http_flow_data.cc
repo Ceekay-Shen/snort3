@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -29,8 +29,12 @@
 #include "http_common.h"
 #include "http_enum.h"
 #include "http_module.h"
+#include "http_msg_header.h"
+#include "http_msg_request.h"
+#include "http_msg_status.h"
 #include "http_test_manager.h"
 #include "http_transaction.h"
+#include "http_uri.h"
 
 using namespace snort;
 using namespace HttpCommon;
@@ -42,6 +46,10 @@ unsigned HttpFlowData::inspector_id = 0;
 uint64_t HttpFlowData::instance_count = 0;
 #endif
 
+const uint16_t HttpFlowData::memory_usage_estimate = sizeof(HttpFlowData) + sizeof(HttpTransaction)
+    + sizeof(HttpMsgRequest) + sizeof(HttpMsgStatus) + (2 * sizeof(HttpMsgHeader)) + sizeof(HttpUri)
+    + header_size_estimate + small_things;
+
 HttpFlowData::HttpFlowData() : FlowData(inspector_id)
 {
 #ifdef REG_TEST
@@ -49,8 +57,8 @@ HttpFlowData::HttpFlowData() : FlowData(inspector_id)
     if (HttpTestManager::use_test_output(HttpTestManager::IN_HTTP) &&
         !HttpTestManager::use_test_input(HttpTestManager::IN_HTTP))
     {
-        printf("Flow Data construct %" PRIu64 "\n", seq_num);
-        fflush(nullptr);
+        fprintf(HttpTestManager::get_output_file(), "Flow Data construct %" PRIu64 "\n", seq_num);
+        fflush(HttpTestManager::get_output_file());
     }
 #endif
     HttpModule::increment_peg_counts(PEG_CONCURRENT_SESSIONS);
@@ -65,8 +73,8 @@ HttpFlowData::~HttpFlowData()
     if (HttpTestManager::use_test_output(HttpTestManager::IN_HTTP) &&
         !HttpTestManager::use_test_input(HttpTestManager::IN_HTTP))
     {
-        printf("Flow Data destruct %" PRIu64 "\n", seq_num);
-        fflush(nullptr);
+        fprintf(HttpTestManager::get_output_file(), "Flow Data destruct %" PRIu64 "\n", seq_num);
+        fflush(HttpTestManager::get_output_file());
     }
 #endif
     if (HttpModule::get_peg_counts(PEG_CONCURRENT_SESSIONS) > 0)
@@ -132,8 +140,6 @@ void HttpFlowData::half_reset(SourceId source_id)
     }
     delete infractions[source_id];
     infractions[source_id] = new HttpInfractions;
-    delete events[source_id];
-    events[source_id] = new HttpEventGen;
     section_offset[source_id] = 0;
     chunk_state[source_id] = CHUNK_NEWLINES;
     chunk_expected_length[source_id] = 0;
@@ -237,13 +243,9 @@ HttpInfractions* HttpFlowData::get_infractions(SourceId source_id)
     return transaction[source_id]->get_infractions(source_id);
 }
 
-HttpEventGen* HttpFlowData::get_events(SourceId source_id)
+uint16_t HttpFlowData::get_memory_usage_estimate()
 {
-    if (events[source_id] != nullptr)
-        return events[source_id];
-    assert(transaction[source_id] != nullptr);
-    assert(transaction[source_id]->get_events(source_id) != nullptr);
-    return transaction[source_id]->get_events(source_id);
+    return memory_usage_estimate;
 }
 
 #ifdef REG_TEST

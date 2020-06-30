@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -41,8 +41,10 @@
 #include <CppUTestExt/MockSupport.h>
 
 THREAD_LOCAL AppIdDebug* appidDebug = nullptr;
+ThirdPartyAppIdContext* AppIdContext::tp_appid_ctxt = nullptr;
 void AppIdDebug::activate(const Flow*, const AppIdSession*, bool) { active = true; }
 void ApplicationDescriptor::set_id(const Packet&, AppIdSession&, AppidSessionDirection, AppId, AppidChangeBits&) { }
+
 using namespace snort;
 
 namespace snort
@@ -67,9 +69,24 @@ class FakeHttpMsgHeader
 };
 FakeHttpMsgHeader* fake_msg_header = nullptr;
 
-void AppIdDiscovery::publish_appid_event(AppidChangeBits&, Flow*) {}
-
 void AppIdHttpSession::set_http_change_bits(AppidChangeBits&, HttpFieldIds) {}
+void AppIdHttpSession::set_field(HttpFieldIds id, const std::string* str,
+    AppidChangeBits&)
+{
+    delete meta_data[id];
+    meta_data[id] = str;
+}
+
+void AppIdHttpSession::set_field(HttpFieldIds id, const uint8_t* str, int32_t len,
+    AppidChangeBits&)
+{
+    delete meta_data[id];
+    if (str and len)
+        meta_data[id] = new std::string((const char*)str, len);
+    else
+        meta_data[id] = nullptr;
+}
+void AppIdHttpSession::print_field(HttpFieldIds, const std::string*) {}
 
 const uint8_t* HttpEvent::get_content_type(int32_t& length)
 {
@@ -171,6 +188,16 @@ bool HttpEvent::contains_webdav_method()
     return true;
 }
 
+bool HttpEvent::get_is_http2() const
+{
+    return false;
+}
+
+uint32_t HttpEvent::get_http2_stream_id() const
+{
+    return 0;
+}
+
 Flow* flow = nullptr;
 AppIdSession* mock_session = nullptr;
 
@@ -180,13 +207,16 @@ AppIdSession* AppIdApi::get_appid_session(const Flow&)
     return mock_session;
 }
 
+void AppIdSession::publish_appid_event(AppidChangeBits&, Flow*, bool, uint32_t) { }
+
 TEST_GROUP(appid_http_event)
 {
     void setup() override
     {
         MemoryLeakWarningPlugin::turnOffNewDeleteOverloads();
         flow = new Flow;
-        mock_session = new AppIdSession(IpProtocol::TCP, nullptr, 1492, appid_inspector);
+        mock_session = new AppIdSession(IpProtocol::TCP, nullptr, 1492, dummy_appid_inspector);
+        mock_session->create_http_session();
         flow->set_flow_data(mock_session);
         appidDebug = new AppIdDebug();
         appidDebug->activate(nullptr, nullptr, 0);
@@ -205,7 +235,7 @@ TEST_GROUP(appid_http_event)
 
 TEST(appid_http_event, handle_null_appid_data)
 {
-    HttpEvent event(nullptr);
+    HttpEvent event(nullptr, false, 0);
     HttpEventHandler event_handler(HttpEventHandler::REQUEST_EVENT);
     mock().expectOneCall("get_appid_session");
     event_handler.handle(event, flow);
@@ -214,7 +244,7 @@ TEST(appid_http_event, handle_null_appid_data)
 
 TEST(appid_http_event, handle_null_msg_header)
 {
-    HttpEvent event(nullptr);
+    HttpEvent event(nullptr, false, 0);
     HttpEventHandler event_handler(HttpEventHandler::REQUEST_EVENT);
 
     mock().strictOrder();
@@ -245,7 +275,7 @@ struct TestData
 
 static void run_event_handler(TestData test_data, TestData* expect_data = nullptr)
 {
-    HttpEvent event(nullptr);
+    HttpEvent event(nullptr, false, 0);
     FakeHttpMsgHeader http_msg_header;
     HttpEventHandler event_handler(test_data.type);
     fake_msg_header = &http_msg_header;
@@ -341,7 +371,7 @@ TEST(appid_http_event, handle_msg_header_user_agent)
 TEST(appid_http_event, handle_msg_header_x_working_with)
 {
     TestData test_data;
-    test_data.scan_flags = 0;
+    test_data.scan_flags = SCAN_HTTP_XWORKINGWITH_FLAG;
     test_data.x_working_with = X_WORKING_WITH;
 
     run_event_handler(test_data);
@@ -369,7 +399,7 @@ TEST(appid_http_event, handle_msg_header_content_type)
 {
     TestData test_data;
     test_data.type = HttpEventHandler::RESPONSE_EVENT;
-    test_data.scan_flags = 0;
+    test_data.scan_flags = 0x100;
     test_data.http_flows = 0;   //  Flows are only counted on request header
     test_data.content_type = CONTENT_TYPE;
 
@@ -391,7 +421,7 @@ TEST(appid_http_event, handle_msg_header_server)
 {
     TestData test_data;
     test_data.type = HttpEventHandler::RESPONSE_EVENT;
-    test_data.scan_flags = 0;
+    test_data.scan_flags = 0x40;
     test_data.http_flows = 0;   //  Flows are only counted on request header
     test_data.server = SERVER;
 
@@ -427,7 +457,7 @@ TEST(appid_http_event, handle_msg_header_all_response_headers)
 {
     TestData test_data;
     test_data.type = HttpEventHandler::RESPONSE_EVENT;
-    test_data.scan_flags = 1;
+    test_data.scan_flags = 0x101;
     test_data.http_flows = 0;   //  Flows are only counted on request header
     test_data.response_code = RESPONSE_CODE;
     test_data.content_type = CONTENT_TYPE;

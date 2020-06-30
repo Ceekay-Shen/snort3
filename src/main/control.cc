@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2017-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2017-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -62,7 +62,7 @@ void ControlConn::configure() const
 
 int ControlConn::shell_execute(int& current_fd, Request*& current_request)
 {
-    if ( !request->read(fd) )
+    if ( !request->read() )
         return -1;
 
     current_fd = fd;

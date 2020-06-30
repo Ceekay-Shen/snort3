@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -26,6 +26,7 @@
 
 #include "log/messages.h"
 #include "main/snort_config.h"
+#include "trace/trace.h"
 #include "utils/util.h"
 
 #include "dce_smb.h"
@@ -33,7 +34,7 @@
 using namespace snort;
 using namespace std;
 
-Trace TRACE_NAME(dce_smb);
+THREAD_LOCAL const Trace* dce_smb_trace = nullptr;
 
 static const PegInfo dce2_smb_pegs[] =
 {
@@ -96,7 +97,7 @@ static const PegInfo dce2_smb_pegs[] =
 };
 
 static const char* dce2SmbFingerprintPolicyStrings[] =
-{ "Disabled", "Client","Server", "Client and Server" };
+{ "disabled", "client", "server", "client and server" };
 
 static const Parameter s_params[] =
 {
@@ -190,7 +191,30 @@ static const RuleMap dce2_smb_rules[] =
     { 0, nullptr }
 };
 
-Dce2SmbModule::Dce2SmbModule() : Module(DCE2_SMB_NAME, DCE2_SMB_HELP, s_params, false, &TRACE_NAME(dce_smb))
+static std::string get_shares(DCE2_List* shares)
+{
+    std::string cmds;
+
+    if ( shares )
+    {
+        for (dce2SmbShare* share = (dce2SmbShare*)DCE2_ListFirst(shares);
+            share;
+            share = (dce2SmbShare*)DCE2_ListNext(shares))
+        {
+            cmds += share->ascii_str;
+            cmds += " ";
+        }
+    }
+
+    if ( !cmds.empty() )
+        cmds.pop_back();
+    else
+        cmds += "none";
+
+    return cmds;
+}
+
+Dce2SmbModule::Dce2SmbModule() : Module(DCE2_SMB_NAME, DCE2_SMB_HELP, s_params)
 {
     memset(&config, 0, sizeof(config));
 }
@@ -201,6 +225,15 @@ Dce2SmbModule::~Dce2SmbModule()
     {
         DCE2_ListDestroy(config.smb_invalid_shares);
     }
+}
+
+void Dce2SmbModule::set_trace(const Trace* trace) const
+{ dce_smb_trace = trace; }
+
+const TraceOption* Dce2SmbModule::get_trace_options() const
+{
+    static const TraceOption dce_smb_trace_options(nullptr, 0, nullptr);
+    return &dce_smb_trace_options;
 }
 
 const RuleMap* Dce2SmbModule::get_rules() const
@@ -273,6 +306,19 @@ static void set_smb_versions_mask(dce2SmbProtoConf& config, const char* s)
     }
 }
 
+static const char* get_smb_versions(uint16_t mask)
+{
+    switch (mask)
+    {
+    case DCE2_VALID_SMB_VERSION_FLAG_V1:
+        return "v1";
+    case DCE2_VALID_SMB_VERSION_FLAG_V2:
+        return "v2";
+    default:
+        return "all";
+    }
+}
+
 static bool set_smb_invalid_shares(dce2SmbProtoConf& config, Value& v)
 {
     string tok;
@@ -340,7 +386,7 @@ static bool set_smb_invalid_shares(dce2SmbProtoConf& config, Value& v)
     return(true);
 }
 
-bool Dce2SmbModule::set(const char* fqn, Value& v, SnortConfig* c)
+bool Dce2SmbModule::set(const char*, Value& v, SnortConfig*)
 {
     if (dce2_set_co_config(v,config.common))
         return true;
@@ -369,9 +415,6 @@ bool Dce2SmbModule::set(const char* fqn, Value& v, SnortConfig* c)
     else if ( v.is("smb_legacy_mode"))
         config.legacy_mode = v.get_bool();
 
-    else
-        return Module::set(fqn, v, c);
-
     return true;
 }
 
@@ -381,61 +424,19 @@ void Dce2SmbModule::get_data(dce2SmbProtoConf& dce2_smb_config)
     config.smb_invalid_shares = nullptr;
 }
 
-void print_dce2_smb_conf(dce2SmbProtoConf& config)
+void print_dce2_smb_conf(const dce2SmbProtoConf& config)
 {
-    LogMessage("DCE SMB config: \n");
-
     print_dce2_co_config(config.common);
-    LogMessage("    SMB fingerprint policy : %s\n",
+
+    ConfigLogger::log_value("smb_fingerprint_policy",
         dce2SmbFingerprintPolicyStrings[config.smb_fingerprint_policy]);
-
-    if (config.smb_max_chain == 0)
-        LogMessage("    Maximum SMB command chaining: Unlimited\n");
-    else if (config.smb_max_chain == 1)
-        LogMessage("    Maximum SMB command chaining: No chaining allowed\n");
-    else
-        LogMessage("    Maximum SMB command chaining: %u\n", config.smb_max_chain);
-
-    if (config.smb_max_compound == 0)
-        LogMessage("    Maximum SMB compounded requests: Unlimited\n");
-    else if (config.smb_max_compound == 1)
-        LogMessage("    Maximum SMB compounded requests: No compounding allowed\n");
-    else
-        LogMessage("    Maximum SMB compounded requests: %u\n", config.smb_max_compound);
-
-    if (config.smb_file_depth == -1)
-        LogMessage("    SMB file depth: Disabled\n");
-    else if (config.smb_file_depth == 0)
-        LogMessage("    SMB file depth: Unlimited\n");
-    else
-        LogMessage("    SMB file depth: %d\n",config.smb_file_depth);
-
-    if (config.smb_valid_versions_mask  == DCE2_VALID_SMB_VERSION_FLAG_V1)
-    {
-        LogMessage("    SMB valid versions : v1\n");
-    }
-    else if (config.smb_valid_versions_mask  == DCE2_VALID_SMB_VERSION_FLAG_V2)
-    {
-        LogMessage("    SMB valid versions : v2\n");
-    }
-    else
-    {
-        LogMessage("    SMB valid versions : all\n");
-    }
-    if (config.smb_invalid_shares != nullptr)
-    {
-        dce2SmbShare* share;
-
-        LogMessage("    Invalid SMB shares:\n");
-
-        for (share = (dce2SmbShare*)DCE2_ListFirst(config.smb_invalid_shares);
-            share != nullptr;
-            share = (dce2SmbShare*)DCE2_ListNext(config.smb_invalid_shares))
-        {
-            LogMessage("    %s\n",share->ascii_str);
-        }
-    }
-    if (config.legacy_mode)
-        LogMessage("    SMB legacy mode enabled\n");
+    ConfigLogger::log_limit("smb_max_chain", config.smb_max_chain, 0, 1);
+    ConfigLogger::log_limit("smb_max_compound", config.smb_max_compound, 0, 1);
+    ConfigLogger::log_value("valid_smb_versions",
+        get_smb_versions(config.smb_valid_versions_mask));
+    ConfigLogger::log_limit("smb_file_depth", config.smb_file_depth, 0, -1);
+    ConfigLogger::log_list("smb_invalid_shares",
+        get_shares(config.smb_invalid_shares).c_str());
+    ConfigLogger::log_flag("smb_legacy_mode", config.legacy_mode);
 }
 

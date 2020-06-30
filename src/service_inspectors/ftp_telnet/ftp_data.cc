@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2004-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -27,6 +27,8 @@
 #include "file_api/file_flows.h"
 #include "file_api/file_service.h"
 #include "packet_io/active.h"
+#include "packet_tracer/packet_tracer.h"
+#include "parser/parse_rule.h"
 #include "profiler/profiler.h"
 #include "stream/stream.h"
 #include "utils/util.h"
@@ -60,6 +62,9 @@ static void FTPDataProcess(
     if (data_ssn->packet_flags & FTPDATA_FLG_REST)
     {
         p->active->block_again();
+        p->active->set_drop_reason("ftp");
+        if (PacketTracer::is_active())
+            PacketTracer::log("FTP: session reset, drop\n");
         return;
     }
 
@@ -96,10 +101,19 @@ static void FTPDataProcess(
         data_ssn->packet_flags |= FTPDATA_FLG_FILENAME_SET;
     }
 
-    /* Ignore the rest of this transfer if file processing is complete
-     * and preprocessor was configured to ignore ftp-data sessions. */
-    if (!status && data_ssn->data_chan)
-        p->flow->set_ignore_direction(SSN_DIR_BOTH);
+    // Ignore the rest of this transfer if file processing is complete
+    // and status is returned false (eg sig not enabled, sig depth exceeded etc)
+    // and no IPS rules are configured.
+    if ( !status )
+    {
+        IpsPolicy* empty_policy = snort::get_empty_ips_policy(p->context->conf);
+        if ( empty_policy->policy_id == p->flow->ips_policy_id )
+        {
+            if ( PacketTracer::is_active() )
+                PacketTracer::log("Whitelisting Flow: FTP data\n");
+            p->flow->set_ignore_direction(SSN_DIR_BOTH);
+        }
+    }
 }
 
 static int SnortFTPData(Packet* p)
@@ -234,6 +248,9 @@ public:
 
     void eval(Packet*) override;
     StreamSplitter* get_splitter(bool to_server) override;
+
+    bool can_carve_files() const override
+    { return true; }
 };
 
 class FtpDataModule : public Module

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -32,6 +32,8 @@
 #include "app_info_table.h"
 #include "appid_api.h"
 #include "appid_app_descriptor.h"
+#include "appid_config.h"
+#include "appid_http_session.h"
 #include "appid_types.h"
 #include "application_ids.h"
 #include "detector_plugins/http_url_patterns.h"
@@ -42,7 +44,7 @@ class ClientDetector;
 class ServiceDetector;
 class AppIdDnsSession;
 class AppIdHttpSession;
-class ThirdPartyAppIDSession;
+class ThirdPartyAppIdSession;
 
 using AppIdFreeFCN = void (*)(void*);
 
@@ -69,21 +71,6 @@ const uint8_t* service_strstr(const uint8_t* haystack, unsigned haystack_len,
     (APPID_SESSION_RESPONDER_MONITORED | \
     APPID_SESSION_INITIATOR_MONITORED | APPID_SESSION_DISCOVER_USER | \
     APPID_SESSION_SPECIAL_MONITORED)
-
-// flow status codes
-enum AppIdFlowStatusCodes
-{
-    APPID_SESSION_SUCCESS = 0,
-    APPID_SESSION_ENULL,
-    APPID_SESSION_EINVALID,
-    APPID_SESSION_ENOMEM,
-    APPID_SESSION_NOTFOUND,
-    APPID_SESSION_BADJUJU,
-    APPID_SESSION_DISABLED,
-    APPID_SESSION_EUNSUPPORTED,
-    APPID_SESSION_STOP_PROCESSING,
-    APPID_SESSION_EEXISTS
-};
 
 enum APPID_DISCOVERY_STATE
 {
@@ -119,22 +106,62 @@ struct CommonAppIdData
         initiator_ip.clear();
     }
 
-    snort::APPID_FLOW_TYPE flow_type = snort::APPID_FLOW_TYPE_IGNORE;
-    unsigned policyId = 0;
     //flags shared with other preprocessor via session attributes.
     uint64_t flags = 0;
     snort::SfIp initiator_ip;
     uint16_t initiator_port = 0;
 };
 
-// FIXIT-L: make these const strings
-struct TlsSession
+enum MatchedTlsType
 {
-    char* get_tls_host() { return tls_host; }
+    MATCHED_TLS_NONE = 0,
+    MATCHED_TLS_HOST,
+    MATCHED_TLS_FIRST_SAN,
+    MATCHED_TLS_CNAME,
+    MATCHED_TLS_ORG_UNIT,
+};
 
-    char* get_tls_cname() { return tls_cname; }
+class TlsSession
+{
+public:
+    ~TlsSession()
+    {
+        if (tls_host)
+            snort_free(tls_host);
+        if (tls_first_alt_name)
+            snort_free(tls_first_alt_name);
+        if (tls_cname)
+            snort_free(tls_cname);
+        if (tls_org_unit)
+            snort_free(tls_org_unit);
+    }
 
-    char* get_tls_org_unit() { return tls_org_unit; }
+    const char* get_tls_host() const
+    {
+        switch (matched_tls_type)
+        {
+            case MATCHED_TLS_HOST:
+                return tls_host;
+            case MATCHED_TLS_FIRST_SAN:
+                return tls_first_alt_name;
+            case MATCHED_TLS_CNAME:
+                return tls_cname;
+            default:
+                if (tls_host)
+                    return tls_host;
+                else if (tls_first_alt_name)
+                    return tls_first_alt_name;
+                else if (tls_cname)
+                    return tls_cname;
+        }
+        return nullptr;
+    }
+
+    const char* get_tls_first_alt_name() const { return tls_first_alt_name; }
+
+    const char* get_tls_cname() const { return tls_cname; }
+
+    const char* get_tls_org_unit() const { return tls_org_unit; }
 
     bool get_tls_handshake_done() { return tls_handshake_done; }
 
@@ -143,7 +170,7 @@ struct TlsSession
     {
         if (tls_host)
             snort_free(tls_host);
-        if (!new_tls_host)
+        if (!new_tls_host or *new_tls_host == '\0')
         {
             tls_host = nullptr;
             return;
@@ -152,41 +179,63 @@ struct TlsSession
         change_bits.set(APPID_TLSHOST_BIT);
     }
 
-    void set_tls_cname(const char* new_tls_cname, uint32_t len)
+    void set_tls_first_alt_name(const char* new_tls_first_alt_name, uint32_t len, AppidChangeBits& change_bits)
+    {
+        if (tls_first_alt_name)
+            snort_free(tls_first_alt_name);
+        if (!new_tls_first_alt_name or *new_tls_first_alt_name == '\0')
+        {
+            tls_first_alt_name = nullptr;
+            return;
+        }
+        tls_first_alt_name = len? snort::snort_strndup(new_tls_first_alt_name, len) :
+            const_cast<char*>(new_tls_first_alt_name);
+        if (!tls_host)
+            change_bits.set(APPID_TLSHOST_BIT);
+    }
+
+    void set_tls_cname(const char* new_tls_cname, uint32_t len, AppidChangeBits& change_bits)
     {
         if (tls_cname)
             snort_free(tls_cname);
+        if (!new_tls_cname or *new_tls_cname == '\0')
+        {
+            tls_cname = nullptr;
+            return;
+        }
         tls_cname = len? snort::snort_strndup(new_tls_cname,len) :
             const_cast<char*>(new_tls_cname);
+        if (tls_host == nullptr)
+            change_bits.set(APPID_TLSHOST_BIT);
     }
 
     void set_tls_org_unit(const char* new_tls_org_unit, uint32_t len)
     {
         if (tls_org_unit)
             snort_free(tls_org_unit);
+        if (!new_tls_org_unit or *new_tls_org_unit == '\0')
+        {
+            tls_org_unit = nullptr;
+            return;
+        }
         tls_org_unit = len? snort::snort_strndup(new_tls_org_unit,len) :
             const_cast<char*>(new_tls_org_unit);
     }
 
     void set_tls_handshake_done() { tls_handshake_done = true; }
 
-    void free_data()
+    void set_matched_tls_type(MatchedTlsType type)
     {
-        if (tls_host)
-            snort_free(tls_host);
-        if (tls_cname)
-            snort_free(tls_cname);
-        if (tls_org_unit)
-            snort_free(tls_org_unit);
-        tls_host = tls_cname = tls_org_unit = nullptr;
-        tls_handshake_done = false;
+        matched_tls_type = type;
     }
 
 private:
     char* tls_host = nullptr;
+    char* tls_first_alt_name = nullptr;
     char* tls_cname = nullptr;
     char* tls_org_unit = nullptr;
     bool tls_handshake_done = false;
+    MatchedTlsType matched_tls_type = MATCHED_TLS_NONE;
 };
 
 class AppIdSession : public snort::FlowData
@@ -198,19 +247,20 @@ public:
     static AppIdSession* allocate_session(const snort::Packet*, IpProtocol,
         AppidSessionDirection, AppIdInspector*);
     static AppIdSession* create_future_session(const snort::Packet*, const snort::SfIp*, uint16_t,
-        const snort::SfIp*,
-        uint16_t, IpProtocol, SnortProtocolId, int);
+        const snort::SfIp*, uint16_t, IpProtocol, SnortProtocolId);
+    void initialize_future_session(AppIdSession&, uint64_t, AppidSessionDirection);
 
     size_t size_of() override
     { return sizeof(*this); }
 
     uint32_t session_id = 0;
     snort::Flow* flow = nullptr;
-    AppIdConfig* config;
+    AppIdContext& ctxt;
     std::unordered_map<unsigned, AppIdFlowData*> flow_data;
-    AppInfoManager* app_info_mgr = nullptr;
     CommonAppIdData common;
     uint16_t session_packet_count = 0;
+    uint16_t init_pkts_without_reply = 0;
+    uint64_t init_bytes_without_reply = 0;
 
     snort::SfIp service_ip;
     uint16_t service_port = 0;
@@ -221,11 +271,16 @@ public:
     APPID_DISCOVERY_STATE service_disco_state = APPID_DISCO_STATE_NONE;
     SESSION_SERVICE_SEARCH_STATE service_search_state = SESSION_SERVICE_SEARCH_STATE::START;
     ServiceDetector* service_detector = nullptr;
-    snort::AppIdServiceSubtype* subtype = nullptr;
+    AppIdServiceSubtype* subtype = nullptr;
     std::vector<ServiceDetector*> service_candidates;
     ServiceAppDescriptor service;
+
+    // Following three fields are used only for non-http sessions. For HTTP traffic,
+    // these fields are maintained inside AppIdHttpSession.
+    // Note: RTMP traffic is treated like HTTP in AppId
     ClientAppDescriptor client;
     PayloadAppDescriptor payload;
+    AppId misc_app_id = APP_ID_NONE;
 
     // AppId matching client side
     APPID_DISCOVERY_STATE client_disco_state = APPID_DISCO_STATE_NONE;
@@ -234,17 +289,13 @@ public:
     std::map<std::string, ClientDetector*> client_candidates;
     bool tried_reverse_service = false;
 
-    AppId referred_payload_app_id = APP_ID_NONE;
-    AppId misc_app_id = APP_ID_NONE;
-
-
     // FIXIT-RC netbios_name is never set to a valid value; set when netbios_domain is set?
     char* netbios_name = nullptr;
     char* netbios_domain = nullptr;
 
     TlsSession* tsession = nullptr;
     unsigned scan_flags = 0;
-    ThirdPartyAppIDSession* tpsession = nullptr;
+    ThirdPartyAppIdSession* tpsession = nullptr;
     uint16_t init_tpPackets = 0;
     uint16_t resp_tpPackets = 0;
     bool tp_reinspect_by_initiator = false;
@@ -271,12 +322,9 @@ public:
         AppId referred_id;
     } encrypted = { APP_ID_NONE, APP_ID_NONE, APP_ID_NONE, APP_ID_NONE, APP_ID_NONE };
 
-    void* firewall_early_data = nullptr;
     AppId past_indicator = APP_ID_NONE;
     AppId past_forecast = APP_ID_NONE;
 
-    bool is_http2 = false;
-    snort::SEARCH_SUPPORT_TYPE search_support_type = snort::UNKNOWN_SEARCH_ENGINE;
     bool in_expected_cache = false;
     static unsigned inspector_id;
     static std::mutex inferred_svcs_lock;
@@ -287,10 +335,13 @@ public:
     void clear_session_flags(uint64_t flags) { common.flags &= ~flags; }
     uint64_t get_session_flags(uint64_t flags) const { return (common.flags & flags); }
     void set_service_detected() { common.flags |= APPID_SESSION_SERVICE_DETECTED; }
-    bool is_service_detected() { return ((common.flags & APPID_SESSION_SERVICE_DETECTED) == 0) ? false : true; }
+    bool is_service_detected() { return ((common.flags & APPID_SESSION_SERVICE_DETECTED) == 0) ?
+        false : true; }
     void set_client_detected() { common.flags |= APPID_SESSION_CLIENT_DETECTED; }
-    bool is_client_detected() { return ((common.flags & APPID_SESSION_CLIENT_DETECTED) == 0) ? false : true; }
+    bool is_client_detected() { return ((common.flags & APPID_SESSION_CLIENT_DETECTED) == 0) ?
+        false : true; }
     bool is_decrypted() { return ((common.flags & APPID_SESSION_DECRYPTED) == 0) ? false : true; }
+    bool is_svc_taking_too_much_time();
 
     void* get_flow_data(unsigned id);
     int add_flow_data(void* data, unsigned id, AppIdFreeFCN);
@@ -298,56 +349,83 @@ public:
     void* remove_flow_data(unsigned id);
     void free_flow_data_by_id(unsigned id);
     void free_flow_data_by_mask(unsigned mask);
-    void free_tls_session_data();
     void free_flow_data();
 
     AppId pick_service_app_id();
-    AppId pick_only_service_app_id();
-    AppId pick_misc_app_id();
-    AppId pick_client_app_id();
-    AppId pick_payload_app_id();
-    AppId pick_referred_payload_app_id();
-    void set_application_ids(AppId service, AppId client, AppId payload, AppId misc,
+    // pick_ss_* and set_ss_* methods below are for application protocols that support only a single
+    // stream in a flow. They should not be used for HTTP2 sessions which can have multiple
+    // streams within a single flow
+    AppId pick_ss_misc_app_id();
+    AppId pick_ss_client_app_id();
+    AppId pick_ss_payload_app_id();
+    AppId pick_ss_referred_payload_app_id();
+
+    void set_ss_application_ids(AppId service, AppId client, AppId payload, AppId misc,
         AppidChangeBits& change_bits);
-    void get_application_ids(AppId& service, AppId& client, AppId& payload, AppId& misc);
-    void get_application_ids(AppId& service, AppId& client, AppId& payload);
+    void set_application_ids_service(AppId service_id, AppidChangeBits& change_bits);
+
+    // For protocols such as HTTP2 which can have multiple streams within a single flow, get_first_stream_*
+    // methods return the appids in the first stream seen in a packet.
+    void get_first_stream_app_ids(AppId& service, AppId& client, AppId& payload, AppId& misc);
+    void get_first_stream_app_ids(AppId& service, AppId& client, AppId& payload);
     AppId get_application_ids_service();
-    AppId get_application_ids_client();
-    AppId get_application_ids_payload();
-    AppId get_application_ids_misc();
+    AppId get_application_ids_client(uint32_t stream_index = 0);
+    AppId get_application_ids_payload(uint32_t stream_index = 0);
+    AppId get_application_ids_misc(uint32_t stream_index = 0);
+
+    uint32_t get_hsessions_size()
+    {
+        return hsessions.size();
+    }
 
     bool is_ssl_session_decrypted();
-    void examine_ssl_metadata(snort::Packet*, AppidChangeBits& change_bits);
+    void examine_ssl_metadata(AppidChangeBits& change_bits);
     void set_client_appid_data(AppId, AppidChangeBits& change_bits, char* version = nullptr);
     void set_service_appid_data(AppId, AppidChangeBits& change_bits, char* version = nullptr);
-    void set_referred_payload_app_id_data(AppId, AppidChangeBits& change_bits);
     void set_payload_appid_data(AppId, AppidChangeBits& change_bits, char* version = nullptr);
     void check_app_detection_restart(AppidChangeBits& change_bits);
+    void check_ssl_detection_restart(AppidChangeBits& change_bits);
+    void check_tunnel_detection_restart();
     void update_encrypted_app_id(AppId);
     void examine_rtmp_metadata(AppidChangeBits& change_bits);
     void sync_with_snort_protocol_id(AppId, snort::Packet*);
-    void stop_rna_service_inspection(snort::Packet*,  AppidSessionDirection);
+    void stop_service_inspection(snort::Packet*,  AppidSessionDirection);
 
     bool is_payload_appid_set();
     void clear_http_flags();
     void clear_http_data();
     void reset_session_data();
 
-    AppIdHttpSession* get_http_session();
+    AppIdHttpSession* create_http_session(uint32_t stream_id = 0);
+    AppIdHttpSession* get_http_session(uint32_t stream_index = 0);
+    AppIdHttpSession* get_matching_http_session(uint32_t stream_id);
+    void delete_all_http_sessions()
+    {
+        for (auto hsession : hsessions)
+            delete hsession;
+        hsessions.clear();
+    }
+
+    AppIdDnsSession* create_dns_session();
     AppIdDnsSession* get_dns_session();
 
     bool is_tp_appid_done() const;
     bool is_tp_processing_done() const;
     bool is_tp_appid_available() const;
 
-    void set_tp_app_id(snort::Packet& p, AppidSessionDirection dir, AppId app_id, AppidChangeBits& change_bits);
-    void set_tp_payload_app_id(snort::Packet& p, AppidSessionDirection dir, AppId app_id, AppidChangeBits& change_bits);
+    void set_tp_app_id(snort::Packet& p, AppidSessionDirection dir, AppId app_id,
+        AppidChangeBits& change_bits);
+    void set_tp_payload_app_id(snort::Packet& p, AppidSessionDirection dir, AppId app_id,
+        AppidChangeBits& change_bits);
+    void publish_appid_event(AppidChangeBits&, snort::Flow*, bool is_http2 = false,
+        uint32_t http2_stream_index = 0);
 
     inline void set_tp_app_id(AppId app_id) {
         if (tp_app_id != app_id)
         {
             tp_app_id = app_id;
-            tp_app_id_deferred = app_info_mgr->get_app_info_flags(tp_app_id, APPINFO_FLAG_DEFER);
+            tp_app_id_deferred = ctxt.get_odp_ctxt().get_app_info_mgr().get_app_info_flags
+                (tp_app_id, APPINFO_FLAG_DEFER);
         }
     }
 
@@ -355,7 +433,8 @@ public:
         if (tp_payload_app_id != app_id)
         {
             tp_payload_app_id = app_id;
-            tp_payload_app_id_deferred = app_info_mgr->get_app_info_flags(tp_payload_app_id, APPINFO_FLAG_DEFER_PAYLOAD);
+            tp_payload_app_id_deferred = ctxt.get_odp_ctxt().get_app_info_mgr().get_app_info_flags
+                (tp_payload_app_id, APPINFO_FLAG_DEFER_PAYLOAD);
         }
     }
 
@@ -382,9 +461,20 @@ public:
             inferred_svcs_ver++;
     }
 
+    uint16_t get_prev_http2_raw_packet() const
+    {
+        return prev_http2_raw_packet;
+    }
+
+    void set_prev_http2_raw_packet(uint16_t packet_num)
+    {
+        prev_http2_raw_packet = packet_num;
+    }
+
 private:
-    AppIdHttpSession* hsession = nullptr;
+    std::vector<AppIdHttpSession*> hsessions;
     AppIdDnsSession* dsession = nullptr;
+    uint16_t prev_http2_raw_packet = 0;
 
     void reinit_session_data(AppidChangeBits& change_bits);
     void delete_session_data();
@@ -417,6 +507,7 @@ static inline bool is_svc_http_type(AppId serviceId)
         case APP_ID_SMTPS:
         case APP_ID_SSHELL:
         case APP_ID_SSL:
+        case APP_ID_QUIC:
             return true;
     }
     return false;

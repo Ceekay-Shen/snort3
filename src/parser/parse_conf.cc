@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 // Copyright (C) 1998-2002 Martin Roesch <roesch@sourcefire.com>
 // Copyright (C) 2000,2001 Andrew R. Baker <andrewb@uab.edu>
@@ -84,7 +84,7 @@ void get_parse_location(const char*& file, unsigned& line)
 
 static void print_parse_file(const char* msg, Location& loc)
 {
-    if ( SnortConfig::show_file_codes() )
+    if ( SnortConfig::get_conf()->show_file_codes() )
         LogMessage("%s %s:%s:\n", msg, (loc.code ? loc.code : "?"), loc.file.c_str());
 
     else
@@ -238,7 +238,7 @@ void ParseIpVar(SnortConfig* sc, const char* var, const char* val)
 
 void add_service_to_otn(SnortConfig* sc, OptTreeNode* otn, const char* svc_name)
 {
-    if ( !strcmp(svc_name, "file") and !otn->sigInfo.num_services )
+    if ( !strcmp(svc_name, "file") and otn->sigInfo.services.empty() )
     {
         // well-known services supporting file_data
         // applies to both alert file and service:file rules
@@ -248,29 +248,21 @@ void add_service_to_otn(SnortConfig* sc, OptTreeNode* otn, const char* svc_name)
         add_service_to_otn(sc, otn, "pop3");
         add_service_to_otn(sc, otn, "imap");
         add_service_to_otn(sc, otn, "smtp");
-        add_service_to_otn(sc, otn, "user");
+        add_service_to_otn(sc, otn, "file");
         return;
     }
 
-    if (otn->sigInfo.num_services >= sc->max_metadata_services)
-    {
-        ParseError("too many service's specified for rule, can't add %s", svc_name);
-        return;
-    }
+    if ( !strcmp(svc_name, "http") )
+        add_service_to_otn(sc, otn, "http2");
+
     SnortProtocolId svc_id = sc->proto_ref->add(svc_name);
 
-    for ( unsigned i = 0; i < otn->sigInfo.num_services; ++i )
-        if ( otn->sigInfo.services[i].snort_protocol_id == svc_id )
+    for ( const auto& si : otn->sigInfo.services )
+        if ( si.snort_protocol_id == svc_id )
             return;  // already added
 
-    if ( !otn->sigInfo.services )
-        otn->sigInfo.services =
-            (SignatureServiceInfo*)snort_calloc(sc->max_metadata_services, sizeof(SignatureServiceInfo));
-
-    int idx = otn->sigInfo.num_services++;
-
-    otn->sigInfo.services[idx].service = snort_strdup(svc_name);
-    otn->sigInfo.services[idx].snort_protocol_id = svc_id;
+    SignatureServiceInfo si(svc_name, svc_id);
+    otn->sigInfo.services.emplace_back(si);
 }
 
 // only keep drop rules ...
@@ -278,14 +270,14 @@ void add_service_to_otn(SnortConfig* sc, OptTreeNode* otn, const char* svc_name)
 // or we are going to just alert instead of drop,
 // or we are going to ignore session data instead of drop.
 // the alert case is tested for separately with SnortConfig::treat_drop_as_alert().
-static inline int ScKeepDropRules()
+static inline int keep_drop_rules(const SnortConfig* sc)
 {
-    return ( SnortConfig::inline_mode() || SnortConfig::adaptor_inline_mode() || SnortConfig::treat_drop_as_ignore() );
+    return ( sc->inline_mode() or sc->adaptor_inline_mode() or sc->treat_drop_as_ignore() );
 }
 
-static inline int ScLoadAsDropRules()
+static inline int load_as_drop_rules(const SnortConfig* sc)
 {
-    return ( SnortConfig::inline_test_mode() || SnortConfig::adaptor_inline_test_mode() );
+    return ( sc->inline_test_mode() || sc->adaptor_inline_test_mode() );
 }
 
 Actions::Type get_rule_type(const char* s)
@@ -295,15 +287,17 @@ Actions::Type get_rule_type(const char* s)
     if ( rt == Actions::NONE )
         rt = ActionManager::get_action_type(s);
 
+    const SnortConfig* sc = SnortConfig::get_conf();
+
     switch ( rt )
     {
     case Actions::DROP:
     case Actions::BLOCK:
     case Actions::RESET:
-        if ( SnortConfig::treat_drop_as_alert() )
+        if ( sc->treat_drop_as_alert() )
             return Actions::ALERT;
 
-        if ( ScKeepDropRules() || ScLoadAsDropRules() )
+        if ( keep_drop_rules(sc) || load_as_drop_rules(sc) )
             return rt;
 
         return Actions::NONE;

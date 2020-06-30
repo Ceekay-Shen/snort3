@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -28,7 +28,7 @@ class Reputation : public snort::Inspector
 public:
     Reputation(ReputationConfig*);
 
-    void show(snort::SnortConfig*) override;
+    void show(const snort::SnortConfig*) const override;
     void eval(snort::Packet*) override;
 
 private:

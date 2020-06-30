@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -43,7 +43,7 @@ static THREAD_LOCAL ProfileStats file_ssn_stats;
 // FileSession methods
 //-------------------------------------------------------------------------
 
-FileSession::FileSession(Flow* flow) : Session(flow)
+FileSession::FileSession(Flow* f) : Session(f)
 { memory::MemoryCap::update_allocations(sizeof(*this)); }
 
 FileSession::~FileSession()
@@ -51,9 +51,6 @@ FileSession::~FileSession()
 
 bool FileSession::setup(Packet*)
 {
-    // FIXIT-H file context is null here
-    //const char* s = DAQ_GetInterfaceSpec();
-    //file_api->set_file_name(p->flow, (uint8_t*)s, strlen(s));
     return true;
 }
 
@@ -77,7 +74,7 @@ int FileSession::process(Packet* p)
 {
     Profile profile(file_ssn_stats);
 
-    p->flow->ssn_state.snort_protocol_id = SNORT_PROTO_USER;
+    p->flow->ssn_state.snort_protocol_id = SNORT_PROTO_FILE;
     StreamFileConfig* c = get_file_cfg(p->flow->ssn_server);
 
     FileFlows* file_flows = FileFlows::get_file_flows(p->flow);

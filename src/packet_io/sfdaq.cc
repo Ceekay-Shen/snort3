@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -161,7 +161,7 @@ static bool AddDaqModuleConfig(const SFDAQModuleConfig *dmc)
     DAQ_Module_h module = daq_find_module(module_name);
     if (!module)
     {
-        ErrorMessage("Could not find requested DAQ module: %s\n", module_name);
+        ParseError("Could not find requested DAQ module: %s\n", module_name);
         return false;
     }
 
@@ -190,7 +190,7 @@ static bool AddDaqModuleConfig(const SFDAQModuleConfig *dmc)
         const char* value = kvp.second.length() ? kvp.second.c_str() : nullptr;
         if (daq_module_config_set_variable(modcfg, key, value) != DAQ_SUCCESS)
         {
-            ErrorMessage("Error setting DAQ configuration variable with key '%s' and value '%s'! (%d)",
+            ParseError("Error setting DAQ configuration variable with key '%s' and value '%s'! (%d)",
                     key, value, rval);
             daq_module_config_destroy(modcfg);
             return false;
@@ -199,7 +199,7 @@ static bool AddDaqModuleConfig(const SFDAQModuleConfig *dmc)
 
     if ((rval = daq_config_push_module_config(daqcfg, modcfg)) != DAQ_SUCCESS)
     {
-        ErrorMessage("Error pushing DAQ module configuration for '%s' onto the DAQ config! (%d)\n",
+        ParseError("Error pushing DAQ module configuration for '%s' onto the DAQ config! (%d)\n",
                 daq_module_get_name(module), rval);
         daq_module_config_destroy(modcfg);
         return false;
@@ -212,17 +212,19 @@ static bool AddDaqModuleConfig(const SFDAQModuleConfig *dmc)
     return true;
 }
 
-bool SFDAQ::init(const SFDAQConfig* cfg)
+bool SFDAQ::init(const SFDAQConfig* cfg, unsigned total_instances)
 {
     if (!loaded)
         load(cfg);
 
     int rval;
 
-    if (SnortConfig::adaptor_inline_mode())
+    if (SnortConfig::get_conf()->adaptor_inline_mode())
         default_daq_mode = DAQ_MODE_INLINE;
-    else if (SnortConfig::read_mode())
+
+    else if (SnortConfig::get_conf()->read_mode())
         default_daq_mode = DAQ_MODE_READ_FILE;
+
     else
         default_daq_mode = DAQ_MODE_PASSIVE;
 
@@ -235,6 +237,8 @@ bool SFDAQ::init(const SFDAQConfig* cfg)
     daq_config_set_msg_pool_size(daqcfg, cfg->get_batch_size() * 4);
     daq_config_set_snaplen(daqcfg, cfg->get_mru_size());
     daq_config_set_timeout(daqcfg, cfg->timeout);
+    if (total_instances > 1)
+        daq_config_set_total_instances(daqcfg, total_instances);
 
     /* If no modules were specified, try to automatically configure with the default. */
     if (cfg->module_configs.empty())
@@ -371,7 +375,7 @@ bool SFDAQ::can_replace()
     return local_instance && local_instance->can_replace();
 }
 
-bool SFDAQ::get_tunnel_bypass(uint8_t proto)
+bool SFDAQ::get_tunnel_bypass(uint16_t proto)
 {
     return local_instance && local_instance->get_tunnel_bypass(proto);
 }

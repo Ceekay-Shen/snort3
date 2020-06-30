@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 // Copyright (C) 1998-2002 Martin Roesch <roesch@sourcefire.com>
 //
@@ -68,8 +68,8 @@ public:
     { return DETECT; }
 
 public:
-    THDX_STRUCT thdx;
-    DetectionFilterConfig* dfc;
+    THDX_STRUCT thdx = {};
+    DetectionFilterConfig* dfc = nullptr;
 };
 
 bool DetectionFilterModule::begin(const char*, int, SnortConfig* sc)

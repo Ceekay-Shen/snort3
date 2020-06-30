@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2018-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2018-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -73,7 +73,6 @@ const InspectApi Http2Api::http2_api =
 };
 
 extern const BaseApi* ips_http2_frame_header;
-extern const BaseApi* ips_http2_frame_data;
 extern const BaseApi* ips_http2_decoded_header;
 
 #ifdef BUILDING_SO
@@ -84,7 +83,6 @@ const BaseApi* sin_http2[] =
 {
     &Http2Api::http2_api.base,
     ips_http2_frame_header,
-    ips_http2_frame_data,
     ips_http2_decoded_header,
     nullptr
 };

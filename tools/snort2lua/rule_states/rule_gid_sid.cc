@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2018-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2018-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -29,8 +29,8 @@
 
 #include "conversion_state.h"
 #include "helpers/converter.h"
-#include "rule_states/rule_api.h"
 #include "helpers/s2l_util.h"
+#include "rule_api.h"
 
 namespace rules
 {
@@ -107,7 +107,7 @@ bool Gid::convert(std::istringstream& data_stream)
 // Sid
 //
 
-void Sid::convert_sid(std::string& sid, std::istringstream& data_stream, RuleApi& rule_api)
+void Sid::convert_sid(std::string& sid, std::istringstream& data_stream, RuleApi& r_api)
 {
     int sid_num;
     try
@@ -116,7 +116,7 @@ void Sid::convert_sid(std::string& sid, std::istringstream& data_stream, RuleApi
     }
     catch (...)
     {
-        rule_api.bad_rule(data_stream, "sid - invalid input, expecting int type");
+        r_api.bad_rule(data_stream, "sid - invalid input, expecting int type");
         return;
     }
     const int sid_offset = 100;

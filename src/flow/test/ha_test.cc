@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -82,7 +82,7 @@ static struct __attribute__((__packed__)) TestUpdateMessage {
         0,
         10
     },
-    0, 1, 2, 3, 4, 5, 6, 7, 8, 9
+    { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 }
 };
 
 
@@ -205,14 +205,14 @@ namespace snort
 {
 void ErrorMessage(const char*,...) { }
 void LogMessage(const char*,...) { }
-}
-
-int FlowKey::compare(const void*, const void*, size_t) { return 0; }
-
-int SFDAQInstance::ioctl(DAQ_IoctlCmd, void*, size_t) { return DAQ_SUCCESS; }
 
 void packet_gettimeofday(struct timeval* tv)
 { *tv = s_packet_time; }
+}
+
+bool FlowKey::is_equal(const void*, const void*, size_t) { return false; }
+
+int SFDAQInstance::ioctl(DAQ_IoctlCmd, void*, size_t) { return DAQ_SUCCESS; }
 
 Flow::Flow() { ha_state = new FlowHAState; key = new FlowKey; }
 Flow::~Flow() { delete key; delete ha_state; }
@@ -315,8 +315,6 @@ TEST(high_availability_manager_test, inst_init_term)
 
 TEST_GROUP(flow_ha_state_test)
 {
-    void setup() override { }
-    void teardown() override { }
 };
 
 TEST(flow_ha_state_test, timing_test)

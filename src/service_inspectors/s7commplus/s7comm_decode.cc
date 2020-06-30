@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2018-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2018-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -101,7 +101,7 @@ static bool S7commPlusProtocolDecode(S7commplusSessionData* session, Packet* p)
     return true;
 }
 
-bool S7commplusDecode(Packet* p)
+bool S7commplusDecode(Packet* p, S7commplusFlowData* mfd)
 {
     const TpktHeader* tpkt_header;
     const CotpHeader* cotp_header;
@@ -111,8 +111,6 @@ bool S7commplusDecode(Packet* p)
     if (p->dsize < TPKT_MIN_HDR_LEN)
         return false;
 
-    S7commplusFlowData* mfd =
-        (S7commplusFlowData*)p->flow->get_flow_data(S7commplusFlowData::inspector_id);
     tpkt_header = (const TpktHeader*)p->data;
     cotp_header = (const CotpHeader*)(p->data + sizeof(TpktHeader));
     tpkt_length = ntohs(tpkt_header->length);

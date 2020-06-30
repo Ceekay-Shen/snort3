@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2011-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -31,6 +31,7 @@
 #include "detection/detection_engine.h"
 #include "events/event_queue.h"
 #include "log/messages.h"
+#include "main/snort_debug.h"
 #include "utils/util_cstring.h"
 
 #include "gtp.h"
@@ -110,7 +111,7 @@ static void printInfoElements(GTP_IEData* info_elements, GTPMsg* msg)
             char buf[STD_BUF];
             convertToHex( (char*)buf, sizeof(buf),
                 msg->gtp_header + info_elements[i].shift, info_elements[i].length);
-            trace_logf(gtp_inspect, "Info type: %.3d, content: %s\n", i, buf);
+            debug_logf(gtp_inspect_trace, nullptr, "Info type: %.3d, content: %s\n", i, buf);
         }
     }
 }
@@ -422,7 +423,7 @@ int gtp_parse(const GTPConfig& config, GTPMsg* msg, const uint8_t* buff, uint16_
 
     if (msg->version > MAX_GTP_VERSION_CODE)
         return false;
-    
+
     /*Check whether this is GTP or GTP', Exit if GTP'*/
     if (!(hdr->flag & 0x10))
         return false;

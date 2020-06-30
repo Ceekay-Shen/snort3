@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -40,7 +40,7 @@ using namespace snort;
 
 struct AppIdStatRecord
 {
-    uint32_t app_id;
+    char* app_name = nullptr;
     uint64_t initiatorBytes;
     uint64_t responderBytes;
 };
@@ -51,6 +51,7 @@ static THREAD_LOCAL AppIdStatistics* appid_stats_manager = nullptr;
 
 static void delete_record(void* record)
 {
+    snort_free(((AppIdStatRecord*)record)->app_name);
     snort_free(record);
 }
 
@@ -123,52 +124,13 @@ void AppIdStatistics::dump_statistics()
 
             for (node = fwAvlFirst(bucket->appsTree); node != nullptr; node = fwAvlNext(node))
             {
-                const char* app_name;
-                bool cooked_client = false;
-                AppId app_id;
-                char tmpBuff[MAX_EVENT_APPNAME_LEN];
                 struct AppIdStatRecord* record;
 
                 record = (struct AppIdStatRecord*)node->data;
-                app_id = (AppId)record->app_id;
-
-                if ( app_id >= 2000000000 )
-                {
-                    cooked_client = true;
-                    app_id -= 2000000000;
-                }
-
-                AppInfoTableEntry* entry
-                    = AppInfoManager::get_instance().get_app_info_entry(app_id);
-
-                if ( entry )
-                {
-                    app_name = entry->app_name;
-                    if (cooked_client)
-                    {
-                        snprintf(tmpBuff, MAX_EVENT_APPNAME_LEN, "_cl_%s", app_name);
-                        tmpBuff[MAX_EVENT_APPNAME_LEN-1] = 0;
-                        app_name = tmpBuff;
-                    }
-                }
-                else if ( app_id == APP_ID_UNKNOWN || app_id == APP_ID_UNKNOWN_UI )
-                    app_name = "__unknown";
-                else if ( app_id == APP_ID_NONE )
-                    app_name = "__none";
-                else
-                {
-                    if (cooked_client)
-                        snprintf(tmpBuff, MAX_EVENT_APPNAME_LEN, "_err_cl_%d",app_id);
-                    else
-                        snprintf(tmpBuff, MAX_EVENT_APPNAME_LEN, "_err_%d",app_id);
-
-                    tmpBuff[MAX_EVENT_APPNAME_LEN - 1] = 0;
-                    app_name = tmpBuff;
-                }
 
                 // FIXIT-M %lu won't do time_t on 32-bit systems
                 TextLog_Print(log, "%lu,%s," STDu64 "," STDu64 "\n",
-                    packet_time(), app_name, record->initiatorBytes, record->responderBytes);
+                    packet_time(), record->app_name, record->initiatorBytes, record->responderBytes);
             }
         }
         fwAvlDeleteTree(bucket->appsTree, delete_record);
@@ -176,11 +138,10 @@ void AppIdStatistics::dump_statistics()
     }
 }
 
-AppIdStatistics::AppIdStatistics(const AppIdModuleConfig& config)
+AppIdStatistics::AppIdStatistics(const AppIdConfig& config)
 {
     enabled = true;
 
-    rollPeriod = config.app_stats_rollover_time;
     rollSize = config.app_stats_rollover_size;
     bucketInterval = config.app_stats_period;
 
@@ -214,9 +175,9 @@ AppIdStatistics::~AppIdStatistics()
     }
 }
 
-AppIdStatistics* AppIdStatistics::initialize_manager(const AppIdModuleConfig& config)
+AppIdStatistics* AppIdStatistics::initialize_manager(const AppIdConfig& config)
 {
-    if ( !config.stats_logging_enabled )
+    if ( !config.log_stats )
         return nullptr;
 
     appid_stats_manager = new AppIdStatistics(config);
@@ -234,10 +195,45 @@ static void update_stats(const AppIdSession& asd, AppId app_id, StatsBucket* buc
     AppIdStatRecord* record = (AppIdStatRecord*)(fwAvlLookup(app_id, bucket->appsTree));
     if ( !record )
     {
+        char tmp_buff[MAX_EVENT_APPNAME_LEN];
+        bool cooked_client = false;
+
         record = (AppIdStatRecord*)(snort_calloc(sizeof(struct AppIdStatRecord)));
+
+        if ( app_id >= 2000000000 )
+            cooked_client = true;
+
+        AppInfoTableEntry* entry
+            = asd.ctxt.get_odp_ctxt().get_app_info_mgr().get_app_info_entry(app_id);
+
+        if ( entry )
+        {
+            if (cooked_client)
+            {
+                snprintf(tmp_buff, MAX_EVENT_APPNAME_LEN, "_cl_%s", entry->app_name);
+                tmp_buff[MAX_EVENT_APPNAME_LEN-1] = 0;
+                record->app_name = snort_strdup(tmp_buff);
+            }
+            else
+                record->app_name = snort_strdup(entry->app_name);
+        }
+        else if ( app_id == APP_ID_UNKNOWN || app_id == APP_ID_UNKNOWN_UI )
+            record->app_name = snort_strdup("__unknown");
+        else if ( app_id == APP_ID_NONE )
+            record->app_name = snort_strdup("__none");
+        else
+        {
+            if (cooked_client)
+                snprintf(tmp_buff, MAX_EVENT_APPNAME_LEN, "_err_cl_%d",app_id);
+            else
+                snprintf(tmp_buff, MAX_EVENT_APPNAME_LEN, "_err_%d",app_id);
+
+            tmp_buff[MAX_EVENT_APPNAME_LEN - 1] = 0;
+            record->app_name = snort_strdup(tmp_buff);
+        }
+
         if (fwAvlInsert(app_id, record, bucket->appsTree) == 0)
         {
-            record->app_id = app_id;
             bucket->appRecordCnt += 1;
         }
         else
@@ -277,7 +273,7 @@ void AppIdStatistics::update(AppIdSession& asd)
     bucket->totalStats.rxByteCnt += asd.stats.responder_bytes;
 
     AppId web_app_id, service_id, client_id;
-    asd.get_application_ids(service_id, client_id, web_app_id);
+    asd.get_first_stream_app_ids(service_id, client_id, web_app_id);
 
     if ( web_app_id > APP_ID_NONE )
         update_stats(asd, web_app_id, bucket);

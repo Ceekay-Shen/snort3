@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2013-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -63,6 +63,7 @@
 #include "side_channel/side_channel.h"
 #include "stream/stream.h"
 #include "time/packet_time.h"
+#include "trace/trace_api.h"
 #include "utils/stats.h"
 
 #include "analyzer_command.h"
@@ -95,7 +96,7 @@ public:
     RetryQueue(unsigned interval_ms)
     {
         assert(interval_ms > 0);
-        interval = { interval_ms / 1000, (interval_ms % 1000) * 1000 };
+        interval = { interval_ms / 1000, static_cast<suseconds_t>((interval_ms % 1000) * 1000) };
     }
 
     ~RetryQueue()
@@ -192,7 +193,7 @@ static bool process_packet(Packet* p)
     PacketTracer::activate(*p);
 
     // FIXIT-M should not need to set policies here
-    set_default_policy();
+    set_default_policy(p->context->conf);
     p->user_inspection_policy_id = get_inspection_policy()->user_policy_id;
     p->user_ips_policy_id = get_ips_policy()->user_policy_id;
     p->user_network_policy_id = get_network_policy()->user_policy_id;
@@ -229,7 +230,7 @@ static void handle_deferred_whitelist(Packet* pkt, DAQ_Verdict& verdict)
             verdict = DAQ_VERDICT_PASS;
             pkt->flow->deferred_whitelist = WHITELIST_DEFER_STARTED;
             pkt->flow->set_state(Flow::FlowState::INSPECT);
-            pkt->flow->disable_inspect = false;
+            pkt->flow->flags.disable_inspect = false;
         }
         return;
     }
@@ -238,7 +239,7 @@ static void handle_deferred_whitelist(Packet* pkt, DAQ_Verdict& verdict)
     {
         verdict = DAQ_VERDICT_PASS;
         pkt->flow->set_state(Flow::FlowState::INSPECT);
-        pkt->flow->disable_inspect = false;
+        pkt->flow->flags.disable_inspect = false;
         return;
     }
 
@@ -250,7 +251,7 @@ static void handle_deferred_whitelist(Packet* pkt, DAQ_Verdict& verdict)
 
         // Turn inspection back off and allow the flow.
         pkt->flow->set_state(Flow::FlowState::ALLOW);
-        pkt->flow->disable_inspect = true;
+        pkt->flow->flags.disable_inspect = true;
     }
 }
 
@@ -261,7 +262,8 @@ static DAQ_Verdict distill_verdict(Packet* p)
     Active* act = p->active;
 
     // First Pass
-    if ( act->session_was_blocked() )
+    if ( act->session_was_blocked() ||
+            (p->flow && (p->flow->flow_state == Flow::FlowState::BLOCK)) )
     {
         if ( !act->can_block() )
             verdict = DAQ_VERDICT_PASS;
@@ -270,7 +272,7 @@ static DAQ_Verdict distill_verdict(Packet* p)
             daq_stats.internal_blacklist++;
             verdict = DAQ_VERDICT_BLOCK;
         }
-        else if ( SnortConfig::inline_mode() || act->packet_force_dropped() )
+        else if ( p->context->conf->inline_mode() || act->packet_force_dropped() )
             verdict = DAQ_VERDICT_BLACKLIST;
         else
             verdict = DAQ_VERDICT_IGNORE;
@@ -297,10 +299,27 @@ static DAQ_Verdict distill_verdict(Packet* p)
         PacketManager::encode_update(p);
         verdict = DAQ_VERDICT_REPLACE;
     }
-    else if ( (p->packet_flags & PKT_IGNORE) ||
-        (p->flow && p->flow->get_ignore_direction() == SSN_DIR_BOTH) )
+    else if ( act->session_was_trusted() )
     {
-        if ( !act->get_tunnel_bypass() )
+        if ( p->flow && !act->get_prevent_trust_action() )
+            p->flow->disable_inspection();
+
+        if ( !(act->get_tunnel_bypass() || act->get_prevent_trust_action()) )
+        {
+            verdict = DAQ_VERDICT_WHITELIST;
+        }
+        else
+        {
+            verdict = DAQ_VERDICT_PASS;
+            daq_stats.internal_whitelist++;
+        }
+    }
+    else if ( (p->packet_flags & PKT_IGNORE) ||
+        (p->flow &&
+            (p->flow->get_ignore_direction() == SSN_DIR_BOTH ||
+                p->flow->flow_state == Flow::FlowState::ALLOW)) )
+    {
+        if ( !(act->get_tunnel_bypass() || act->get_prevent_trust_action()) )
         {
             verdict = DAQ_VERDICT_WHITELIST;
         }
@@ -312,7 +331,7 @@ static DAQ_Verdict distill_verdict(Packet* p)
     }
     else if ( p->ptrs.decode_flags & DECODE_PKT_TRUST )
     {
-        if (p->flow)
+        if ( p->flow )
             p->flow->set_ignore_direction(SSN_DIR_BOTH);
         verdict = DAQ_VERDICT_WHITELIST;
     }
@@ -329,7 +348,7 @@ static DAQ_Verdict distill_verdict(Packet* p)
  */
 void Analyzer::post_process_daq_pkt_msg(Packet* p)
 {
-    ActionManager::execute(p);
+    Active::execute(p);
 
     DAQ_Verdict verdict = MAX_DAQ_VERDICT;
 
@@ -338,7 +357,12 @@ void Analyzer::post_process_daq_pkt_msg(Packet* p)
         retry_queue->put(p->daq_msg);
         daq_stats.retries_queued++;
     }
-    else if (!p->active->is_packet_held())
+    else if (p->active->is_packet_held() and Stream::set_packet_action_to_hold(p))
+    {
+        if (p->flow->flags.trigger_detained_packet_event)
+            DataBus::publish(DETAINED_PACKET_EVENT, p);
+    }
+    else
         verdict = distill_verdict(p);
 
     if (PacketTracer::is_active())
@@ -362,12 +386,15 @@ void Analyzer::post_process_daq_pkt_msg(Packet* p)
     {
         // Publish an event if something has indicated that it wants the
         // finalize event on this flow.
-        if (p->flow and p->flow->trigger_finalize_event)
+        if (p->flow and p->flow->flags.trigger_finalize_event)
         {
             FinalizePacketEvent event(p, verdict);
             DataBus::publish(FINALIZE_PACKET_EVENT, event);
         }
 
+        if (verdict == DAQ_VERDICT_BLOCK or verdict == DAQ_VERDICT_BLACKLIST)
+            p->active->send_reason_to_daq(*p);
+        
         p->pkth = nullptr;  // No longer avail after finalize_message.
 
         {
@@ -380,7 +407,6 @@ void Analyzer::post_process_daq_pkt_msg(Packet* p)
 void Analyzer::process_daq_pkt_msg(DAQ_Msg_h msg, bool retry)
 {
     const DAQ_PktHdr_t* pkthdr = daq_msg_get_pkthdr(msg);
-    set_default_policy();
 
     pc.analyzed_pkts++;
 
@@ -389,19 +415,22 @@ void Analyzer::process_daq_pkt_msg(DAQ_Msg_h msg, bool retry)
 
     DetectionEngine::wait_for_context();
     switcher->start();
+
     Packet* p = switcher->get_context()->packet;
     oops_handler->set_current_packet(p);
     p->context->wire_packet = p;
     p->context->packet_number = get_packet_number();
+    set_default_policy(p->context->conf);
 
     DetectionEngine::reset();
-
     sfthreshold_reset();
-    ActionManager::reset_queue(p);
+    Active::clear_queue(p);
 
     p->daq_msg = msg;
     p->daq_instance = daq_instance;
+
     PacketManager::decode(p, pkthdr, daq_msg_get_data(msg), daq_msg_get_data_len(msg), false, retry);
+
     if (process_packet(p))
     {
         post_process_daq_pkt_msg(p);
@@ -409,7 +438,7 @@ void Analyzer::process_daq_pkt_msg(DAQ_Msg_h msg, bool retry)
     }
 
     oops_handler->set_current_packet(nullptr);
-    Stream::timeout_flows(packet_time());
+    Stream::handle_timeouts(false);
     HighAvailabilityManager::process_receive();
 }
 
@@ -545,7 +574,7 @@ void Analyzer::idle()
     struct timeval now, increment;
     unsigned int timeout = SnortConfig::get_conf()->daq_config->timeout;
     packet_gettimeofday(&now);
-    increment = { timeout / 1000, (timeout % 1000) * 1000 };
+    increment = { timeout / 1000, static_cast<suseconds_t>((timeout % 1000) * 1000) };
     timeradd(&now, &increment, &now);
     packet_time_update(&now);
 
@@ -554,7 +583,7 @@ void Analyzer::idle()
     // Service the retry queue with the new packet time.
     process_retry_queue();
 
-    Stream::timeout_flows(packet_time());
+    Stream::handle_timeouts(true);
 
     HighAvailabilityManager::process_receive();
 
@@ -570,7 +599,7 @@ void Analyzer::idle()
 void Analyzer::init_unprivileged()
 {
     // using dummy values until further integration
-    // FIXIT-H max_contexts must be <= DAQ msg pool to avoid permanent stall
+    // FIXIT-M max_contexts must be <= DAQ msg pool to avoid permanent stall (offload only)
     // condition (polling for packets that won't come to resume ready suspends)
 #ifdef REG_TEST
     const unsigned max_contexts = 20;
@@ -583,7 +612,12 @@ void Analyzer::init_unprivileged()
     for ( unsigned i = 0; i < max_contexts; ++i )
         switcher->push(new IpsContext);
 
-    SnortConfig* sc = SnortConfig::get_conf();
+    const SnortConfig* sc = SnortConfig::get_conf();
+
+    // This should be called as soon as possible
+    // to handle all trace log messages
+    TraceApi::thread_init(sc->trace_config);
+
     CodecManager::thread_init(sc);
 
     // this depends on instantiated daq capabilities
@@ -595,7 +629,7 @@ void Analyzer::init_unprivileged()
     detection_filter_init(sc->detection_filter_config);
 
     EventManager::open_outputs();
-    IpsManager::setup_options();
+    IpsManager::setup_options(sc);
     ActionManager::thread_init(sc);
     FileService::thread_init();
     SideChannelManager::thread_init();
@@ -612,15 +646,16 @@ void Analyzer::init_unprivileged()
     SFRF_Alloc(sc->rate_filter_config->memcap);
 }
 
-void Analyzer::reinit(SnortConfig* sc)
+void Analyzer::reinit(const SnortConfig* sc)
 {
     InspectorManager::thread_reinit(sc);
     ActionManager::thread_reinit(sc);
+    TraceApi::thread_reinit(sc->trace_config);
 }
 
 void Analyzer::term()
 {
-    SnortConfig* sc = SnortConfig::get_conf();
+    const SnortConfig* sc = SnortConfig::get_conf();
 
     HighAvailabilityManager::thread_term_beginning();
 
@@ -637,11 +672,11 @@ void Analyzer::term()
 
     DetectionEngine::idle();
     InspectorManager::thread_stop(sc);
-    ModuleManager::accumulate(sc);
-    InspectorManager::thread_term(sc);
-    ActionManager::thread_term(sc);
+    ModuleManager::accumulate();
+    InspectorManager::thread_term();
+    ActionManager::thread_term();
 
-    IpsManager::clear_options();
+    IpsManager::clear_options(sc);
     EventManager::close_outputs();
     CodecManager::thread_term();
     HighAvailabilityManager::thread_term();
@@ -670,6 +705,8 @@ void Analyzer::term()
 
     sfthreshold_free();
     RateFilter_Cleanup();
+
+    TraceApi::thread_term();
 }
 
 Analyzer::Analyzer(SFDAQInstance* instance, unsigned i, const char* s, uint64_t msg_cnt)
@@ -701,7 +738,7 @@ void Analyzer::operator()(Swapper* ps, uint16_t run_num)
     ps->apply(*this);
     delete ps;
 
-    if (SnortConfig::pcap_show())
+    if (SnortConfig::get_conf()->pcap_show())
         show_source();
 
     // init here to pin separately from packet threads
@@ -709,8 +746,8 @@ void Analyzer::operator()(Swapper* ps, uint16_t run_num)
 
     // Perform all packet thread initialization actions that need to be taken with escalated
     // privileges prior to starting the DAQ module.
-    SnortConfig::get_conf()->thread_config->implement_thread_affinity(STHREAD_TYPE_PACKET,
-        get_instance_id());
+    SnortConfig::get_conf()->thread_config->implement_thread_affinity(
+        STHREAD_TYPE_PACKET, get_instance_id());
 
     SFDAQ::set_local_instance(daq_instance);
     set_state(State::INITIALIZED);
@@ -964,3 +1001,4 @@ void Analyzer::rotate()
 {
     DataBus::publish(THREAD_ROTATE_EVENT, nullptr);
 }
+

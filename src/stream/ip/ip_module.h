@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -23,12 +23,14 @@
 
 #include "flow/session.h"
 #include "framework/module.h"
-#include "main/snort_debug.h"
 
 namespace snort
 {
+class Trace;
 struct SnortConfig;
 }
+
+extern THREAD_LOCAL const snort::Trace* stream_ip_trace;
 
 #define GLOBAL_KEYWORD "defrag"
 #define ENGINE_KEYWORD "defrag_engine"
@@ -60,6 +62,7 @@ struct SnortConfig;
 struct IpStats
 {
     SESSION_STATS;
+    PegCount total_bytes;        // total_ip_bytes_processed
     PegCount total;             // total_ipfragmented_packets
     PegCount current_frags;     // iCurrentFrags
     PegCount max_frags;         // iMaxFrags
@@ -82,7 +85,6 @@ struct IpStats
 
 extern const PegInfo ip_pegs[];
 extern THREAD_LOCAL snort::ProfileStats ip_perf_stats;
-extern Trace TRACE_NAME(stream_ip);
 
 //-------------------------------------------------------------------------
 // stream_ip module
@@ -101,7 +103,6 @@ public:
 
     bool set(const char*, snort::Value&, snort::SnortConfig*) override;
     bool begin(const char*, int, snort::SnortConfig*) override;
-    bool end(const char*, int, snort::SnortConfig*) override;
 
     const snort::RuleMap* get_rules() const override;
     snort::ProfileStats* get_profile() const override;
@@ -114,6 +115,9 @@ public:
 
     Usage get_usage() const override
     { return INSPECT; }
+
+    void set_trace(const snort::Trace*) const override;
+    const snort::TraceOption* get_trace_options() const override;
 
 private:
     StreamIpConfig* config;

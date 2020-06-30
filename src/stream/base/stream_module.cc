@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -28,16 +28,19 @@
 #include "log/messages.h"
 #include "main/snort.h"
 #include "main/snort_config.h"
-#include "main/snort_debug.h"
 #include "stream/flush_bucket.h"
+#include "stream/tcp/tcp_stream_tracker.h"
+#include "time/packet_time.h"
+#include "trace/trace.h"
 
 using namespace snort;
 using namespace std;
 
+THREAD_LOCAL const Trace* stream_trace = nullptr;
+
 //-------------------------------------------------------------------------
 // stream module
 //-------------------------------------------------------------------------
-Trace TRACE_NAME(stream);
 
 #define FLOW_TYPE_PARAMS(name, idle, weight) \
 static const Parameter name[] = \
@@ -51,11 +54,11 @@ static const Parameter name[] = \
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr } \
 }
 
-FLOW_TYPE_PARAMS(ip_params, "180", "64");
-FLOW_TYPE_PARAMS(icmp_params, "180", "8");
-FLOW_TYPE_PARAMS(tcp_params, "3600", "11500");
-FLOW_TYPE_PARAMS(udp_params, "180", "128");
-FLOW_TYPE_PARAMS(user_params,"180", "256");
+FLOW_TYPE_PARAMS(ip_params, "180", "0");
+FLOW_TYPE_PARAMS(icmp_params, "180", "0");
+FLOW_TYPE_PARAMS(tcp_params, "3600", "11000");
+FLOW_TYPE_PARAMS(udp_params, "180", "0");
+FLOW_TYPE_PARAMS(user_params,"180", "0");
 FLOW_TYPE_PARAMS(file_params, "180", "32");
 
 #define FLOW_TYPE_TABLE(flow_type, proto, params) \
@@ -64,8 +67,10 @@ FLOW_TYPE_PARAMS(file_params, "180", "32");
 
 static const Parameter s_params[] =
 {
+#ifdef REG_TEST
     { "footprint", Parameter::PT_INT, "0:max32", "0",
         "use zero for production, non-zero for testing at given size (for TCP and user)" },
+#endif
 
     { "ip_frags_only", Parameter::PT_BOOL, nullptr, "false",
             "don't process non-frag flows" },
@@ -75,6 +80,9 @@ static const Parameter s_params[] =
 
     { "pruning_timeout", Parameter::PT_INT, "1:max32", "30",
                     "minimum inactive time before being eligible for pruning" },
+
+    { "held_packet_timeout", Parameter::PT_INT, "1:max32", "1000",
+      "timeout in milliseconds for held packets" },
 
     FLOW_TYPE_TABLE("ip_cache",   "ip",   ip_params),
     FLOW_TYPE_TABLE("icmp_cache", "icmp", icmp_params),
@@ -96,9 +104,20 @@ static const RuleMap stream_rules[] =
     { 0, nullptr }
 };
 
-StreamModule::StreamModule() :
-    Module(MOD_NAME, MOD_HELP, s_params, false, &TRACE_NAME(stream))
+static const char* const flow_type_names[] =
+{ "none", "ip_cache", "tcp_cache", "udp_cache", "icmp_cache", "user_cache", "file_cache", "max"};
+
+StreamModule::StreamModule() : Module(MOD_NAME, MOD_HELP, s_params)
 { }
+
+void StreamModule::set_trace(const Trace* trace) const
+{ stream_trace = trace; }
+
+const TraceOption* StreamModule::get_trace_options() const
+{
+    static const TraceOption stream_trace_options(nullptr, 0, nullptr);
+    return &stream_trace_options;
+}
 
 const PegInfo* StreamModule::get_pegs() const
 { return base_pegs; }
@@ -130,12 +149,15 @@ bool StreamModule::set(const char* fqn, Value& v, SnortConfig* c)
 {
     PktType type = PktType::NONE;
 
+#ifdef REG_TEST
     if ( v.is("footprint") )
     {
         config.footprint = v.get_uint32();
         return true;
     }
-    else if ( v.is("ip_frags_only") )
+#endif
+
+    if ( v.is("ip_frags_only") )
     {
         if ( v.get_bool() )
             c->set_run_flags(RUN_FLAG__IP_FRAGS_ONLY);
@@ -151,6 +173,11 @@ bool StreamModule::set(const char* fqn, Value& v, SnortConfig* c)
         config.flow_cache_cfg.pruning_timeout = v.get_uint32();
         return true;
     }
+    else if ( v.is("held_packet_timeout") )
+    {
+        config.held_packet_timeout = v.get_uint32();
+        return true;
+    }
     else if ( strstr(fqn, "ip_cache") )
         type = PktType::IP;
     else if ( strstr(fqn, "icmp_cache") )
@@ -164,27 +191,29 @@ bool StreamModule::set(const char* fqn, Value& v, SnortConfig* c)
     else if ( strstr(fqn, "file_cache") )
         type = PktType::FILE;
     else
-        return Module::set(fqn, v, c);
+        return false;
 
     if ( v.is("idle_timeout") )
         config.flow_cache_cfg.proto[to_utype(type)].nominal_timeout = v.get_uint32();
     else if ( v.is("cap_weight") )
         config.flow_cache_cfg.proto[to_utype(type)].cap_weight = v.get_uint16();
-    else
-        return false;
 
     return true;
 }
 
-// FIXIT-L the detection of stream.xxx_cache changes below is a temporary workaround
-// remove this check when stream.xxx_cache params become reloadable
 bool StreamModule::end(const char*, int, SnortConfig* sc)
 {
     if ( reload_resource_manager.initialize(config) )
         sc->register_reload_resource_tuner(reload_resource_manager);
 
+    if ( hpq_rrt.initialize(config.held_packet_timeout) )
+        sc->register_reload_resource_tuner(hpq_rrt);
+
     return true;
 }
+
+void StreamModule::prep_counts()
+{ base_prep(); }
 
 void StreamModule::sum_stats(bool)
 { base_sum(); }
@@ -198,30 +227,30 @@ void StreamModule::reset_stats()
 // Stream handler to adjust allocated resources as needed on a config reload
 bool StreamReloadResourceManager::initialize(const StreamModuleConfig& config_)
 {
-	// FIXIT-L - saving config here to check footprint change is a bit of a hack,
-	if ( Snort::is_reloading() )
-	{
-		if ( config.footprint != config_.footprint )
-		{
-            // FIXIT-M - reinit FlushBucket...
-            ReloadError("Changing of stream.footprint requires a restart\n");
-            return false;
-		}
+    // saving a copy of the config only works here because there is only
+    // one stream inspector per packet thread...
+    if ( !Snort::is_reloading() )
+    {
+        config = config_;
+        return false;
+    }
 
-		config = config_;
-		return true;
-	}
-
-	config = config_;
-	return false;
+#ifdef REG_TEST
+    if ( config.footprint != config_.footprint )
+    {
+        ReloadError("Changing stream.footprint requires a restart.\n");
+        return false;
+    }
+#endif
+    config = config_;
+    return true;
 }
 
 bool StreamReloadResourceManager::tinit()
 {
-    bool must_tune = false;
-
-    max_flows_change =
+    int max_flows_change =
         config.flow_cache_cfg.max_flows - flow_con->get_flow_cache_config().max_flows;
+
     if ( max_flows_change )
     {
         if ( max_flows_change < 0 )
@@ -230,10 +259,10 @@ bool StreamReloadResourceManager::tinit()
             stream_base_stats.reload_total_adds += max_flows_change;
 
         flow_con->set_flow_cache_config(config.flow_cache_cfg);
-        must_tune = true;
+        return true;
     }
 
-    return must_tune;
+    return false;
 }
 
 bool StreamReloadResourceManager::tune_packet_context()
@@ -250,17 +279,54 @@ bool StreamReloadResourceManager::tune_idle_context()
 
 bool StreamReloadResourceManager::tune_resources(unsigned work_limit)
 {
-	// we are done if new max is > currently allocated flow objects
-	if ( flow_con->get_flows_allocated() <= config.flow_cache_cfg.max_flows )
-		return true;
+    // we are done if new max is > currently allocated flow objects
+    if ( flow_con->get_flows_allocated() <= config.flow_cache_cfg.max_flows )
+        return true;
 
-	unsigned flows_to_delete =
-	    flow_con->get_flows_allocated() - config.flow_cache_cfg.max_flows;
-	if ( flows_to_delete > work_limit )
-	    flows_to_delete -= flow_con->delete_flows(work_limit);
-	else
-	    flows_to_delete -= flow_con->delete_flows(flows_to_delete);
+    unsigned flows_to_delete =
+        flow_con->get_flows_allocated() - config.flow_cache_cfg.max_flows;
+    if ( flows_to_delete > work_limit )
+        flows_to_delete -= flow_con->delete_flows(work_limit);
+    else
+        flows_to_delete -= flow_con->delete_flows(flows_to_delete);
 
-	return ( flows_to_delete ) ? false : true;
+    return ( flows_to_delete ) ? false : true;
 }
 
+void StreamModuleConfig::show() const
+{
+    ConfigLogger::log_value("max_flows", flow_cache_cfg.max_flows);
+    ConfigLogger::log_value("pruning_timeout", flow_cache_cfg.pruning_timeout);
+
+    for (int i = to_utype(PktType::IP); i < to_utype(PktType::MAX); ++i)
+    {
+        std::string tmp;
+        tmp += "{ idle_timeout = " + std::to_string(flow_cache_cfg.proto[i].nominal_timeout);
+        tmp += ", cap_weight = " + std::to_string(flow_cache_cfg.proto[i].cap_weight);
+        tmp += " }";
+
+        ConfigLogger::log_value(flow_type_names[i], tmp.c_str());
+    }
+}
+
+bool HPQReloadTuner::initialize(uint32_t new_timeout_ms)
+{
+    held_packet_timeout = new_timeout_ms;
+    return Snort::is_reloading();
+}
+
+bool HPQReloadTuner::tinit()
+{
+    packet_gettimeofday(&reload_time);
+    return TcpStreamTracker::adjust_expiration(held_packet_timeout, reload_time);
+}
+
+bool HPQReloadTuner::tune_packet_context()
+{
+    return !TcpStreamTracker::release_held_packets(reload_time, max_work);
+}
+
+bool HPQReloadTuner::tune_idle_context()
+{
+    return !TcpStreamTracker::release_held_packets(reload_time, max_work_idle);
+}

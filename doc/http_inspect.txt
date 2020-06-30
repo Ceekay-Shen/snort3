@@ -171,7 +171,7 @@ by an attacker. The options provide tools for the user to cope with that.
     percent_u = false
     utf8_bare_byte = false
     iis_unicode = false
-    iis_double_decode = false
+    iis_double_decode = true
 
 The HTTP inspector normalizes percent encodings found in URIs. For instance
 it will convert "%48%69%64%64%65%6e" to "Hidden". All the options listed
@@ -216,7 +216,7 @@ In the example, the lower-case letters a, b, and c and the digits 1, 2, and
 3 are exempted. These may be percent-encoded without generating an alert.
 
     simplify_path = true
-    backslash_to_slash = false
+    backslash_to_slash = true
 
 HTTP inspector simplifies directory paths in URIs by eliminating extra
 traversals using ., .., and /.
@@ -240,9 +240,31 @@ directories to be separated by backslashes:
 
     \this\is\the\other\way\to\write\a\path
 
-backslash_to_slash is turned off by default. If you are protecting such a
-server then set backslash_to_slash = true and all the backslashes will be
-replaced with slashes during normalization.
+backslash_to_slash is turned on by default. It replaces all the backslashes
+with slashes during normalization.
+
+==== CONNECT processing
+
+The HTTP CONNECT method is used by a client to establish a tunnel to a destination via an HTTP proxy
+server. If the connection is successful the server will send a 2XX success response to the client,
+then proceed to blindly forward traffic between the client and destination. That traffic belongs to
+a new session between the client and destination and may be of any protocol, so clearly the HTTP
+inspector will be unable to continue processing traffic following the CONNECT message as if it were
+just a continuation of the original HTTP/1.1 session.
+
+Therefore upon receiving a success response to a CONNECT request, the HTTP inspector will stop
+inspecting the session. The next packet will return to the wizard, which will determine the
+appropriate inspector to continue processing the flow. If the tunneled protocol happens to be
+HTTP/1.1, the HTTP inspector will again start inspecting the flow, but as an entirely new session.
+
+There is one scenario where the cutover to the wizard will not occur despite a 2XX success response
+to a CONNECT request. HTTP allows for pipelining, or sending multiple requests without waiting for a
+response. If the HTTP inspector sees any further traffic from the client after a CONNECT request
+before it has seen the CONNECT response, it is unclear whether this traffic should be interpreted as
+a pipelined HTTP request or tunnel traffic sent in anticipation of a success response from the
+server. Due to this potential evasion tactic, the HTTP inspector will not cut over to the wizard if
+it sees any early client-to-server traffic, but will continue normal HTTP processing of the flow
+regardless of the eventual server response.
 
 ==== Detection rules
 
@@ -355,6 +377,15 @@ The URI is everything between the first space and the last space. "https"
 is the scheme, "www.samplehost.com" is the host, "287" is the port,
 "/basic/example/of/path" is the path, "with-query" is the query, and
 "and-fragment" is the fragment.
+
+http_uri represents the normalized uri, normalization of components depends 
+on uri type. If the uri is of type absolute (contains all six components) or 
+absolute path (contains path, query and fragment) then the path and query 
+components are normalized. In these cases, http_uri represents the normalized
+path, query, and fragment (/path?query#fragment). If the uri is of type 
+authority (host and port), the host is normalized and http_uri represents the 
+normalized host with the port number. In all other cases http_uri is the same 
+as http_raw_uri.  
 
 Note: this section uses informal language to explain some things. Nothing
 here is intended to conflict with the technical language of the HTTP RFCs

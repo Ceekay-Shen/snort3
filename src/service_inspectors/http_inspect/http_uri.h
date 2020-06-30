@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -50,7 +50,7 @@ public:
     const Field& get_query() { return query; }
     const Field& get_fragment() { return fragment; }
 
-    const Field& get_norm_host() { return host_norm; }
+    const Field& get_norm_host();
     const Field& get_norm_path() { return path_norm; }
     const Field& get_norm_query() { return query_norm; }
     const Field& get_norm_fragment() { return fragment_norm; }

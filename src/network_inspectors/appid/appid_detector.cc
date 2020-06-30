@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -17,7 +17,7 @@
 // 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 //--------------------------------------------------------------------------
 
-// client_detector.cc author davis mcpherson
+// appid_detector.cc author davis mcpherson
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -25,11 +25,13 @@
 
 #include "appid_detector.h"
 
+#include "managers/inspector_manager.h"
 #include "protocols/packet.h"
 
 #include "app_info_table.h"
 #include "appid_config.h"
 #include "appid_http_session.h"
+#include "appid_inspector.h"
 #include "lua_detector_api.h"
 
 using namespace snort;
@@ -45,8 +47,14 @@ int AppIdDetector::initialize()
             handler->register_udp_pattern(this, pat.pattern, pat.length, pat.index, pat.nocase);
 
     if (!appid_registry.empty())
+    {
+        // FIXIT-M: RELOAD - to support ODP reload, store ODP context in AppIdDetector
+        AppIdInspector* inspector = (AppIdInspector*) InspectorManager::get_inspector(MOD_NAME);
+        assert(inspector);
+        AppIdContext& ctxt = inspector->get_ctxt();
         for (auto& id : appid_registry)
-            register_appid(id.appId, id.additionalInfo);
+            register_appid(id.appId, id.additionalInfo, ctxt.get_odp_ctxt());
+      }
 
     if (!service_ports.empty())
         for (auto& port: service_ports)
@@ -64,14 +72,6 @@ void* AppIdDetector::data_get(AppIdSession& asd)
 int AppIdDetector::data_add(AppIdSession& asd, void* data, AppIdFreeFCN fcn)
 {
     return asd.add_flow_data(data, flow_data_index, fcn);
-}
-
-void AppIdDetector::add_info(AppIdSession& asd, const char* info, AppidChangeBits& change_bits)
-{
-    AppIdHttpSession* hsession = asd.get_http_session();
-
-    if ( !hsession->get_field(MISC_URL_FID) )
-        hsession->set_field(MISC_URL_FID, new std::string(info), change_bits);
 }
 
 void AppIdDetector::add_user(AppIdSession& asd, const char* username, AppId appId, bool success)

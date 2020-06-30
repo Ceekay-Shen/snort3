@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -59,12 +59,7 @@ public:
     static void add_plugin(const snort::IpsApi*);
     static void dump_plugins();
     static void release_plugins();
-
     static void instantiate(const snort::IpsApi*, snort::Module*, snort::SnortConfig*);
-
-    static bool get_option(
-        snort::SnortConfig*, struct OptTreeNode*, SnortProtocolId,
-        const char* keyword, char* args, snort::RuleOptType&);
 
     static bool option_begin(snort::SnortConfig*, const char* key, SnortProtocolId);
     static bool option_set(
@@ -75,12 +70,15 @@ public:
     static void delete_option(snort::IpsOption*);
     static const char* get_option_keyword();
 
-    static void global_init(snort::SnortConfig*);
-    static void global_term(snort::SnortConfig*);
+    SO_PUBLIC static const snort::IpsApi* get_option_api(const char* keyword);
+
+    static void global_init(const snort::SnortConfig*);
+    static void global_term(const snort::SnortConfig*);
 
     static void reset_options();
-    static void setup_options();
-    static void clear_options();
+    static void setup_options(const snort::SnortConfig*);
+    static void clear_options(const snort::SnortConfig*);
+
     static bool verify(snort::SnortConfig*);
 
 #ifdef PIGLET

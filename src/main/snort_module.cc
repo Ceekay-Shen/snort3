@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -38,6 +38,7 @@
 #include "parser/parser.h"
 #include "parser/parse_utils.h"
 #include "parser/vars.h"
+#include "trace/trace_config.h"
 
 #ifdef UNIT_TEST
 #include "catch/unit_test.h"
@@ -61,6 +62,14 @@ static const Parameter s_reload[] =
 {
     { "filename", Parameter::PT_STRING, nullptr, nullptr,
       "name of file to load" },
+
+    { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
+};
+
+static const Parameter s_reload_w_path[] =
+{
+    { "filename", Parameter::PT_STRING, "(optional)", nullptr,
+      "[<plugin path>] name of file to load" },
 
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
 };
@@ -98,7 +107,7 @@ static const Command snort_cmds[] =
 
     { "dump_stats", main_dump_stats, nullptr, "show summary statistics" },
     { "rotate_stats", main_rotate_stats, nullptr, "roll perfmonitor log files" },
-    { "reload_config", main_reload_config, s_reload, "load new configuration" },
+    { "reload_config", main_reload_config, s_reload_w_path, "load new configuration" },
     { "reload_policy", main_reload_policy, s_reload, "reload part or all of the default policy" },
     { "reload_module", main_reload_module, s_module, "reload module" },
     { "reload_daq", main_reload_daq, nullptr, "reload daq module" },
@@ -168,6 +177,14 @@ static const Command snort_cmds[] =
 // things like waiting on stdin for input that won't be coming.  in these
 // cases the default must only be indicated in the help.
 //-------------------------------------------------------------------------
+
+static const TraceOption snort_trace_options[] =
+{
+    { "main", TRACE_MAIN, "enable main trace logging" },
+    { "inspector_manager", TRACE_INSPECTOR_MANAGER, "enable inspector manager trace logging" },
+
+    { nullptr, 0, nullptr }
+};
 
 static const Parameter s_params[] =
 {
@@ -242,7 +259,7 @@ static const Parameter s_params[] =
       "enable inline mode operation" },
 
     { "-q", Parameter::PT_IMPLIED, nullptr, nullptr,
-      "quiet mode - Don't show banner and status report" },
+      "quiet mode - suppress normal logging on stdout" },
 
     { "-R", Parameter::PT_STRING, nullptr, nullptr,
       "<rules> include this rules file in the default policy" },
@@ -337,6 +354,15 @@ static const Parameter s_params[] =
     { "--dump-defaults", Parameter::PT_STRING, "(optional)", nullptr,
       "[<module prefix>] output module defaults in Lua format" },
 
+    { "--dump-rule-deps", Parameter::PT_IMPLIED, nullptr, nullptr,
+      "dump rule dependencies in json format for use by other tools" },
+
+    { "--dump-rule-meta", Parameter::PT_IMPLIED, nullptr, nullptr,
+      "dump configured rule info in json format for use by other tools" },
+
+    { "--dump-rule-state", Parameter::PT_IMPLIED, nullptr, nullptr,
+      "dump configured rule state in json format for use by other tools" },
+
     { "--dump-version", Parameter::PT_IMPLIED, nullptr, nullptr,
       "output the version, the whole version, and only the version" },
 
@@ -344,7 +370,7 @@ static const Parameter s_params[] =
       "enable Inline-Test Mode Operation" },
 
     { "--gen-msg-map", Parameter::PT_IMPLIED, nullptr, nullptr,
-      "dump builtin rules in gen-msg.map format for use by other tools" },
+      "dump configured rules in gen-msg.map format for use by other tools" },
 
     { "--help", Parameter::PT_IMPLIED, nullptr, nullptr,
       "list command line options" },
@@ -419,6 +445,9 @@ static const Parameter s_params[] =
     { "--mem-check", Parameter::PT_IMPLIED, nullptr, nullptr,
       "like -T but also compile search engines" },
 
+    { "--metadata-filter", Parameter::PT_STRING, nullptr, nullptr,
+      "<filter> load only rules containing filter string in metadata if set" },
+
     { "--nostamps", Parameter::PT_IMPLIED, nullptr, nullptr,
       "don't include timestamps in log file names" },
 
@@ -450,9 +479,6 @@ static const Parameter s_params[] =
 
     { "--pcap-no-filter", Parameter::PT_IMPLIED, nullptr, nullptr,
       "reset to use no filter when getting pcaps from file or directory" },
-
-    { "--pcap-reload", Parameter::PT_IMPLIED, nullptr, nullptr,
-      "if reading multiple pcaps, reload snort config between pcaps" },
 
     { "--pcap-show", Parameter::PT_IMPLIED, nullptr, nullptr,
       "print a line saying what pcap is currently being read" },
@@ -536,6 +562,9 @@ static const Parameter s_params[] =
     { "--warn-conf", Parameter::PT_IMPLIED, nullptr, nullptr,
       "warn about configuration issues" },
 
+    { "--warn-conf-strict", Parameter::PT_IMPLIED, nullptr, nullptr,
+      "warn about unrecognized elements in configuration files" },
+
     { "--warn-daq", Parameter::PT_IMPLIED, nullptr, nullptr,
       "warn about DAQ issues, usually related to mode" },
 
@@ -586,12 +615,12 @@ static const Parameter s_params[] =
     "command line configuration"
 #endif
 
-Trace TRACE_NAME(snort);
+THREAD_LOCAL const Trace* snort_trace = nullptr;
 
 class SnortModule : public Module
 {
 public:
-    SnortModule() : Module(s_name, s_help, s_params, false, &TRACE_NAME(snort))
+    SnortModule() : Module(s_name, s_help, s_params)
     { }
 
 #ifdef SHELL
@@ -620,9 +649,20 @@ public:
     Usage get_usage() const override
     { return GLOBAL; }
 
+    void set_trace(const Trace*) const override;
+    const TraceOption* get_trace_options() const override;
+
 private:
     SFDAQModuleConfig* module_config;
 };
+
+void SnortModule::set_trace(const Trace* trace) const
+{ snort_trace = trace; }
+
+const TraceOption* SnortModule::get_trace_options() const
+{
+    return snort_trace_options;
+}
 
 bool SnortModule::begin(const char* fqn, int, SnortConfig*)
 {
@@ -826,6 +866,22 @@ bool SnortModule::set(const char*, Value& v, SnortConfig* sc)
     else if ( v.is("--dump-defaults") )
         dump_defaults(sc, v.get_string());
 
+    else if ( v.is("--dump-rule-deps") )
+    {
+        sc->run_flags |= (RUN_FLAG__DUMP_RULE_DEPS | RUN_FLAG__TEST);
+        sc->set_quiet(true);
+    }
+    else if ( v.is("--dump-rule-meta") )
+    {
+        sc->run_flags |= (RUN_FLAG__DUMP_RULE_META | RUN_FLAG__TEST);
+        sc->output_flags |= OUTPUT_FLAG__ALERT_REFS;
+        sc->set_quiet(true);
+    }
+    else if ( v.is("--dump-rule-state") )
+    {
+        sc->run_flags |= (RUN_FLAG__DUMP_RULE_STATE | RUN_FLAG__TEST);
+        sc->set_quiet(true);
+    }
     else if ( v.is("--dump-version") )
         dump_version(sc);
 
@@ -833,8 +889,11 @@ bool SnortModule::set(const char*, Value& v, SnortConfig* sc)
         sc->run_flags |= RUN_FLAG__INLINE_TEST;
 
     else if ( v.is("--gen-msg-map") )
-        dump_msg_map(sc, v.get_string());
-
+    {
+        sc->run_flags |= (RUN_FLAG__DUMP_MSG_MAP | RUN_FLAG__TEST);
+        sc->output_flags |= OUTPUT_FLAG__ALERT_REFS;
+        sc->set_quiet(true);
+    }
     else if ( v.is("--help") )
         help_basic(sc, v.get_string());
 
@@ -901,6 +960,9 @@ bool SnortModule::set(const char*, Value& v, SnortConfig* sc)
     else if ( v.is("--mem-check") )
         sc->run_flags |= (RUN_FLAG__TEST | RUN_FLAG__MEM_CHECK);
 
+    else if ( v.is("--metadata-filter") )
+        sc->metadata_filter = v.get_string();
+
     else if ( v.is("--nostamps") )
         sc->set_no_logging_timestamps(true);
 
@@ -933,9 +995,6 @@ bool SnortModule::set(const char*, Value& v, SnortConfig* sc)
 
     else if ( v.is("--pcap-no-filter") )
         Trough::set_filter(nullptr);
-
-    else if ( v.is("--pcap-reload") )
-        sc->run_flags |= RUN_FLAG__PCAP_RELOAD;
 
     else if ( v.is("--pcap-show") )
         sc->run_flags |= RUN_FLAG__PCAP_SHOW;
@@ -1011,6 +1070,9 @@ bool SnortModule::set(const char*, Value& v, SnortConfig* sc)
     else if ( v.is("--warn-conf") )
         sc->warning_flags |= (1 << WARN_CONF);
 
+    else if ( v.is("--warn-conf-strict") )
+        sc->warning_flags |= (1 << WARN_CONF_STRICT);
+
     else if ( v.is("--warn-daq") )
         sc->warning_flags |= (1 << WARN_DAQ);
 
@@ -1040,9 +1102,6 @@ bool SnortModule::set(const char*, Value& v, SnortConfig* sc)
 
     else if ( v.is("--x2s") )
         x2s(v.get_string());
-
-    else if (v.is("--trace"))
-        Module::enable_trace();
 
     return true;
 }

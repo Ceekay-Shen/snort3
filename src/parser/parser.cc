@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2013-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -27,6 +27,8 @@
 
 #include <cassert>
 #include <iostream>
+#include <sstream>
+#include <string>
 
 #include "detection/fp_config.h"
 #include "detection/rules.h"
@@ -34,7 +36,8 @@
 #include "filters/detection_filter.h"
 #include "filters/rate_filter.h"
 #include "filters/sfthreshold.h"
-#include "hash/hashfcn.h"
+#include "hash/ghash.h"
+#include "hash/hash_key_operations.h"
 #include "hash/xhash.h"
 #include "helpers/directory.h"
 #include "log/messages.h"
@@ -52,7 +55,6 @@
 #include "utils/util_cstring.h"
 
 #include "config_file.h"
-#include "mstring.h"
 #include "parse_conf.h"
 #include "parse_rule.h"
 #include "parse_stream.h"
@@ -64,6 +66,70 @@ static struct rule_index_map_t* ruleIndexMap = nullptr;
 
 static std::string s_aux_rules;
 
+class RuleTreeHashKeyOps : public HashKeyOperations
+{
+public:
+    RuleTreeHashKeyOps(int rows)
+        : HashKeyOperations(rows)
+    { }
+
+    unsigned do_hash(const unsigned char* k, int) override
+    {
+        uint32_t a,b,c;
+        const RuleTreeNodeKey* rtnk = (const RuleTreeNodeKey*)k;
+        RuleTreeNode* rtn = rtnk->rtn;
+
+        a = rtn->action;
+        b = rtn->flags;
+        c = (uint32_t)(uintptr_t)rtn->listhead;
+
+        mix(a,b,c);
+
+        a += (uint32_t)(uintptr_t)rtn->src_portobject;
+        b += (uint32_t)(uintptr_t)rtn->dst_portobject;
+        c += (uint32_t)(uintptr_t)rtnk->policyId;
+
+        finalize(a,b,c);
+
+        return c;
+    }
+
+    bool key_compare(const void* k1, const void* k2, size_t) override
+    {
+        assert(k1 && k2);
+
+        const RuleTreeNodeKey* rtnk1 = (const RuleTreeNodeKey*)k1;
+        const RuleTreeNodeKey* rtnk2 = (const RuleTreeNodeKey*)k2;
+
+        if (rtnk1->policyId != rtnk2->policyId)
+            return false;
+
+        if (same_headers(rtnk1->rtn, rtnk2->rtn))
+            return true;
+
+        return false;
+    }
+};
+
+class RuleTreeCache : public XHash
+{
+public:
+    RuleTreeCache(int rows, int key_len)
+        : XHash(rows, key_len)
+    {
+        initialize(new RuleTreeHashKeyOps(nrows));
+        anr_enabled = false;
+    }
+};
+
+struct PolicyRuleStats
+{
+    const char* file;
+    int loaded;
+    int shared;
+    int enabled;
+};
+
 //-------------------------------------------------------------------------
 // private / implementation methods
 //-------------------------------------------------------------------------
@@ -73,9 +139,9 @@ static void FreeRuleTreeNodes(SnortConfig* sc)
     if ( !sc->otn_map )
         return;
 
-    for ( GHashNode* hashNode = ghash_findfirst(sc->otn_map);
-        hashNode;
-        hashNode = ghash_findnext(sc->otn_map) )
+    for (GHashNode* hashNode = sc->otn_map->find_first();
+         hashNode;
+         hashNode = sc->otn_map->find_next())
     {
         OptTreeNode* otn = (OptTreeNode*)hashNode->data;
 
@@ -188,16 +254,12 @@ static void OtnInit(SnortConfig* sc)
 
     /* Init sid-gid -> otn map */
     sc->otn_map = OtnLookupNew();
-    if (sc->otn_map == nullptr)
-        ParseAbort("otn_map ghash_new failed.");
 }
 
-static RuleListNode* addNodeToOrderedList(RuleListNode* ordered_list,
-    RuleListNode* node, int evalIndex)
+static RuleListNode* addNodeToOrderedList
+    (RuleListNode* ordered_list, RuleListNode* node, unsigned evalIndex)
 {
-    RuleListNode* prev;
-
-    prev = ordered_list;
+    RuleListNode* prev = ordered_list;
 
     /* set the eval order for this rule set */
     node->evalIndex = evalIndex;
@@ -253,8 +315,9 @@ void parser_term(SnortConfig*)
 SnortConfig* ParseSnortConf(const SnortConfig* boot_conf, const char* fname, bool is_fatal)
 {
     SnortConfig* sc = new SnortConfig(SnortConfig::get_conf()->proto_ref);
-    SnortConfig::set_parser_conf(sc);
 
+    sc->run_flags = boot_conf->run_flags;
+    sc->output_flags = boot_conf->output_flags;
     sc->logging_flags = boot_conf->logging_flags;
     sc->tweaks = boot_conf->tweaks;
 
@@ -329,6 +392,7 @@ void FreeRuleTreeNode(RuleTreeNode* rtn)
         idx = idx->next;
         delete tmp;
     }
+    delete rtn->header;
 }
 
 void DestroyRuleTreeNode(RuleTreeNode* rtn)
@@ -391,6 +455,9 @@ void ParseRules(SnortConfig* sc)
             parse_stream(std::cin, sc);
             pop_parse_location();
         }
+
+        p->rules_loaded = get_policy_loaded_rule_count();
+        p->rules_shared = get_policy_shared_rule_count();
     }
 
     set_ips_policy(sc, 0);
@@ -399,6 +466,66 @@ void ParseRules(SnortConfig* sc)
     PortTablesFinish(sc->port_tables, sc->fast_pattern_config);
 
     parse_rule_print();
+}
+
+void ShowPolicyStats(const SnortConfig* sc)
+{
+    std::unordered_map<PolicyId, int> stats;
+    std::multimap<PolicyId, PolicyRuleStats> sorted_stats;
+
+    if ( !sc->otn_map )
+        return;
+
+    for (auto node = sc->otn_map->find_first(); node; node = sc->otn_map->find_next())
+    {
+        const OptTreeNode* otn = (const OptTreeNode*)node->data;
+        if ( !otn )
+            continue;
+
+        for (PolicyId id = 0; id < otn->proto_node_num; id++)
+        {
+            const auto rtn = getRtnFromOtn(otn, id);
+
+            if ( rtn and rtn->enabled() )
+                stats[id]++;
+        }
+    }
+
+    for (unsigned i = 0; i < sc->policy_map->ips_policy_count(); i++)
+    {
+        auto policy = sc->policy_map->get_ips_policy(i);
+        if ( !policy )
+            continue;
+
+        auto shell = sc->policy_map->get_shell_by_policy(i);
+        if ( !shell )
+            continue;
+
+        auto file = shell->get_file();
+        if ( !file or !file[0] )
+            continue;
+
+        auto id = policy->user_policy_id;
+        auto rules_loaded = policy->rules_loaded;
+        auto rules_shared = policy->rules_shared;
+
+        auto res = stats.find(i);
+        auto rules_enabled = (res == stats.end()) ? 0 : res->second;
+
+        if ( rules_loaded or rules_shared or rules_enabled )
+            sorted_stats.emplace(id, PolicyRuleStats{file, rules_loaded,
+                rules_shared, rules_enabled});
+    }
+
+    if ( !sorted_stats.size() )
+        return;
+
+    LogLabel("ips policies rule stats");
+    LogMessage("%16s%8s%8s%8s%8s\n", "id", "loaded", "shared", "enabled", "file");
+
+    for (const auto& s : sorted_stats)
+        LogMessage("%16u%8d%8d%8d%4s%s\n", s.first, s.second.loaded, s.second.shared,
+            s.second.enabled, " ", s.second.file);
 }
 
 /****************************************************************************
@@ -414,10 +541,10 @@ void ParseRules(SnortConfig* sc)
  * Returns: the ListHead for the rule type
  *
  ***************************************************************************/
-ListHead* CreateRuleType(SnortConfig* sc, const char* name, Actions::Type mode)
+RuleListNode* CreateRuleType(SnortConfig* sc, const char* name, Actions::Type mode, bool is_plugin_action)
 {
     RuleListNode* node;
-    int evalIndex = 0;
+    unsigned evalIndex = 0;
 
     if (sc == nullptr)
         return nullptr;
@@ -437,11 +564,10 @@ ListHead* CreateRuleType(SnortConfig* sc, const char* name, Actions::Type mode)
 
         do
         {
-            /* We do not allow multiple rules types with the same name. */
             if (strcasecmp(tmp->name, name) == 0)
             {
                 snort_free(node);
-                return nullptr;
+                return tmp;
             }
 
             evalIndex++;
@@ -455,6 +581,7 @@ ListHead* CreateRuleType(SnortConfig* sc, const char* name, Actions::Type mode)
 
     node->RuleList = (ListHead*)snort_calloc(sizeof(ListHead));
     node->RuleList->ruleListNode = node;
+    node->RuleList->is_plugin_action = is_plugin_action;
     node->mode = mode;
     node->name = snort_strdup(name);
     node->evalIndex = evalIndex;
@@ -462,7 +589,7 @@ ListHead* CreateRuleType(SnortConfig* sc, const char* name, Actions::Type mode)
     sc->evalOrder[node->mode] =  evalIndex;
     sc->num_rule_types++;
 
-    return node->RuleList;
+    return node;
 }
 
 void FreeRuleLists(SnortConfig* sc)
@@ -495,19 +622,19 @@ void OrderRuleLists(SnortConfig* sc)
 
     const char* order = sc->rule_order.c_str();
     if ( !*order )
-        order = "pass drop alert log";  // FIXIT-H apply builtin module defaults
+        order = "pass drop alert log";  // FIXIT-M apply builtin module defaults
 
-    int num_toks;
-    char** toks = mSplit(order, " \t", 0, &num_toks, 0);
+    std::stringstream ss(order);
+    std::string tok;
 
-    for ( int i = 0; i < num_toks; i++ )
+    while ( ss >> tok )
     {
         RuleListNode* prev = nullptr;
         RuleListNode* node = sc->rule_lists;
 
         while (node != nullptr)
         {
-            if (strcmp(toks[i], node->name) == 0)
+            if ( tok == node->name )
             {
                 if (prev == nullptr)
                     sc->rule_lists = node->next;
@@ -526,8 +653,6 @@ void OrderRuleLists(SnortConfig* sc)
         }
         // ignore rule types that aren't in use
     }
-
-    mSplitFree(&toks, num_toks);
 
     /* anything left in the rule lists needs to be moved to the ordered lists */
     while (sc->rule_lists != nullptr)
@@ -556,7 +681,7 @@ RuleTreeNode* deleteRtnFromOtn(OptTreeNode* otn, PolicyId policyId, SnortConfig*
             {
                 assert(sc and sc->rtn_hash_table);
                 RuleTreeNodeKey key { rtn, policyId };
-                xhash_remove(sc->rtn_hash_table, &key);
+                sc->rtn_hash_table->release_node(&key);
             }
         }
         return rtn;
@@ -567,44 +692,6 @@ RuleTreeNode* deleteRtnFromOtn(OptTreeNode* otn, PolicyId policyId, SnortConfig*
 RuleTreeNode* deleteRtnFromOtn(OptTreeNode* otn, SnortConfig* sc)
 {
     return deleteRtnFromOtn(otn, get_ips_policy()->policy_id, sc);
-}
-
-static uint32_t rtn_hash_func(HashFnc*, const unsigned char* k, int)
-{
-    uint32_t a,b,c;
-    const RuleTreeNodeKey* rtnk = (const RuleTreeNodeKey*)k;
-    RuleTreeNode* rtn = rtnk->rtn;
-
-    a = rtn->action;
-    b = rtn->flags;
-    c = (uint32_t)(uintptr_t)rtn->listhead;
-
-    mix(a,b,c);
-
-    a += (uint32_t)(uintptr_t)rtn->src_portobject;
-    b += (uint32_t)(uintptr_t)rtn->dst_portobject;
-    c += (uint32_t)(uintptr_t)rtnk->policyId;
-
-    finalize(a,b,c);
-
-    return c;
-}
-
-static int rtn_compare_func(const void* k1, const void* k2, size_t)
-{
-    const RuleTreeNodeKey* rtnk1 = (const RuleTreeNodeKey*)k1;
-    const RuleTreeNodeKey* rtnk2 = (const RuleTreeNodeKey*)k2;
-
-    if (!rtnk1 || !rtnk2)
-        return 1;
-
-    if (rtnk1->policyId != rtnk2->policyId)
-        return 1;
-
-    if (same_headers(rtnk1->rtn, rtnk2->rtn))
-        return 0;
-
-    return 1;
 }
 
 int addRtnToOtn(SnortConfig* sc, OptTreeNode* otn, RuleTreeNode* rtn, PolicyId policyId)
@@ -631,7 +718,6 @@ int addRtnToOtn(SnortConfig* sc, OptTreeNode* otn, RuleTreeNode* rtn, PolicyId p
     }
 
     RuleTreeNode* curr = otn->proto_nodes[policyId];
-
     if ( curr )
     {
         deleteRtnFromOtn(otn, policyId, sc, (curr->otnRefCount == 1));
@@ -641,21 +727,13 @@ int addRtnToOtn(SnortConfig* sc, OptTreeNode* otn, RuleTreeNode* rtn, PolicyId p
     rtn->otnRefCount++;
 
     if (!sc->rtn_hash_table)
-    {
-        sc->rtn_hash_table = xhash_new(
-            10000, sizeof(RuleTreeNodeKey), 0, 0, 0, nullptr, nullptr, 1);
-
-        if (sc->rtn_hash_table == nullptr)
-            FatalError("Failed to create rule tree node hash table\n");
-
-        xhash_set_keyops(sc->rtn_hash_table, rtn_hash_func, rtn_compare_func);
-    }
+        sc->rtn_hash_table = new RuleTreeCache(10000, sizeof(RuleTreeNodeKey));
 
     RuleTreeNodeKey key;
     memset(&key, 0, sizeof(key));
     key.rtn = rtn;
     key.policyId = policyId;
-    xhash_add(sc->rtn_hash_table, &key, rtn);
+    sc->rtn_hash_table->insert(&key, rtn);
 
     return 0;
 }

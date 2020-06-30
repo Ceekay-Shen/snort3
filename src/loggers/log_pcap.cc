@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 // Copyright (C) 1998-2002 Martin Roesch <roesch@sourcefire.com>
 //
@@ -24,6 +24,7 @@
 
 #include <pcap.h>
 
+#include "detection/ips_context.h"
 #include "framework/logger.h"
 #include "framework/module.h"
 #include "log/messages.h"
@@ -93,10 +94,10 @@ public:
     bool begin(const char*, int, SnortConfig*) override;
 
     Usage get_usage() const override
-    { return CONTEXT; }
+    { return GLOBAL; }
 
 public:
-    size_t limit;
+    size_t limit = 0;
 };
 
 bool TcpdumpModule::set(const char*, Value& v, SnortConfig*)
@@ -140,7 +141,7 @@ static void LogTcpdumpSingle(
     pcap_dump((uint8_t*)context.dumpd, &pcaphdr, p->pkt);
     context.size += dumpSize;
 
-    if (!SnortConfig::line_buffered_logging())  // FIXIT-L misnomer
+    if (!p->context->conf->line_buffered_logging())  // FIXIT-L misnomer
     {
         fflush( (FILE*)context.dumpd);
     }
@@ -272,7 +273,7 @@ PcapLogger::~PcapLogger()
 
 void PcapLogger::open()
 {
-    TcpdumpInitLogFile(config, SnortConfig::output_no_timestamp());
+    TcpdumpInitLogFile(config, SnortConfig::get_conf()->output_no_timestamp());
 }
 
 void PcapLogger::close()
@@ -318,7 +319,7 @@ static Module* mod_ctor()
 static void mod_dtor(Module* m)
 { delete m; }
 
-static Logger* tcpdump_ctor(SnortConfig*, Module* mod)
+static Logger* tcpdump_ctor(Module* mod)
 { return new PcapLogger((TcpdumpModule*)mod); }
 
 static void tcpdump_dtor(Logger* p)

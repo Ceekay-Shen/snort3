@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -75,10 +75,10 @@ static const RuleMap ipv6_rules[] =
     { 0, nullptr }
 };
 
-class Ipv6Module : public CodecModule
+class Ipv6Module : public BaseCodecModule
 {
 public:
-    Ipv6Module() : CodecModule(CD_IPV6_NAME, CD_IPV6_HELP) { }
+    Ipv6Module() : BaseCodecModule(CD_IPV6_NAME, CD_IPV6_HELP) { }
 
     const RuleMap* get_rules() const override
     { return ipv6_rules; }
@@ -149,7 +149,7 @@ bool Ipv6Codec::decode(const RawData& raw, CodecData& codec, DecodeData& snort)
         return false;
     }
 
-    if ( SnortConfig::get_conf()->hit_ip_maxlayers(codec.ip_layer_cnt) )
+    if ( codec.conf->hit_ip_maxlayers(codec.ip_layer_cnt) )
     {
         codec_event(codec, DECODE_IP_MULTIPLE_ENCAPSULATION);
         return false;
@@ -187,7 +187,7 @@ bool Ipv6Codec::decode(const RawData& raw, CodecData& codec, DecodeData& snort)
         /* If the previous layer was not IP-in-IP, this is not a 6-in-4 tunnel */
         if ( codec.codec_flags & CODEC_NON_IP_TUNNEL )
             codec.codec_flags &= ~CODEC_NON_IP_TUNNEL;
-        else if ( SnortConfig::tunnel_bypass_enabled(TUNNEL_6IN4) )
+        else if ( codec.conf->tunnel_bypass_enabled(TUNNEL_6IN4) )
             codec.tunnel_bypass = true;
     }
     else if (snort.ip_api.is_ip6())
@@ -195,7 +195,7 @@ bool Ipv6Codec::decode(const RawData& raw, CodecData& codec, DecodeData& snort)
         /* If the previous layer was not IP-in-IP, this is not a 6-in-6 tunnel */
         if ( codec.codec_flags & CODEC_NON_IP_TUNNEL )
             codec.codec_flags &= ~CODEC_NON_IP_TUNNEL;
-        else if (SnortConfig::tunnel_bypass_enabled(TUNNEL_6IN6))
+        else if (codec.conf->tunnel_bypass_enabled(TUNNEL_6IN6))
             codec.tunnel_bypass = true;
     }
 
@@ -542,7 +542,7 @@ void Ipv6Codec::log(TextLog* const text_log, const uint8_t* raw_pkt,
     const ip::IP6Hdr* const ip6h = reinterpret_cast<const ip::IP6Hdr*>(raw_pkt);
 
     // FIXIT-RC this does NOT obfuscate correctly
-    if (SnortConfig::obfuscate())
+    if (SnortConfig::get_conf()->obfuscate())
     {
         TextLog_Print(text_log, "x:x:x:x::x:x:x:x -> x:x:x:x::x:x:x:x");
     }
@@ -622,7 +622,6 @@ void Ipv6Codec::update(const ip::IpApi&, const EncodeFlags flags,
     // in such case we do not modify the packet length.
     if ( (flags & UPD_MODIFIED) && !(flags & UPD_RESIZED) )
     {
-        // FIXIT-H this worked in Snort.  In Snort++, will this be accurate?
         updated_len = ntohs(h->ip6_payload_len) + ip::IP6_HEADER_LEN;
     }
     else

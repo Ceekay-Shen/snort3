@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -101,7 +101,7 @@ void HttpStreamSplitter::chunk_spray(HttpFlowData* session_data, uint8_t* buffer
             decompress_copy(buffer, session_data->section_offset[source_id], data+k, skip_amount,
                 session_data->compression[source_id], session_data->compress_stream[source_id],
                 at_start, session_data->get_infractions(source_id),
-                session_data->get_events(source_id));
+                session_data->events[source_id]);
             if ((expected -= skip_amount) == 0)
                 curr_state = CHUNK_DCRLF1;
             k += skip_amount-1;
@@ -131,7 +131,7 @@ void HttpStreamSplitter::chunk_spray(HttpFlowData* session_data, uint8_t* buffer
             decompress_copy(buffer, session_data->section_offset[source_id], data+k, skip_amount,
                 session_data->compression[source_id], session_data->compress_stream[source_id],
                 at_start, session_data->get_infractions(source_id),
-                session_data->get_events(source_id));
+                session_data->events[source_id]);
             k += skip_amount-1;
             break;
           }
@@ -231,7 +231,7 @@ const StreamBuffer HttpStreamSplitter::reassemble(Flow* flow, unsigned total,
 
     copied = len;
 
-    HttpFlowData* session_data = (HttpFlowData*)flow->get_flow_data(HttpFlowData::inspector_id);
+    HttpFlowData* session_data = HttpInspect::http_get_flow_data(flow);
     assert(session_data != nullptr);
 
 #ifdef REG_TEST
@@ -268,13 +268,19 @@ const StreamBuffer HttpStreamSplitter::reassemble(Flow* flow, unsigned total,
         }
         else
         {
-            printf("Reassemble from flow data %" PRIu64
+            fprintf(HttpTestManager::get_output_file(), "Reassemble from flow data %" PRIu64
                 " direction %d total %u length %u partial %d\n", session_data->seq_num, source_id,
                 total, len, session_data->partial_flush[source_id]);
-            fflush(stdout);
+            fflush(HttpTestManager::get_output_file());
         }
     }
 #endif
+
+    assert(session_data->type_expected[source_id] != SEC_ABORT);
+    if (session_data->section_type[source_id] == SEC__NOT_COMPUTE)
+    {
+        return { nullptr, 0 };
+    }
 
     // Sometimes it is necessary to reassemble zero bytes when a connection is closing to trigger
     // proper clean up. But even a zero-length buffer cannot be processed with a nullptr lest we
@@ -283,26 +289,19 @@ const StreamBuffer HttpStreamSplitter::reassemble(Flow* flow, unsigned total,
     if (data == nullptr)
         data = (const uint8_t*)"";
 
-    // FIXIT-H Workaround for TP Bug 149662
-    if (session_data->section_type[source_id] == SEC__NOT_COMPUTE)
-    {
-        return { nullptr, 0 };
-    }
-
-    assert(session_data->section_type[source_id] != SEC__NOT_COMPUTE);
     uint8_t*& partial_buffer = session_data->partial_buffer[source_id];
     uint32_t& partial_buffer_length = session_data->partial_buffer_length[source_id];
     uint32_t& partial_raw_bytes = session_data->partial_raw_bytes[source_id];
     assert(partial_raw_bytes + total <= MAX_OCTETS);
 
-    // FIXIT-H this is a precaution/workaround for stream issues. When they are fixed replace this
+    // FIXIT-E this is a precaution/workaround for stream issues. When they are fixed replace this
     // block with an assert.
     if ((session_data->section_offset[source_id] == 0) &&
         (session_data->octets_expected[source_id] != partial_raw_bytes + total))
     {
         if (session_data->octets_expected[source_id] == 0)
         {
-            // FIXIT-H This is a known problem. No data was scanned and yet somehow stream can
+            // FIXIT-E This is a known problem. No data was scanned and yet somehow stream can
             // give us data when we ask for an empty message section. Dropping the unexpected data
             // enables us to send the HTTP headers through detection as originally planned.
             total = 0;
@@ -311,10 +310,10 @@ const StreamBuffer HttpStreamSplitter::reassemble(Flow* flow, unsigned total,
         else
         {
 #ifdef REG_TEST
-	    // FIXIT-M: known case: if session clears w/o a flush point,
-	    // stream_tcp will flush to paf max which could be well below what
-	    // has been scanned so far.  since no flush point was specified,
-	    // NHI should just deal with what it gets.
+            // FIXIT-M: known case: if session clears w/o a flush point,
+            // stream_tcp will flush to paf max which could be well below what
+            // has been scanned so far.  since no flush point was specified,
+            // NHI should just deal with what it gets.
             //assert(false);
 #endif
             return http_buf;
@@ -351,6 +350,7 @@ const StreamBuffer HttpStreamSplitter::reassemble(Flow* flow, unsigned total,
                 {
                     session_data->half_reset(source_id);
                 }
+                // FIXIT-M update this to include H2 message once H2I supports trailers and finish()
                 else if (session_data->type_expected[source_id] == SEC_BODY_CHUNK)
                 {
                     session_data->trailer_prep(source_id);
@@ -362,9 +362,12 @@ const StreamBuffer HttpStreamSplitter::reassemble(Flow* flow, unsigned total,
 
     HttpModule::increment_peg_counts(PEG_REASSEMBLE);
 
-    const bool is_body = (session_data->section_type[source_id] == SEC_BODY_CHUNK) ||
-                         (session_data->section_type[source_id] == SEC_BODY_CL) ||
-                         (session_data->section_type[source_id] == SEC_BODY_OLD);
+    const bool is_body =
+        (session_data->section_type[source_id] == SEC_BODY_CHUNK) ||
+        (session_data->section_type[source_id] == SEC_BODY_CL) ||
+        (session_data->section_type[source_id] == SEC_BODY_OLD) ||
+        (session_data->section_type[source_id] == SEC_BODY_H2);
+
     uint8_t*& buffer = session_data->section_buffer[source_id];
     if (buffer == nullptr)
     {
@@ -378,8 +381,6 @@ const StreamBuffer HttpStreamSplitter::reassemble(Flow* flow, unsigned total,
         }
     }
 
-    // FIXIT-H there is no support for partial flush with compression
-    assert((partial_buffer_length == 0) || (session_data->compression[source_id] == CMP_NONE));
     if (partial_buffer_length > 0)
     {
         assert(session_data->section_offset[source_id] == 0);
@@ -397,7 +398,7 @@ const StreamBuffer HttpStreamSplitter::reassemble(Flow* flow, unsigned total,
         decompress_copy(buffer, session_data->section_offset[source_id], data, len,
             session_data->compression[source_id], session_data->compress_stream[source_id],
             at_start, session_data->get_infractions(source_id),
-            session_data->get_events(source_id));
+            session_data->events[source_id]);
     }
     else
     {
@@ -424,6 +425,7 @@ const StreamBuffer HttpStreamSplitter::reassemble(Flow* flow, unsigned total,
 
         http_buf.data = buffer;
         http_buf.length = buf_size;
+        session_data->octets_reassembled[source_id] = buf_size;
 
         buffer = nullptr;
         session_data->section_offset[source_id] = 0;

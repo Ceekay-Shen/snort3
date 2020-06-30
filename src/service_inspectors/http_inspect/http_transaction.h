@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -22,6 +22,7 @@
 
 #include "http_common.h"
 #include "http_enum.h"
+#include "http_event.h"
 #include "http_flow_data.h"
 
 class HttpMsgRequest;
@@ -31,9 +32,6 @@ class HttpMsgTrailer;
 class HttpMsgSection;
 class HttpMsgBody;
 class HttpMsgHeadShared;
-class HttpEventGen;
-template <int MAX, int NONE> class Infractions;
-using HttpInfractions = Infractions<HttpEnums::INF__MAX_VALUE, HttpEnums::INF__NONE>;
 
 class HttpTransaction
 {
@@ -60,7 +58,6 @@ public:
     void set_body(HttpMsgBody* latest_body);
 
     HttpInfractions* get_infractions(HttpCommon::SourceId source_id);
-    HttpEventGen* get_events(HttpCommon::SourceId source_id);
 
     void set_one_hundred_response();
     bool final_response() const { return !second_response_expected; }
@@ -71,9 +68,22 @@ public:
 
     HttpTransaction* next = nullptr;
 
+    // Each file processed has a unique id per flow: hash(source_id, transaction_id, h2_stream_id)
+    // If this is an HTTP/1 flow, h2_stream_id is 0
+    void set_file_processing_id(const HttpCommon::SourceId source_id,
+        const uint64_t transaction_id, const uint32_t stream_id);
+    uint64_t get_file_processing_id(HttpCommon::SourceId source_id)
+        { return file_processing_id[source_id]; }
+
 private:
-    HttpTransaction() = default;
+    HttpTransaction(HttpFlowData* session_data_) : session_data(session_data_)
+    {
+        infractions[0] = nullptr;
+        infractions[1] = nullptr;
+    }
     void discard_section(HttpMsgSection* section);
+
+    HttpFlowData* const session_data;
 
     uint64_t active_sections = 0;
 
@@ -83,8 +93,9 @@ private:
     HttpMsgTrailer* trailer[2] = { nullptr, nullptr };
     HttpMsgBody* body_list = nullptr;
     HttpMsgSection* discard_list = nullptr;
-    HttpInfractions* infractions[2] = { nullptr, nullptr };
-    HttpEventGen* events[2] = { nullptr, nullptr };
+    HttpInfractions* infractions[2];
+
+    uint64_t file_processing_id[2] = { 0, 0 };
 
     bool response_seen = false;
     bool one_hundred_response = false;

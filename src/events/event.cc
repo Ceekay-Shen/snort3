@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2013-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -41,7 +41,7 @@ void SetEvent(
     event.sig_info->priority = priority;
 
     /* this one gets set automatically */
-    event.event_id = ++event_id | SnortConfig::get_event_log_id();
+    event.event_id = ++event_id | SnortConfig::get_conf()->get_event_log_id();
 
     if (event_ref)
         event.event_reference = event_ref;

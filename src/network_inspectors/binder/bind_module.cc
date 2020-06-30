@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -122,7 +122,7 @@ static const Parameter binder_use_params[] =
       "use ips policy from given file" },
 
     { "network_policy", Parameter::PT_STRING, nullptr, nullptr,
-      "use network policy from given file" },
+      "deprecated, ignored by binder" },
 
     { "service", Parameter::PT_STRING, nullptr, nullptr,
       "override automatic service identification" },
@@ -279,6 +279,8 @@ bool BinderModule::set(const char* fqn, Value& v, SnortConfig*)
     else if ( v.is("type") )
     {
         work->use.type = v.get_string();
+        if ( work->use.type == "gtp" )
+            work->use.type = "gtp_inspect";
         use_type_count++;
     }
     else
@@ -324,6 +326,15 @@ bool BinderModule::end(const char* fqn, int idx, SnortConfig* sc)
             return true;
         }
 
+        // FIXIT-D: remove this when network_policy binding is deleted from
+        // the binder's options
+        if ( work->use.type == NETWORK_KEY )
+        {
+            delete work;
+            work = nullptr;
+            return true;
+        }
+
         if ( unsplit_nets && work->when.split_nets )
             split_nets_warning();
 
@@ -342,7 +353,6 @@ bool BinderModule::end(const char* fqn, int idx, SnortConfig* sc)
             auto policies = sc->policy_map->add_shell(sh);
             work->use.inspection_index = policies->inspection->policy_id + 1;
             work->use.ips_index = policies->ips->policy_id + 1;
-            work->use.network_index = policies->network->policy_id + 1;
         }
         else if ( work->use.type == INSPECTION_KEY )
         {
@@ -353,11 +363,6 @@ bool BinderModule::end(const char* fqn, int idx, SnortConfig* sc)
         {
             Shell* sh = new Shell(work->use.name.c_str());
             work->use.ips_index = sc->policy_map->add_ips_shell(sh) + 1;
-        }
-        else if ( work->use.type == NETWORK_KEY )
-        {
-            Shell* sh = new Shell(work->use.name.c_str());
-            work->use.network_index = sc->policy_map->add_network_shell(sh) + 1;
         }
 
         if ( work->use.name.empty() )

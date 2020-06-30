@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -66,8 +66,8 @@ bool TcpStateFinWait2::ack_recv(TcpSegmentDescriptor& tsd, TcpStreamTracker& trk
 {
     if ( SEQ_GT(tsd.get_seg_ack(), trk.get_snd_nxt() ) )
     {
-        trk.normalizer.packet_dropper(tsd, NORM_TCP_BLOCK);
         trk.session->tel.set_tcp_event(EVENT_BAD_ACK);
+        trk.normalizer.packet_dropper(tsd, NORM_TCP_BLOCK);
         trk.session->set_pkt_action_flag(ACTION_BAD_PKT);
     }
     else
@@ -88,8 +88,8 @@ bool TcpStateFinWait2::data_seg_recv(TcpSegmentDescriptor& tsd, TcpStreamTracker
 {
     if ( SEQ_GT(tsd.get_seg_ack(), trk.get_snd_nxt() ) )
     {
-        trk.normalizer.packet_dropper(tsd, NORM_TCP_BLOCK);
         trk.session->tel.set_tcp_event(EVENT_BAD_ACK);
+        trk.normalizer.packet_dropper(tsd, NORM_TCP_BLOCK);
         trk.session->set_pkt_action_flag(ACTION_BAD_PKT);
     }
     else

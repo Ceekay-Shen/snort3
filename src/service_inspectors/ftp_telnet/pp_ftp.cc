@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2004-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -42,7 +42,7 @@
 
 #include "detection/detection_engine.h"
 #include "detection/detection_util.h"
-#include "hash/hashfcn.h"
+#include "hash/hash_key_operations.h"
 #include "file_api/file_service.h"
 #include "protocols/packet.h"
 #include "stream/stream.h"
@@ -1611,7 +1611,7 @@ int check_ftp(FTP_SESSION* ftpssn, Packet* p, int iMode)
                 /* Now grab the command parameters/response message
                  * read_ptr < end already checked */
                 req->param_begin = (const char*)read_ptr;
-                if ((read_ptr = (unsigned char*)memchr(read_ptr, CR, end - read_ptr)) == nullptr)
+                if ((read_ptr = (const unsigned char*)memchr(read_ptr, CR, end - read_ptr)) == nullptr)
                     read_ptr = end;
                 req->param_end = (const char*)read_ptr;
                 req->param_size = req->param_end - req->param_begin;

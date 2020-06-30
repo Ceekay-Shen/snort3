@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -24,6 +24,7 @@
 // LruCacheShared -- Implements a thread-safe unordered map where the
 // least-recently-used (LRU) entries are removed once a fixed size is hit.
 
+#include <atomic>
 #include <cassert>
 #include <list>
 #include <memory>
@@ -38,12 +39,13 @@ extern const PegInfo lru_cache_shared_peg_names[];
 
 struct LruCacheSharedStats
 {
-    PegCount adds = 0;       //  An insert that added new entry.
-    PegCount prunes = 0;     //  When an old entry is removed to make
-                             //  room for a new entry.
-    PegCount find_hits = 0;  //  Found entry in cache.
-    PegCount find_misses = 0; //  Did not find entry in cache.
-    PegCount removes = 0;    //  Found entry and removed it.
+    PegCount adds = 0;          // an insert that added new entry
+    PegCount alloc_prunes = 0;  // when an old entry is removed to make room for a new entry
+    PegCount find_hits = 0;     // found entry in cache
+    PegCount find_misses = 0;   // did not find entry in cache
+    PegCount reload_prunes = 0; // when an old entry is removed due to lower memcap during reload
+    PegCount removes = 0;       // found entry and removed it
+    PegCount replaced = 0;      // found entry and replaced it
 };
 
 template<typename Key, typename Value, typename Hash>
@@ -73,8 +75,8 @@ public:
     // Same as operator[]; additionally, sets the boolean if a new entry is created.
     Data find_else_create(const Key& key, bool* new_data);
 
-    // Returns true if found, takes a ref to a user managed entry
-    bool find_else_insert(const Key& key, std::shared_ptr<Value>& data);
+    // Returns true if found or replaced, takes a ref to a user managed entry
+    bool find_else_insert(const Key& key, std::shared_ptr<Value>& data, bool replace = false);
 
     // Return all data from the LruCache in order (most recently used to least)
     std::vector<std::pair<Key, Data> > get_all_data();
@@ -98,8 +100,8 @@ public:
         return max_size;
     }
 
-    //  Modify the maximum number of entries allowed in the cache.
-    //  If the size is reduced, the oldest entries are removed.
+    //  Modify the maximum number of entries allowed in the cache. If the size is reduced,
+    //  the oldest entries are removed. This pruning doesn't utilize reload resource tuner.
     bool set_max_size(size_t newsize);
 
     //  Remove entry associated with Key.
@@ -142,7 +144,7 @@ protected:
     size_t max_size;   // Once max_size elements are in the cache, start to
                        // remove the least-recently-used elements.
 
-    size_t current_size;    // Number of entries currently in the cache.
+    std::atomic<size_t> current_size;// Number of entries currently in the cache.
 
     std::mutex cache_mutex;
     LruList list;  //  Contains key/data pairs. Maintains LRU order with
@@ -151,7 +153,11 @@ protected:
 
     struct LruCacheSharedStats stats;
 
-    // These get called only from within the LRU and assume the LRU is locked.
+    // The reason for these functions is to allow derived classes to do their
+    // size book keeping differently (e.g. host_cache). This effectively
+    // decouples the current_size variable from the actual size in memory,
+    // so these functions should only be called when something is actually
+    // added or removed from memory (e.g. in find_else_insert, remove, etc).
     virtual void increase_size()
     {
         current_size++;
@@ -162,19 +168,20 @@ protected:
         current_size--;
     }
 
-    // Caller must lock and unlock.
-    void prune(std::list<Data>& data)
+    // Caller must lock and unlock. Don't use this during snort reload for which
+    // we need gradual pruning and size reduction via reload resource tuner.
+    void prune(std::vector<Data>& data)
     {
         LruListIter list_iter;
         assert(data.empty());
         while (current_size > max_size && !list.empty())
         {
             list_iter = --list.end();
-            data.push_back(list_iter->second); // increase reference count
+            data.emplace_back(list_iter->second); // increase reference count
             decrease_size();
             map.erase(list_iter->first);
             list.erase(list_iter);
-            stats.prunes++;
+            ++stats.alloc_prunes;
         }
     }
 };
@@ -186,9 +193,9 @@ bool LruCacheShared<Key, Value, Hash>::set_max_size(size_t newsize)
         return false;   //  Not allowed to set size to zero.
 
     // Like with remove(), we need local temporary references to data being
-    // deleted, to avoid race condition. This data list needs to self-destruct
+    // deleted, to avoid race condition. This data needs to self-destruct
     // after the cache_lock does.
-    std::list<Data> data;
+    std::vector<Data> data;
 
     std::lock_guard<std::mutex> cache_lock(cache_mutex);
 
@@ -237,7 +244,7 @@ find_else_create(const Key& key, bool* new_data)
     // unlocking the cache_mutex, because the cache must be locked when we
     // return the data pointer (below), or else, some other thread might
     // delete it before we got a chance to return it.
-    std::list<Data> tmp_data;
+    std::vector<Data> tmp_data;
 
     std::lock_guard<std::mutex> cache_lock(cache_mutex);
 
@@ -269,17 +276,24 @@ find_else_create(const Key& key, bool* new_data)
 
 template<typename Key, typename Value, typename Hash>
 bool LruCacheShared<Key, Value, Hash>::
-find_else_insert(const Key& key, std::shared_ptr<Value>& data)
+find_else_insert(const Key& key, std::shared_ptr<Value>& data, bool replace)
 {
     LruMapIter map_iter;
 
-    std::list<Data> tmp_data;
+    std::vector<Data> tmp_data;
     std::lock_guard<std::mutex> cache_lock(cache_mutex);
 
     map_iter = map.find(key);
     if (map_iter != map.end())
     {
         stats.find_hits++;
+        if (replace)
+        {
+            // Explicitly calling the reset so its more clear that destructor could be called for the object
+            map_iter->second->second.reset();
+            map_iter->second->second = data; 
+            stats.replaced++;
+        }
         list.splice(list.begin(), list, map_iter->second); // update LRU
         return true;
     }

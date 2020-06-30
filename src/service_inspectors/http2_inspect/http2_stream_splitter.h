@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2018-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2018-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -48,17 +48,23 @@ public:
 
 private:
     const HttpCommon::SourceId source_id;
+
+    static StreamSplitter::Status data_scan(Http2FlowData* session_data, const uint8_t* data,
+        uint32_t length, uint32_t* flush_offset, HttpCommon::SourceId source_id,
+        uint32_t frame_length, uint8_t frame_flags, uint32_t& data_offset);
+    static void partial_flush_data(Http2FlowData* session_data, HttpCommon::SourceId source_id,
+        uint32_t* flush_offset, uint32_t data_offset, uint32_t old_stream);
+    static StreamSplitter::Status non_data_scan(Http2FlowData* session_data,
+        uint32_t length, uint32_t* flush_offset, HttpCommon::SourceId source_id,
+        uint32_t frame_length, uint8_t type, uint8_t frame_flags, uint32_t& data_offset);
+    static snort::StreamSplitter::Status implement_scan(Http2FlowData* session_data, const uint8_t* data,
+        uint32_t length, uint32_t* flush_offset, HttpCommon::SourceId source_id);
+    static const snort::StreamBuffer implement_reassemble(Http2FlowData* session_data, unsigned total,
+        unsigned offset, const uint8_t* data, unsigned len, uint32_t flags,
+        HttpCommon::SourceId source_id);
+    static bool read_frame_hdr(Http2FlowData* session_data, const uint8_t* data,
+        uint32_t length, HttpCommon::SourceId source_id, uint32_t& data_offset);
 };
 
-snort::StreamSplitter::Status implement_scan(Http2FlowData* session_data, const uint8_t* data,
-    uint32_t length, uint32_t* flush_offset, HttpCommon::SourceId source_id);
-const snort::StreamBuffer implement_reassemble(Http2FlowData* session_data, unsigned total,
-    unsigned offset, const uint8_t* data, unsigned len, uint32_t flags,
-    HttpCommon::SourceId source_id);
-
-enum ValidationResult { V_GOOD, V_BAD, V_TBD };
-
-ValidationResult validate_preface(const uint8_t* data, const uint32_t length,
-    const uint32_t octets_seen);
 
 #endif

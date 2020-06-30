@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -27,18 +27,19 @@
 #include "flow/flow_control.h"
 #include "framework/module.h"
 
-extern THREAD_LOCAL snort::ProfileStats s5PerfStats;
-extern THREAD_LOCAL class FlowControl* flow_con;
-
 namespace snort
 {
+class Trace;
 struct SnortConfig;
 }
+
+extern THREAD_LOCAL snort::ProfileStats s5PerfStats;
+extern THREAD_LOCAL class FlowControl* flow_con;
+extern THREAD_LOCAL const snort::Trace* stream_trace;
 
 //-------------------------------------------------------------------------
 // stream module
 //-------------------------------------------------------------------------
-extern Trace TRACE_NAME(stream);
 
 #define MOD_NAME "stream"
 #define MOD_HELP "common flow tracking"
@@ -53,6 +54,7 @@ struct BaseStats
      PegCount preemptive_prunes;
      PegCount memcap_prunes;
      PegCount ha_prunes;
+     PegCount stale_prunes;
      PegCount expected_flows;
      PegCount expected_realized;
      PegCount expected_pruned;
@@ -74,13 +76,18 @@ extern THREAD_LOCAL BaseStats stream_base_stats;
 struct StreamModuleConfig
 {
     FlowCacheConfig flow_cache_cfg;
+#ifdef REG_TEST
     unsigned footprint = 0;
+#endif
+    uint32_t held_packet_timeout = 1000;  // in milliseconds
+
+    void show() const;
 };
 
 class StreamReloadResourceManager : public snort::ReloadResourceTuner
 {
 public:
-	StreamReloadResourceManager() {}
+    StreamReloadResourceManager() {}
 
     bool tinit() override;
     bool tune_packet_context() override;
@@ -93,7 +100,21 @@ private:
 
 private:
     StreamModuleConfig config;
-    int max_flows_change = 0;
+};
+
+class HPQReloadTuner : public snort::ReloadResourceTuner
+{
+public:
+    HPQReloadTuner() = default;
+
+    bool tinit() override;
+    bool tune_packet_context() override;
+    bool tune_idle_context() override;
+    bool initialize(uint32_t new_timeout_ms);
+
+private:
+    uint32_t held_packet_timeout;
+    timeval reload_time;
 };
 
 class StreamModule : public snort::Module
@@ -113,18 +134,27 @@ public:
     unsigned get_gid() const override;
     const snort::RuleMap* get_rules() const override;
 
+    void prep_counts() override;
     void sum_stats(bool) override;
     void show_stats() override;
     void reset_stats() override;
 
+    bool counts_need_prep() const override
+    { return true; }
+
     Usage get_usage() const override
     { return GLOBAL; }
+
+    void set_trace(const snort::Trace*) const override;
+    const snort::TraceOption* get_trace_options() const override;
 
 private:
     StreamModuleConfig config;
     StreamReloadResourceManager reload_resource_manager;
+    HPQReloadTuner hpq_rrt;
 };
 
+extern void base_prep();
 extern void base_sum();
 extern void base_stats();
 extern void base_reset();

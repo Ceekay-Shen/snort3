@@ -7,12 +7,10 @@ set(EXTERNAL_LIBRARIES
     ${CMAKE_DL_LIBS}
     ${CMAKE_THREAD_LIBS_INIT} # GCC says we must link to the threads library
     ${HWLOC_LIBRARIES}
-    ${LIBLZMA_LIBRARIES}
     ${LUAJIT_LIBRARIES}
     ${OPENSSL_CRYPTO_LIBRARY}
     ${PCAP_LIBRARIES}
     ${PCRE_LIBRARIES}
-    ${UUID_LIBRARY}
     ${ZLIB_LIBRARIES}
 )
 
@@ -23,22 +21,34 @@ set(EXTERNAL_INCLUDES
     ${OPENSSL_INCLUDE_DIR}
     ${PCAP_INCLUDE_DIR}
     ${PCRE_INCLUDE_DIR}
-    ${UUID_INCLUDE_DIR}
     ${ZLIB_INCLUDE_DIRS}
 )
+
+if ( ENABLE_STATIC_DAQ )
+    LIST(APPEND EXTERNAL_LIBRARIES ${DAQ_STATIC_MODULE_LIBS})
+endif ()
 
 if ( FLATBUFFERS_FOUND )
     LIST(APPEND EXTERNAL_LIBRARIES ${FLATBUFFERS_LIBRARIES})
 endif()
 
-if ( HS_FOUND )
-    LIST(APPEND EXTERNAL_LIBRARIES ${HS_LIBRARIES})
-    LIST(APPEND EXTERNAL_INCLUDES ${HS_INCLUDE_DIRS})
-endif ()
+if ( HAVE_LZMA )
+    LIST(APPEND EXTERNAL_LIBRARIES ${LIBLZMA_LIBRARIES})
+endif()
 
 if ( HAVE_SAFEC )
     LIST(APPEND EXTERNAL_LIBRARIES ${SAFEC_LIBRARIES})
     LIST(APPEND EXTERNAL_INCLUDES ${SAFEC_INCLUDE_DIR})
+endif ()
+
+if ( HAVE_UUID )
+    LIST(APPEND EXTERNAL_LIBRARIES ${UUID_LIBRARY})
+    LIST(APPEND EXTERNAL_INCLUDES ${UUID_INCLUDE_DIR})
+endif ()
+
+if ( HS_FOUND )
+    LIST(APPEND EXTERNAL_LIBRARIES ${HS_LIBRARIES})
+    LIST(APPEND EXTERNAL_INCLUDES ${HS_INCLUDE_DIRS})
 endif ()
 
 if ( ICONV_FOUND )
@@ -49,10 +59,6 @@ endif ()
 if ( USE_TIRPC )
     LIST(APPEND EXTERNAL_LIBRARIES ${TIRPC_LIBRARIES})
     LIST(APPEND EXTERNAL_INCLUDES ${TIRPC_INCLUDE_DIRS})
-endif ()
-
-if ( ENABLE_STATIC_DAQ )
-    LIST(APPEND EXTERNAL_LIBRARIES ${DAQ_STATIC_MODULE_LIBS})
 endif ()
 
 include_directories(BEFORE ${LUAJIT_INCLUDE_DIR})
@@ -103,6 +109,7 @@ add_subdirectory(host_tracker)
 add_subdirectory(pub_sub)
 add_subdirectory(time)
 add_subdirectory(profiler)
+add_subdirectory(trace)
 add_subdirectory(utils)
 add_subdirectory(helpers)
 add_subdirectory(lua)
@@ -169,6 +176,7 @@ add_executable( snort
     $<TARGET_OBJECTS:target_based>
     $<TARGET_OBJECTS:tcp_connector>
     $<TARGET_OBJECTS:time>
+    $<TARGET_OBJECTS:trace>
     $<TARGET_OBJECTS:utils>
     ${PIGLET_LIBRARIES}
     ${STATIC_CODEC_PLUGINS}

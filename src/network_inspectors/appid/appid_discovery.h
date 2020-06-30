@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -40,6 +40,7 @@ class AppIdSession;
 class AppIdDetector;
 class ServiceDetector;
 struct ServiceDetectorPort;
+class ThirdPartyAppIdContext;
 
 namespace snort
 {
@@ -55,7 +56,9 @@ struct Packet;
 #define SCAN_HTTP_VENDOR_FLAG       (1<<6)
 #define SCAN_HTTP_XWORKINGWITH_FLAG (1<<7)
 #define SCAN_HTTP_CONTENT_TYPE_FLAG (1<<8)
-#define SCAN_HTTP_URI_FLAG 	    (1<<9)
+#define SCAN_HTTP_URI_FLAG          (1<<9)
+#define SCAN_CERTVIZ_ENABLED_FLAG   (1<<10)
+#define SCAN_SPOOFED_SNI_FLAG       (1<<11)
 
 class AppIdPatternMatchNode
 {
@@ -96,9 +99,6 @@ public:
     AppIdDiscovery(const AppIdDiscovery&) = delete;
     AppIdDiscovery& operator=(const AppIdDiscovery&) = delete;
 
-    static void initialize_plugins();
-    static void finalize_plugins();
-    static void release_plugins();
     static void tterm();
 
     virtual void initialize() = 0;
@@ -111,8 +111,8 @@ public:
         int position, unsigned nocase);
     virtual int add_service_port(AppIdDetector*, const ServiceDetectorPort&);
 
-    static void do_application_discovery(snort::Packet* p, AppIdInspector&);
-    static void publish_appid_event(AppidChangeBits&, snort::Flow*);
+    static void do_application_discovery(snort::Packet* p, AppIdInspector&,
+        ThirdPartyAppIdContext*);
 
     AppIdDetectors* get_tcp_detectors()
     {
@@ -135,10 +135,11 @@ protected:
 
 private:
     static bool do_pre_discovery(snort::Packet* p, AppIdSession** p_asd, AppIdInspector& inspector,
-        IpProtocol& protocol, AppidSessionDirection& direction);
+        IpProtocol& protocol, IpProtocol& outer_protocol, AppidSessionDirection& direction);
     static bool do_discovery(snort::Packet* p, AppIdSession& asd, IpProtocol protocol,
-        AppidSessionDirection direction, AppId& service_id, AppId& client_id, AppId& payload_id,
-        AppId& misc_id, AppidChangeBits& change_bits);
+        IpProtocol outer_protocol, AppidSessionDirection direction, AppId& service_id,
+        AppId& client_id, AppId& payload_id, AppId& misc_id, AppidChangeBits& change_bits,
+        ThirdPartyAppIdContext* tp_appid_ctxt);
     static void do_post_discovery(snort::Packet* p, AppIdSession& asd,
         AppidSessionDirection direction, bool is_discovery_done, AppId service_id, AppId client_id,
         AppId payload_id, AppId misc_id, AppidChangeBits& change_bits);
@@ -146,9 +147,6 @@ private:
         AppidSessionDirection direction);
     static bool do_host_port_based_discovery(snort::Packet* p, AppIdSession& asd,
         IpProtocol protocol, AppidSessionDirection direction);
-    static bool handle_unmonitored_session(AppIdSession* asd, const snort::Packet* p,
-        IpProtocol protocol, AppidSessionDirection dir, AppIdInspector& inspector,
-        uint64_t& flow_flags);
 };
 #endif
 

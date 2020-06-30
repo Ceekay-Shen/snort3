@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 // Copyright (C) 1998-2005 Martin Roesch <roesch@sourcefire.com>
 //
@@ -430,14 +430,8 @@ class BackOrifice : public Inspector
 public:
     BackOrifice() = default;
 
-    void show(SnortConfig*) override;
     void eval(Packet*) override;
 };
-
-void BackOrifice::show(SnortConfig*)
-{
-    LogMessage("%s\n", s_name);
-}
 
 void BackOrifice::eval(Packet* p)
 {

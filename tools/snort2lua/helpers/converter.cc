@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -226,6 +226,7 @@ int Converter::parse_file(
         // same criteria used for rtrim
         // http://en.cppreference.com/w/cpp/string/byte/isspace
         std::size_t first_non_white_char = tmp.find_first_not_of(" \f\n\r\t\v");
+        std::size_t last_non_space = tmp.find_last_not_of(' ');
 
         bool comment = (tmp[first_non_white_char] == '#') or (tmp[first_non_white_char] == ';');
         bool commented_rule = tmp.substr(0, 7) == "# alert";
@@ -245,7 +246,8 @@ int Converter::parse_file(
             }
             data_api.add_comment(tmp);
         }
-        else if ( tmp[tmp.find_last_not_of(' ')] == '\\')
+        else if ( (last_non_space != std::string::npos) and
+            (tmp[last_non_space] == '\\') )
         {
             util::rtrim(tmp);
             tmp.pop_back();

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -234,7 +234,7 @@ static void IMAP_GetEOL(const uint8_t* ptr, const uint8_t* end,
     const uint8_t* tmp_eol;
     const uint8_t* tmp_eolm;
 
-    tmp_eol = (uint8_t*)memchr(ptr, '\n', end - ptr);
+    tmp_eol = (const uint8_t*)memchr(ptr, '\n', end - ptr);
     if (tmp_eol == nullptr)
     {
         tmp_eol = end;
@@ -259,19 +259,6 @@ static void IMAP_GetEOL(const uint8_t* ptr, const uint8_t* end,
 
     *eol = tmp_eol;
     *eolm = tmp_eolm;
-}
-
-static void PrintImapConf(IMAP_PROTO_CONF* config)
-{
-    if (config == nullptr)
-        return;
-
-    LogMessage("IMAP config: \n");
-
-    config->decode_conf.print_decode_conf();
-
-    LogMessage("\n");
-
 }
 
 static inline int InspectPacket(Packet* p)
@@ -707,11 +694,17 @@ public:
     ~Imap() override;
 
     bool configure(SnortConfig*) override;
-    void show(SnortConfig*) override;
+    void show(const SnortConfig*) const override;
     void eval(Packet*) override;
 
     StreamSplitter* get_splitter(bool c2s) override
     { return new ImapSplitter(c2s); }
+
+    bool can_carve_files() const override
+    { return true; }
+
+    bool can_start_tls() const override
+    { return true; }
 
 private:
     IMAP_PROTO_CONF* config;
@@ -739,9 +732,10 @@ bool Imap::configure(SnortConfig*)
     return true;
 }
 
-void Imap::show(SnortConfig*)
+void Imap::show(const SnortConfig*) const
 {
-    PrintImapConf(config);
+    if ( config )
+        config->decode_conf.show();
 }
 
 void Imap::eval(Packet* p)

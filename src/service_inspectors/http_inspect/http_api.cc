@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -24,12 +24,15 @@
 #include "http_api.h"
 
 #include "http_context_data.h"
+#include "http_cursor_data.h"
 #include "http_inspect.h"
 
 using namespace snort;
 
 const char* HttpApi::http_my_name = HTTP_NAME;
 const char* HttpApi::http_help = "the new HTTP inspector!";
+
+unsigned HttpCursorData::id = 0;
 
 Inspector* HttpApi::http_ctor(Module* mod)
 {
@@ -41,6 +44,7 @@ void HttpApi::http_init()
 {
     HttpFlowData::init();
     HttpContextData::init();
+    HttpCursorData::init();
 }
 
 const char* HttpApi::classic_buffer_names[] =
@@ -49,6 +53,7 @@ const char* HttpApi::classic_buffer_names[] =
     "http_cookie",
     "http_header",
     "http_method",
+    "http_param",
     "http_raw_body",
     "http_raw_cookie",
     "http_raw_header",
@@ -97,6 +102,7 @@ extern const BaseApi* ips_http_client_body;
 extern const BaseApi* ips_http_cookie;
 extern const BaseApi* ips_http_header;
 extern const BaseApi* ips_http_method;
+extern const BaseApi* ips_http_param;
 extern const BaseApi* ips_http_raw_body;
 extern const BaseApi* ips_http_raw_cookie;
 extern const BaseApi* ips_http_raw_header;
@@ -122,6 +128,7 @@ const BaseApi* sin_http[] =
     ips_http_cookie,
     ips_http_header,
     ips_http_method,
+    ips_http_param,
     ips_http_raw_body,
     ips_http_raw_cookie,
     ips_http_raw_header,

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -41,6 +41,7 @@
 #include "log/text_log.h"
 #include "packet_io/active.h"
 #include "packet_io/sfdaq.h"
+#include "protocols/cisco_meta_data.h"
 #include "protocols/eth.h"
 #include "protocols/icmp4.h"
 #include "protocols/tcp.h"
@@ -77,8 +78,8 @@ static void ff_action(const Args& a)
 static void ff_class(const Args& a)
 {
     const char* cls = "none";
-    if ( a.event.sig_info->class_type and a.event.sig_info->class_type->name )
-        cls = a.event.sig_info->class_type->name;
+    if ( a.event.sig_info->class_type and !a.event.sig_info->class_type->text.empty() )
+        cls = a.event.sig_info->class_type->text.c_str();
     TextLog_Puts(csv_log, cls);
 }
 
@@ -105,6 +106,18 @@ static void ff_b64_data(const Args& a)
         TextLog_Write(csv_log, out, kout);
 
     TextLog_Putc(csv_log, '"');
+}
+
+static void ff_client_bytes(const Args& a)
+{
+    if (a.pkt->flow)
+        TextLog_Print(csv_log, "%" PRIu64, a.pkt->flow->flowstats.client_bytes);
+}
+
+static void ff_client_pkts(const Args& a)
+{
+    if (a.pkt->flow)
+        TextLog_Print(csv_log, "%" PRIu64, a.pkt->flow->flowstats.client_pkts);
 }
 
 static void ff_dir(const Args& a)
@@ -189,6 +202,12 @@ static void ff_eth_type(const Args& a)
 
     const eth::EtherHdr* eh = layer::get_eth_layer(a.pkt);
     TextLog_Print(csv_log, "0x%X", ntohs(eh->ether_type));
+}
+
+static void ff_flowstart_time(const Args& a)
+{
+    if (a.pkt->flow)
+        TextLog_Print(csv_log, "%lu", a.pkt->flow->flowstats.start_time.tv_sec);
 }
 
 static void ff_gid(const Args& a)
@@ -299,7 +318,19 @@ static void ff_rule(const Args& a)
 
 static void ff_seconds(const Args& a)
 {
-    TextLog_Print(csv_log, "%u",  a.pkt->pkth->ts.tv_sec);
+    TextLog_Print(csv_log, "%lu",  a.pkt->pkth->ts.tv_sec);
+}
+
+static void ff_server_bytes(const Args& a)
+{
+    if (a.pkt->flow)
+        TextLog_Print(csv_log, "%" PRIu64, a.pkt->flow->flowstats.server_bytes);
+}
+
+static void ff_server_pkts(const Args& a)
+{
+    if (a.pkt->flow)
+        TextLog_Print(csv_log, "%" PRIu64, a.pkt->flow->flowstats.server_pkts);
 }
 
 static void ff_service(const Args& a)
@@ -308,6 +339,15 @@ static void ff_service(const Args& a)
     if ( a.pkt->flow and a.pkt->flow->service )
         svc = a.pkt->flow->service;
     TextLog_Puts(csv_log, svc);
+}
+
+static void ff_sgt(const Args& a)
+{
+    if (a.pkt->proto_bits & PROTO_BIT__CISCO_META_DATA)
+    {
+        const cisco_meta_data::CiscoMetaDataHdr* cmdh = layer::get_cisco_meta_data_layer(a.pkt);
+        TextLog_Print(csv_log, "%hu", cmdh->sgt_val());
+    }
 }
 
 static void ff_sid(const Args& a)
@@ -419,18 +459,7 @@ static void ff_udp_len(const Args& a)
 
 static void ff_vlan(const Args& a)
 {
-    uint16_t vid;
-
-    if (a.pkt->flow)
-        vid = a.pkt->flow->key->vlan_tag;
-
-    else if ( a.pkt->proto_bits & PROTO_BIT__VLAN )
-        vid = layer::get_vlan_layer(a.pkt)->vid();
-
-    else
-        return;
-
-    TextLog_Print(csv_log, "%hu", vid);
+    TextLog_Print(csv_log, "%hu", a.pkt->get_flow_vlan_id());
 }
 
 //-------------------------------------------------------------------------
@@ -441,23 +470,25 @@ typedef void (*CsvFunc)(const Args&);
 
 static const CsvFunc csv_func[] =
 {
-    ff_action, ff_class, ff_b64_data, ff_dir, ff_dst_addr, ff_dst_ap,
-    ff_dst_port, ff_eth_dst, ff_eth_len, ff_eth_src, ff_eth_type, ff_gid,
-    ff_icmp_code, ff_icmp_id, ff_icmp_seq, ff_icmp_type, ff_iface, ff_ip_id,
-    ff_ip_len, ff_msg, ff_mpls, ff_pkt_gen, ff_pkt_len, ff_pkt_num, ff_priority,
-    ff_proto, ff_rev, ff_rule, ff_seconds, ff_service, ff_sid, ff_src_addr, ff_src_ap,
-    ff_src_port, ff_target, ff_tcp_ack, ff_tcp_flags, ff_tcp_len, ff_tcp_seq,
-    ff_tcp_win, ff_timestamp, ff_tos, ff_ttl, ff_udp_len, ff_vlan
+    ff_action, ff_class, ff_b64_data, ff_client_bytes, ff_client_pkts, ff_dir,
+    ff_dst_addr, ff_dst_ap, ff_dst_port, ff_eth_dst, ff_eth_len, ff_eth_src,
+    ff_eth_type, ff_flowstart_time, ff_gid, ff_icmp_code, ff_icmp_id, ff_icmp_seq,
+    ff_icmp_type, ff_iface, ff_ip_id, ff_ip_len, ff_msg, ff_mpls, ff_pkt_gen, ff_pkt_len,
+    ff_pkt_num, ff_priority, ff_proto, ff_rev, ff_rule, ff_seconds, ff_server_bytes,
+    ff_server_pkts, ff_service, ff_sgt, ff_sid, ff_src_addr, ff_src_ap, ff_src_port,
+    ff_target, ff_tcp_ack, ff_tcp_flags,ff_tcp_len, ff_tcp_seq, ff_tcp_win, ff_timestamp,
+    ff_tos, ff_ttl, ff_udp_len, ff_vlan
 };
 
 #define csv_range \
-    "action | class | b64_data | dir | dst_addr | dst_ap | " \
-    "dst_port | eth_dst | eth_len | eth_src | eth_type | gid | " \
-    "icmp_code | icmp_id | icmp_seq | icmp_type | iface | ip_id | " \
-    "ip_len | msg | mpls | pkt_gen | pkt_len | pkt_num | priority | " \
-    "proto | rev | rule | seconds | service | sid | src_addr | src_ap | " \
-    "src_port | target | tcp_ack | tcp_flags | tcp_len | tcp_seq | " \
-    "tcp_win | timestamp | tos | ttl | udp_len | vlan"
+    "action | class | b64_data | client_bytes | client_pkts | dir | " \
+    "dst_addr | dst_ap | dst_port | eth_dst | eth_len | eth_src | " \
+    "eth_type | flowstart_time | gid | icmp_code | icmp_id | icmp_seq | " \
+    "icmp_type | iface | ip_id | ip_len | msg | mpls | pkt_gen | pkt_len | " \
+    "pkt_num | priority | proto | rev | rule | seconds | server_bytes | " \
+    "server_pkts | service | sgt| sid | src_addr | src_ap | src_port | " \
+    "target | tcp_ack | tcp_flags | tcp_len | tcp_seq | tcp_win | timestamp | " \
+    "tos | ttl | udp_len | vlan"
 
 #define csv_deflt \
     "timestamp pkt_num proto pkt_gen pkt_len dir src_ap dst_ap rule action"
@@ -491,11 +522,11 @@ public:
     bool begin(const char*, int, SnortConfig*) override;
 
     Usage get_usage() const override
-    { return CONTEXT; }
+    { return GLOBAL; }
 
 public:
-    bool file;
-    size_t limit;
+    bool file = false;
+    size_t limit = 0;
     string sep;
     vector<CsvFunc> fields;
 };
@@ -512,7 +543,11 @@ bool CsvModule::set(const char*, Value& v, SnortConfig*)
         fields.clear();
 
         while ( v.get_next_token(tok) )
-            fields.emplace_back(csv_func[Parameter::index(csv_range, tok.c_str())]);
+        {
+            int i = Parameter::index(csv_range, tok.c_str());
+            if ( i >= 0 )
+                fields.emplace_back(csv_func[i]);
+        }
     }
 
     else if ( v.is("limit") )
@@ -540,7 +575,11 @@ bool CsvModule::begin(const char*, int, SnortConfig*)
         v.set_first_token();
 
         while ( v.get_next_token(tok) )
-            fields.emplace_back(csv_func[Parameter::index(csv_range, tok.c_str())]);
+        {
+            int i = Parameter::index(csv_range, tok.c_str());
+            if ( i >= 0 )
+                fields.emplace_back(csv_func[i]);
+        }
     }
     return true;
 }
@@ -615,7 +654,7 @@ static Module* mod_ctor()
 static void mod_dtor(Module* m)
 { delete m; }
 
-static Logger* csv_ctor(SnortConfig*, Module* mod)
+static Logger* csv_ctor(Module* mod)
 { return new CsvLogger((CsvModule*)mod); }
 
 static void csv_dtor(Logger* p)

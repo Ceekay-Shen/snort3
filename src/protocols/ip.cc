@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -161,12 +161,12 @@ uint8_t IpApi::ver() const
     return 0;
 }
 
+// FIXIT-H is this really supposed to be a shallow compare?
 bool operator==(const IpApi& lhs, const IpApi& rhs)
 {
     if ( lhs.type != rhs.type )
         return false;
 
-    // FIXIT-H is this really supposed to be a shallow compare?
     return ( lhs.iph == rhs.iph );
 }
 

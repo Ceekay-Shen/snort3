@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -72,9 +72,7 @@ void HttpMsgHeadShared::create_norm_head_list()
             {
                 headers_present[header_name_id[j]] = true;
                 NormalizedHeader* tmp_ptr = norm_heads;
-                norm_heads = new NormalizedHeader(header_name_id[j]);
-                norm_heads->next = tmp_ptr;
-                norm_heads->count = 1;
+                norm_heads = new NormalizedHeader(tmp_ptr, 1, header_name_id[j]);
             }
         }
     }
@@ -86,9 +84,14 @@ void HttpMsgHeadShared::parse_header_block()
     int32_t bytes_used = 0;
     num_headers = 0;
     int32_t num_seps;
-    // session_data->num_head_lines is computed without consideration of wrapping and may overstate
-    // actual number of headers. Rely on num_headers which is calculated correctly.
+
+    // The number of header lines in a message may be zero
     header_line = new Field[session_data->num_head_lines[source_id]];
+
+    // session_data->num_head_lines is computed by HttpStreamSplitter without consideration of
+    // wrapping and may occasionally overstate the actual number of headers. That was OK for
+    // allocating space for the header_line array, but henceforth rely on num_headers which is
+    // calculated correctly.
     while (bytes_used < msg_text.length())
     {
         assert(num_headers < session_data->num_head_lines[source_id]);
@@ -296,7 +299,8 @@ const Field& HttpMsgHeadShared::get_classic_raw_header()
 
 const Field& HttpMsgHeadShared::get_classic_norm_header()
 {
-    return classic_normalize(get_classic_raw_header(), classic_norm_header, params->uri_param);
+    return classic_normalize(get_classic_raw_header(), classic_norm_header,
+        false, params->uri_param);
 }
 
 const Field& HttpMsgHeadShared::get_classic_raw_cookie()
@@ -307,7 +311,8 @@ const Field& HttpMsgHeadShared::get_classic_raw_cookie()
 
 const Field& HttpMsgHeadShared::get_classic_norm_cookie()
 {
-    return classic_normalize(get_classic_raw_cookie(), classic_norm_cookie, params->uri_param);
+    return classic_normalize(get_classic_raw_cookie(), classic_norm_cookie,
+        false, params->uri_param);
 }
 
 const Field& HttpMsgHeadShared::get_header_value_raw(HeaderId header_id) const
@@ -332,7 +337,7 @@ const Field& HttpMsgHeadShared::get_header_value_norm(HeaderId header_id)
     if (node == nullptr)
         return Field::FIELD_NULL;
     header_norms[header_id]->normalize(header_id, node->count,
-        transaction->get_infractions(source_id), transaction->get_events(source_id),
+        transaction->get_infractions(source_id), session_data->events[source_id],
         header_name_id, header_value, num_headers, node->norm);
     return node->norm;
 }

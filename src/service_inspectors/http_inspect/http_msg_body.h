@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -40,6 +40,7 @@ public:
     const Field& get_classic_client_body();
     const Field& get_detect_data() { return detect_data; }
     static void fd_event_callback(void* context, int event);
+    bool is_first() { return first_body; }
 
 protected:
     HttpMsgBody(const uint8_t* buffer, const uint16_t buf_size, HttpFlowData* session_data_,
@@ -50,7 +51,7 @@ protected:
     bool first_body;
 
 #ifdef REG_TEST
-    void print_body_section(FILE* output);
+    void print_body_section(FILE* output, const char* body_type_str);
 #endif
 
 private:

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -329,7 +329,7 @@ bool HttpInspectServer::convert(std::istringstream& data_stream)
         else if (keyword == "profile")
             parse_deleted_option("profile", data_stream);
         else if ( keyword == "xff_headers" )
-            parse_bracketed_unsupported_list("xff_headers", data_stream);
+            tmpval = parse_bracketed_unsupported_list("xff_headers", data_stream);
         else
         {
             tmpval = false;

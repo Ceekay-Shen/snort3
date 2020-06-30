@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 // Copyright (C) 1998-2002 Martin Roesch <roesch@sourcefire.com>
 //
@@ -24,7 +24,7 @@
 
 #include "framework/ips_option.h"
 #include "framework/module.h"
-#include "hash/hashfcn.h"
+#include "hash/hash_key_operations.h"
 #include "profiler/profiler.h"
 #include "protocols/ipv4_options.h"
 #include "protocols/packet.h"
@@ -212,7 +212,7 @@ public:
     { return DETECT; }
 
 public:
-    IpOptionData data;
+    IpOptionData data = {};
 };
 
 bool IpOptModule::begin(const char*, int, SnortConfig*)

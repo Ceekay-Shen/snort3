@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 1998-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -816,10 +816,6 @@ SfIpRet sfvar_parse_iplist(vartable_t* table, sfip_var_t* var,
         else
         {
             sfip_node_t* node;
-
-            /* Skip leading commas */
-            for (; *str == ','; str++)
-                ;
 
             /* Check for a negated "any" */
             if (negation ^ neg_ip && !strcasecmp(tok, "any"))

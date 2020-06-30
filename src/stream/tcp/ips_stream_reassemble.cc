@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -24,7 +24,7 @@
 #include "detection/detection_engine.h"
 #include "framework/ips_option.h"
 #include "framework/module.h"
-#include "hash/hashfcn.h"
+#include "hash/hash_key_operations.h"
 #include "main/snort_config.h"
 #include "profiler/profiler.h"
 
@@ -302,7 +302,7 @@ TEST_CASE("IPS Stream Reassemble", "[ips_stream_reassemble][stream_tcp]")
 
     SECTION("reassembler initialization")
     {
-        bool status = reassembler->begin(nullptr, 0, SnortConfig::get_conf());
+        bool status = reassembler->begin(nullptr, 0, SnortConfig::get_main_conf());
         CHECK(status);
         CHECK( ( reassembler->srod.enable == 0 ) );
         CHECK( ( reassembler->srod.direction == 0 ) );

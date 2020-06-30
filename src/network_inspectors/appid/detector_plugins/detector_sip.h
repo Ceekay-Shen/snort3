@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -34,38 +34,15 @@ namespace snort
 class Flow;
 }
 
-struct SipUaUserData
-{
-    AppId ClientAppId;
-    char* clientVersion;
-};
-
-struct DetectorAppSipPattern
-{
-    tMlpPattern pattern;
-    SipUaUserData userData;
-    DetectorAppSipPattern* next;
-};
-
 class SipEventHandler;
 
 class SipUdpClientDetector : public ClientDetector
 {
 public:
     SipUdpClientDetector(ClientDiscovery*);
-    ~SipUdpClientDetector() override;
+    ~SipUdpClientDetector() override { }
 
     int validate(AppIdDiscoveryArgs&) override;
-
-    void finalize_patterns() override;
-
-    // FIXIT-L revisit init so it's not split between static methods and constructor
-    static int sipUaPatternAdd(AppId, const char* clientVersion, const char* uaPattern);
-    static int sipServerPatternAdd(AppId, const char* clientVersion, const char* uaPattern);
-
-private:
-    static const int PATTERN_PART_MAX = 10;
-    tMlmpPattern patterns[PATTERN_PART_MAX];
 };
 
 class SipTcpClientDetector : public ClientDetector
@@ -100,7 +77,7 @@ public:
 
     static void set_client(SipUdpClientDetector* cd) { SipEventHandler::client = cd; }
     static void set_service(SipServiceDetector* sd) { SipEventHandler::service = sd; }
-  
+
     void subscribe(snort::SnortConfig* sc)
     { snort::DataBus::subscribe_global(SIP_EVENT_TYPE_SIP_DIALOG_KEY, this, sc); }
 

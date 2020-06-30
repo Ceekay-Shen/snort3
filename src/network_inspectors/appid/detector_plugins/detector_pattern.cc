@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -25,26 +25,27 @@
 
 #include "detector_pattern.h"
 
-#include "app_info_table.h"
 #include "log/messages.h"
+#include "main/snort_debug.h"
+#include "managers/inspector_manager.h"
 #include "protocols/packet.h"
 #include "search_engines/search_tool.h"
 
+#include "app_info_table.h"
+#include "appid_inspector.h"
+
 using namespace snort;
 
-static PatternServiceDetector* service_pattern_detector;
-static PatternClientDetector* client_pattern_detector;
-
-static void dumpPatterns(const char* name, PatternService* pList)
+static void dump_patterns(const char* name, PatternService* pList)
 {
     UNUSED(name);
 
-    trace_logf(appid_module,"Adding pattern for \"%s\"\n", name);
+    debug_logf(appid_trace, nullptr, "Adding pattern for \"%s\"\n", name);
     for (PatternService* ps = pList; ps; ps = ps->next)
         for (Pattern* pattern = ps->pattern; pattern; pattern = pattern->next)
             if (pattern->data && pattern->length)
             {
-                trace_logf(appid_module,"\t\t%s, %u\n",pattern->data, pattern->length);
+                debug_logf(appid_trace, nullptr, "\t\t%s, %u\n",pattern->data, pattern->length);
             }
 }
 
@@ -83,11 +84,11 @@ static void read_patterns(PortPatternNode* portPatternList, PatternService** ser
     {
         bool newPs = false;
 
-        if (!ps || !lastName || strcmp(lastName, pNode->detectorName)
+        if (!ps || !lastName || strcmp(lastName, pNode->detector_name)
             || lastProto != pNode->protocol)
         {
             ps = (PatternService*)snort_calloc(sizeof(PatternService));
-            lastName = pNode->detectorName;
+            lastName = pNode->detector_name;
             lastProto = pNode->protocol;
             newPs = true;
             ps->id = pNode->appId;
@@ -115,7 +116,13 @@ static void read_patterns(PortPatternNode* portPatternList, PatternService** ser
         pattern->offset = pNode->offset;
         pattern->next = ps->pattern;
         ps->pattern = pattern;
-        AppInfoManager::get_instance().set_app_info_active(ps->id);
+
+        // FIXIT-M: Tp support ODP reload, store ODP context in PatternService
+        AppIdInspector* inspector = (AppIdInspector*) InspectorManager::get_inspector(MOD_NAME);
+        assert(inspector);
+        AppIdContext& ctxt = inspector->get_ctxt();
+
+        ctxt.get_odp_ctxt().get_app_info_mgr().set_app_info_active(ps->id);
     }
 }
 
@@ -273,55 +280,55 @@ static int csd_pattern_tree_search(const uint8_t* data, uint16_t size, SearchToo
 // Creates unique subset of services registered on ports, and then creates pattern trees.
 void PatternServiceDetector::create_service_pattern_trees()
 {
-    for (PatternService* ps = servicePortPattern; ps; ps = ps->next)
+    for (PatternService* ps = service_port_pattern; ps; ps = ps->next)
         for (PortNode* port = ps->port; port; port = port->next)
             for (Pattern* pattern = ps->pattern; pattern; pattern = pattern->next)
                 if (ps->proto == IpProtocol::TCP)
-                    register_pattern(&tcpPortPatternTree[port->port],
+                    register_pattern(&tcp_port_pattern_tree[port->port],
                         pattern);
                 else
-                    register_pattern(&udpPortPatternTree[port->port],
+                    register_pattern(&udp_port_pattern_tree[port->port],
                         pattern);
 
     for (unsigned i = 0; i < 65536; i++)
     {
-        if (tcpPortPatternTree[i])
+        if (tcp_port_pattern_tree[i])
         {
-            for (PatternService* ps = servicePortPattern; ps; ps = ps->next)
+            for (PatternService* ps = service_port_pattern; ps; ps = ps->next)
             {
                 if (ps->port || (ps->proto != IpProtocol::TCP))
                     continue;
 
                 for (Pattern* pattern = ps->pattern; pattern; pattern = pattern->next)
-                    register_pattern(&tcpPortPatternTree[i], pattern);
+                    register_pattern(&tcp_port_pattern_tree[i], pattern);
             }
 
-            tcpPortPatternTree[i]->prep();
+            tcp_port_pattern_tree[i]->prep();
         }
 
-        if (udpPortPatternTree[i])
+        if (udp_port_pattern_tree[i])
         {
-            for (PatternService* ps = servicePortPattern; ps; ps = ps->next)
+            for (PatternService* ps = service_port_pattern; ps; ps = ps->next)
             {
                 if (ps->port || (ps->proto != IpProtocol::UDP))
                     continue;
 
                 for (Pattern* pattern = ps->pattern; pattern; pattern = pattern->next)
-                    register_pattern(&udpPortPatternTree[i], pattern);
+                    register_pattern(&udp_port_pattern_tree[i], pattern);
             }
 
-            udpPortPatternTree[i]->prep();
+            udp_port_pattern_tree[i]->prep();
         }
     }
 }
 
 void PatternServiceDetector::register_service_patterns()
 {
-    /**Register patterns with no associated ports, to RNA and local
+    /**Register patterns with no associated ports, to AppId and local
      * pattern tree. Register patterns with ports with local pattern
      * tree only.
      */
-    for (PatternService* ps = servicePortPattern; ps; ps = ps->next)
+    for (PatternService* ps = service_port_pattern; ps; ps = ps->next)
     {
         if (!ps->port)
         {
@@ -382,10 +389,9 @@ void PatternServiceDetector::insert_service_port_pattern(PortPatternNode* pPatte
     PortPatternNode** prev = nullptr;
     PortPatternNode** curr;
 
-    for (curr = &service_pattern_detector->luaInjectedPatterns;
-        *curr; prev = curr, curr = &((*curr)->next))
+    for (curr = &lua_injected_patterns; *curr; prev = curr, curr = &((*curr)->next))
     {
-        if (strcmp(pPattern->detectorName, (*curr)->detectorName) || pPattern->protocol <
+        if (strcmp(pPattern->detector_name, (*curr)->detector_name) || pPattern->protocol <
             (*curr)->protocol
             || pPattern->port < (*curr)->port)
             break;
@@ -405,12 +411,11 @@ void PatternServiceDetector::insert_service_port_pattern(PortPatternNode* pPatte
 
 void PatternServiceDetector::finalize_service_port_patterns()
 {
-    read_patterns(service_pattern_detector->luaInjectedPatterns,
-        &service_pattern_detector->servicePortPattern);
-    service_pattern_detector->install_ports(service_pattern_detector->servicePortPattern);
-    service_pattern_detector->create_service_pattern_trees();
-    service_pattern_detector->register_service_patterns();
-    dumpPatterns("Server", service_pattern_detector->servicePortPattern);
+    read_patterns(lua_injected_patterns, &service_port_pattern);
+    install_ports(service_port_pattern);
+    create_service_pattern_trees();
+    register_service_patterns();
+    dump_patterns("Server", service_port_pattern);
 }
 
 PatternServiceDetector::PatternServiceDetector(ServiceDiscovery* sd)
@@ -420,40 +425,39 @@ PatternServiceDetector::PatternServiceDetector(ServiceDiscovery* sd)
     proto = IpProtocol::TCP;
     detectorType = DETECTOR_TYPE_PATTERN;
 
-    service_pattern_detector = this;
     handler->register_detector(name, this, proto);
 }
 
 PatternServiceDetector::~PatternServiceDetector()
 {
-    if ( servicePortPattern )
+    if ( service_port_pattern )
     {
         delete tcp_pattern_matcher;
         delete udp_pattern_matcher;
 
         for (unsigned i = 0; i < 65536; i++)
         {
-            if (tcpPortPatternTree[i])
-                delete tcpPortPatternTree[i];
-            if (udpPortPatternTree[i])
-                delete udpPortPatternTree[i];
+            if (tcp_port_pattern_tree[i])
+                delete tcp_port_pattern_tree[i];
+            if (udp_port_pattern_tree[i])
+                delete udp_port_pattern_tree[i];
         }
 
         PatternService* ps;
-        while (servicePortPattern)
+        while (service_port_pattern)
         {
-            ps = servicePortPattern;
-            servicePortPattern = ps->next;
+            ps = service_port_pattern;
+            service_port_pattern = ps->next;
             free_pattern_service(ps);
         }
     }
 
     PortPatternNode* tmp;
-    while ((tmp = luaInjectedPatterns))
+    while ((tmp = lua_injected_patterns))
     {
-        luaInjectedPatterns = tmp->next;
+        lua_injected_patterns = tmp->next;
         snort_free(tmp->pattern);
-        snort_free(tmp->detectorName);
+        snort_free(tmp->detector_name);
         snort_free(tmp);
     }
 }
@@ -472,13 +476,13 @@ int PatternServiceDetector::validate(AppIdDiscoveryArgs& args)
 
     if (args.asd.protocol == IpProtocol::UDP)
     {
-        patternTree = udpPortPatternTree[args.pkt->ptrs.sp];
+        patternTree = udp_port_pattern_tree[args.pkt->ptrs.sp];
         if (!patternTree)
             patternTree = udp_pattern_matcher;
     }
     else
     {
-        patternTree = tcpPortPatternTree[args.pkt->ptrs.sp];
+        patternTree = tcp_port_pattern_tree[args.pkt->ptrs.sp];
         if (!patternTree)
             patternTree = tcp_pattern_matcher;
     }
@@ -499,13 +503,12 @@ PatternClientDetector::PatternClientDetector(ClientDiscovery* cdm)
     name = "pattern";
     proto = IpProtocol::TCP;
 
-    client_pattern_detector = this;
     handler->register_detector(name, this, proto);
 }
 
 PatternClientDetector::~PatternClientDetector()
 {
-    if (servicePortPattern)
+    if (service_port_pattern)
     {
         if (tcp_pattern_matcher)
         {
@@ -520,19 +523,19 @@ PatternClientDetector::~PatternClientDetector()
         }
 
         PatternService* ps;
-        while (servicePortPattern)
+        while (service_port_pattern)
         {
-            ps = servicePortPattern;
-            servicePortPattern = ps->next;
+            ps = service_port_pattern;
+            service_port_pattern = ps->next;
             free_pattern_service(ps);
         }
     }
     PortPatternNode* tmp;
-    while ((tmp = luaInjectedPatterns))
+    while ((tmp = lua_injected_patterns))
     {
-        luaInjectedPatterns = tmp->next;
+        lua_injected_patterns = tmp->next;
         snort_free(tmp->pattern);
-        snort_free(tmp->detectorName);
+        snort_free(tmp->detector_name);
         snort_free(tmp);
     }
 }
@@ -554,7 +557,7 @@ int PatternClientDetector::validate(AppIdDiscoveryArgs& args)
 
 void PatternClientDetector::create_client_pattern_trees()
 {
-    for (PatternService* ps = servicePortPattern; ps; ps = ps->next)
+    for (PatternService* ps = service_port_pattern; ps; ps = ps->next)
     {
         for ( Pattern* pattern = ps->pattern; pattern; pattern = pattern->next)
         {
@@ -571,10 +574,10 @@ void PatternClientDetector::insert_client_port_pattern(PortPatternNode* port_pat
     //insert ports in order.
     PortPatternNode** prev = nullptr;
     PortPatternNode** curr;
-    for (curr = &client_pattern_detector->luaInjectedPatterns;
+    for (curr = &lua_injected_patterns;
         *curr; prev = curr, curr = &((*curr)->next))
     {
-        if (strcmp(port_pattern->detectorName, (*curr)->detectorName)
+        if (strcmp(port_pattern->detector_name, (*curr)->detector_name)
             || port_pattern->protocol < (*curr)->protocol
             || port_pattern->port < (*curr)->port)
             break;
@@ -592,11 +595,9 @@ void PatternClientDetector::insert_client_port_pattern(PortPatternNode* port_pat
     }
 }
 
-// Register patterns with no associated ports, to RNA and local pattern tree. Register
-// patterns with ports with local pattern tree only.
 void PatternClientDetector::register_client_patterns()
 {
-    for (PatternService* ps = servicePortPattern; ps; ps = ps->next)
+    for (PatternService* ps = service_port_pattern; ps; ps = ps->next)
         for (Pattern* pattern = ps->pattern; pattern; pattern = pattern->next)
         {
             if (pattern->data && pattern->length)
@@ -626,10 +627,9 @@ void PatternClientDetector::register_client_patterns()
 
 void PatternClientDetector::finalize_client_port_patterns()
 {
-    read_patterns(client_pattern_detector->luaInjectedPatterns,
-        &client_pattern_detector->servicePortPattern);
-    client_pattern_detector->create_client_pattern_trees();
-    client_pattern_detector->register_client_patterns();
-    dumpPatterns("Client", client_pattern_detector->servicePortPattern);
+    read_patterns(lua_injected_patterns, &service_port_pattern);
+    create_client_pattern_trees();
+    register_client_patterns();
+    dump_patterns("Client", service_port_pattern);
 }
 

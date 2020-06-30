@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2018-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2018-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -25,6 +25,7 @@
 
 #include "host_tracker/host_cache.h"
 #include "network_inspectors/appid/appid_discovery.cc"
+#include "network_inspectors/appid/appid_peg_counts.h"
 
 #include "search_engines/search_tool.h"
 #include "utils/sflsq.cc"
@@ -34,12 +35,14 @@
 
 #include <CppUTest/CommandLineTestRunner.h>
 #include <CppUTest/TestHarness.h>
+#include <CppUTestExt/MockSupport.h>
 
 namespace snort
 {
 // Stubs for packet
 Packet::Packet(bool) {}
 Packet::~Packet() {}
+bool Packet::get_ip_proto_next(unsigned char&, IpProtocol&) const { return true; }
 
 // Stubs for inspector
 Inspector::Inspector()
@@ -53,7 +56,6 @@ class StreamSplitter* Inspector::get_splitter(bool) { return nullptr; }
 
 // Stubs for module
 Module::Module(char const*, char const*) {}
-bool Module::set(const char*, Value&, SnortConfig*) { return true; }
 void Module::sum_stats(bool) {}
 void Module::show_interval_stats(std::vector<unsigned>&, FILE*) {}
 void Module::show_stats() {}
@@ -103,26 +105,35 @@ void IpApi::set(const SfIp& sip, const SfIp& dip)
 } // namespace snort
 
 // Stubs for publish
-static bool databus_publish_called = false;
-static char test_log[256];
 void DataBus::publish(const char*, DataEvent& event, Flow*)
 {
-    databus_publish_called = true;
     AppidEvent* appid_event = (AppidEvent*)&event;
+    char* test_log = (char*)mock().getData("test_log").getObjectPointer();
     snprintf(test_log, 256, "Published change_bits == %s",
         appid_event->get_change_bitset().to_string().c_str());
+    mock().actualCall("publish");
 }
 
 // Stubs for matchers
 static HttpPatternMatchers* http_matchers;
+DnsPatternMatchers::~DnsPatternMatchers() { }
 HttpPatternMatchers::~HttpPatternMatchers() {}
 void HttpPatternMatchers::get_http_offsets(Packet*, AppIdHttpSession*) {}
-HttpPatternMatchers* HttpPatternMatchers::get_instance()
-{
-    return http_matchers;
-}
+SipPatternMatchers::~SipPatternMatchers() { }
+SslPatternMatchers::~SslPatternMatchers() { }
 
 void ApplicationDescriptor::set_id(const Packet&, AppIdSession&, AppidSessionDirection, AppId, AppidChangeBits&) { }
+void ApplicationDescriptor::set_id(AppId app_id){my_id = app_id;}
+void ServiceAppDescriptor::set_id(AppId app_id, OdpContext& odp_ctxt)
+{
+    set_id(app_id);
+    deferred = odp_ctxt.get_app_info_mgr().get_app_info_flags(app_id, APPINFO_FLAG_DEFER);
+}
+void ServiceAppDescriptor::update_stats(AppId){}
+void ServiceAppDescriptor::set_port_service_id(AppId){}
+void ClientAppDescriptor::update_user(AppId, const char*){}
+void ClientAppDescriptor::update_stats(AppId) {}
+void PayloadAppDescriptor::update_stats(AppId) {}
 
 // Stubs for AppIdModule
 AppIdModule::AppIdModule(): Module("appid_mock", "appid_mock_help") {}
@@ -136,33 +147,34 @@ const Command* AppIdModule::get_commands() const { return nullptr; }
 const PegInfo* AppIdModule::get_pegs() const { return nullptr; }
 PegCount* AppIdModule::get_counts() const { return nullptr; }
 ProfileStats* AppIdModule::get_profile() const { return nullptr; }
+void AppIdModule::set_trace(const Trace*) const { }
+const TraceOption* AppIdModule::get_trace_options() const { return nullptr; }
 
 // Stubs for config
-AppIdModuleConfig::~AppIdModuleConfig() {}
-static AppIdModuleConfig app_config;
-static AppIdConfig my_app_config(&app_config);
-AppId AppIdConfig::get_port_service_id(IpProtocol, uint16_t)
+static AppIdConfig app_config;
+static AppIdContext app_ctxt(app_config);
+AppId OdpContext::get_port_service_id(IpProtocol, uint16_t)
 {
     return APP_ID_NONE;
 }
 
-AppId AppIdConfig::get_protocol_service_id(IpProtocol)
+AppId OdpContext::get_protocol_service_id(IpProtocol)
 {
     return APP_ID_NONE;
 }
 
 // Stubs for AppIdInspector
-AppIdInspector::AppIdInspector(AppIdModule&) {}
+AppIdInspector::AppIdInspector(AppIdModule&) { ctxt = &stub_ctxt; }
 AppIdInspector::~AppIdInspector() = default;
 void AppIdInspector::eval(Packet*) { }
 bool AppIdInspector::configure(SnortConfig*) { return true; }
-void AppIdInspector::show(SnortConfig*) { }
+void AppIdInspector::show(const SnortConfig*) const { }
 void AppIdInspector::tinit() { }
 void AppIdInspector::tterm() { }
-AppIdConfig* AppIdInspector::get_appid_config()
+AppIdContext& AppIdInspector::get_ctxt() const
 {
-    my_app_config.mod_config = &app_config;
-    return &my_app_config;
+    assert(ctxt);
+    return *ctxt;
 }
 
 // Stubs for AppInfoManager
@@ -180,7 +192,7 @@ void AppIdSession::sync_with_snort_protocol_id(AppId, Packet*) {}
 void AppIdSession::check_app_detection_restart(AppidChangeBits&) {}
 void AppIdSession::set_client_appid_data(AppId, AppidChangeBits&, char*) {}
 void AppIdSession::examine_rtmp_metadata(AppidChangeBits&) {}
-void AppIdSession::examine_ssl_metadata(Packet*, AppidChangeBits&) {}
+void AppIdSession::examine_ssl_metadata(AppidChangeBits&) {}
 void AppIdSession::update_encrypted_app_id(AppId) {}
 bool AppIdSession::is_tp_processing_done() const {return 0;}
 AppIdSession* AppIdSession::allocate_session(const Packet*, IpProtocol,
@@ -188,6 +200,13 @@ AppIdSession* AppIdSession::allocate_session(const Packet*, IpProtocol,
 {
     return nullptr;
 }
+
+void AppIdSession::publish_appid_event(AppidChangeBits& change_bits, Flow* flow, bool, uint32_t)
+{
+    AppidEvent app_event(change_bits, false, 0);
+    DataBus::publish(APPID_EVENT_ANY_CHANGE, app_event, flow);
+}
+
 void AppIdHttpSession::set_tun_dest(){}
 
 // Stubs for ServiceDiscovery
@@ -207,18 +226,9 @@ int ServiceDiscovery::fail_service(AppIdSession&, const Packet*, AppidSessionDir
     ServiceDetector*, ServiceDiscoveryState*) { return 0; }
 int ServiceDiscovery::add_service_port(AppIdDetector*,
     const ServiceDetectorPort&) { return APPID_EINVALID; }
-ServiceDiscovery::ServiceDiscovery() {}
-void ServiceDiscovery::release_instance() {}
-void ServiceDiscovery::release_thread_resources() {}
 static AppIdModule* s_app_module = nullptr;
 static AppIdInspector* s_ins = nullptr;
 static ServiceDiscovery* s_discovery_manager = nullptr;
-ServiceDiscovery& ServiceDiscovery::get_instance()
-{
-    if (!s_discovery_manager)
-        s_discovery_manager = new ServiceDiscovery();
-    return *s_discovery_manager;
-}
 
 HostCacheIp host_cache(50);
 AppId HostTracker::get_appid(Port, IpProtocol, bool, bool)
@@ -227,19 +237,9 @@ AppId HostTracker::get_appid(Port, IpProtocol, bool, bool)
 }
 
 // Stubs for ClientDiscovery
-ClientDiscovery::ClientDiscovery(){}
-ClientDiscovery::~ClientDiscovery() {}
 void ClientDiscovery::initialize() {}
 void ClientDiscovery::finalize_client_plugins() {}
-void ClientDiscovery::release_instance() {}
-void ClientDiscovery::release_thread_resources() {}
-static ClientDiscovery* c_discovery_manager = nullptr;
-ClientDiscovery& ClientDiscovery::get_instance()
-{
-    if (!c_discovery_manager)
-        c_discovery_manager = new ClientDiscovery();
-    return *c_discovery_manager;
-}
+static ClientDiscovery* c_discovery_manager = new ClientDiscovery();
 bool ClientDiscovery::do_client_discovery(AppIdSession&, Packet*,
     AppidSessionDirection, AppidChangeBits&)
 {
@@ -247,7 +247,7 @@ bool ClientDiscovery::do_client_discovery(AppIdSession&, Packet*,
 }
 
 // Stubs for misc items
-HostPortVal* HostPortCache::find(const SfIp*, uint16_t, IpProtocol)
+HostPortVal* HostPortCache::find(const SfIp*, uint16_t, IpProtocol, OdpContext&)
 {
     return nullptr;
 }
@@ -256,7 +256,7 @@ int dns_host_scan_hostname(const uint8_t*, size_t, AppId*, AppId*)
 {
     return 0;
 }
-bool do_tp_discovery(AppIdSession&, IpProtocol,
+bool do_tp_discovery(ThirdPartyAppIdContext& , AppIdSession&, IpProtocol,
     Packet*, AppidSessionDirection&, AppidChangeBits&)
 {
     return true;
@@ -284,6 +284,7 @@ bool AppIdReloadTuner::tune_resources(unsigned int)
 
 TEST_GROUP(appid_discovery_tests)
 {
+    char test_log[256];
     void setup() override
     {
         appidDebug = new AppIdDebug();
@@ -291,6 +292,7 @@ TEST_GROUP(appid_discovery_tests)
         s_app_module = new AppIdModule;
         s_ins = new AppIdInspector(*s_app_module);
         AppIdPegCounts::init_pegs();
+        mock().setDataObject("test_log", "char", test_log);
     }
 
     void teardown() override
@@ -311,12 +313,14 @@ TEST_GROUP(appid_discovery_tests)
         delete s_app_module;
         AppIdPegCounts::cleanup_pegs();
         AppIdPegCounts::cleanup_peg_info();
+        mock().clear();
     }
 };
+
 TEST(appid_discovery_tests, event_published_when_ignoring_flow)
 {
     // Testing event from do_pre_discovery() path
-    databus_publish_called = false;
+    mock().expectOneCall("publish");
     test_log[0] = '\0';
     Packet p;
     p.packet_flags = 0;
@@ -330,16 +334,15 @@ TEST(appid_discovery_tests, event_published_when_ignoring_flow)
     Flow* flow = new Flow;
     flow->set_flow_data(asd);
     p.flow = flow;
-    asd->config = &my_app_config;
     asd->common.initiator_port = 21;
     asd->common.initiator_ip.set("1.2.3.4");
-    asd->set_session_flags(APPID_SESSION_IGNORE_FLOW);
+    asd->set_session_flags(APPID_SESSION_FUTURE_FLOW);
 
-    AppIdDiscovery::do_application_discovery(&p, ins);
+    AppIdDiscovery::do_application_discovery(&p, ins, nullptr);
 
     // Detect changes in service, client, payload, and misc appid
-    CHECK_EQUAL(databus_publish_called, true);
-    STRCMP_EQUAL(test_log, "Published change_bits == 0000000001111");
+    mock().checkExpectations();
+    STRCMP_EQUAL(test_log, "Published change_bits == 000000001111");
     delete asd;
     delete flow;
 }
@@ -347,7 +350,7 @@ TEST(appid_discovery_tests, event_published_when_ignoring_flow)
 TEST(appid_discovery_tests, event_published_when_processing_flow)
 {
     // Testing event from do_discovery() path
-    databus_publish_called = false;
+    mock().expectOneCall("publish");
     test_log[0] = '\0';
     Packet p;
     p.packet_flags = 0;
@@ -362,15 +365,14 @@ TEST(appid_discovery_tests, event_published_when_processing_flow)
     Flow* flow = new Flow;
     flow->set_flow_data(asd);
     p.flow = flow;
-    asd->config = &my_app_config;
     asd->common.initiator_port = 21;
     asd->common.initiator_ip.set("1.2.3.4");
 
-    AppIdDiscovery::do_application_discovery(&p, ins);
+    AppIdDiscovery::do_application_discovery(&p, ins, nullptr);
 
     // Detect changes in service, client, payload, and misc appid
-    CHECK_EQUAL(databus_publish_called, true);
-    STRCMP_EQUAL(test_log, "Published change_bits == 0000000001111");
+    mock().checkExpectations();
+    STRCMP_EQUAL(test_log, "Published change_bits == 000000001111");
     delete asd;
     delete flow;
 }
@@ -394,7 +396,7 @@ TEST(appid_discovery_tests, change_bits_for_tls_host)
 {
     // Testing set_tls_host
     AppidChangeBits change_bits;
-    const char* host = "www.cisco.com";
+    char* host = snort_strdup(APPID_UT_TLS_HOST);
     TlsSession tls;
     tls.set_tls_host(host, 0, change_bits);
 
@@ -405,7 +407,7 @@ TEST(appid_discovery_tests, change_bits_for_tls_host)
 TEST(appid_discovery_tests, change_bits_for_non_http_appid)
 {
     // Testing FTP appid
-    databus_publish_called = false;
+    mock().expectNCalls(2, "publish");
     Packet p;
     p.packet_flags = 0;
     DAQ_PktHdr_t pkth;
@@ -419,31 +421,28 @@ TEST(appid_discovery_tests, change_bits_for_non_http_appid)
     flow->set_flow_data(asd);
     p.flow = flow;
     p.ptrs.tcph = nullptr;
-    asd->config = &my_app_config;
     asd->common.initiator_port = 21;
     asd->common.initiator_ip.set("1.2.3.4");
     asd->misc_app_id = APP_ID_NONE;
     asd->payload.set_id(APP_ID_NONE);
     asd->client.set_id(APP_ID_CURL);
-    asd->service.set_id(APP_ID_FTP);
+    asd->service.set_id(APP_ID_FTP, app_ctxt.get_odp_ctxt());
 
-    AppIdDiscovery::do_application_discovery(&p, ins);
+    AppIdDiscovery::do_application_discovery(&p, ins, nullptr);
 
     // Detect event for FTP service and CURL client
-    CHECK_EQUAL(databus_publish_called, true);
     CHECK_EQUAL(asd->client.get_id(), APP_ID_CURL);
     CHECK_EQUAL(asd->service.get_id(), APP_ID_FTP);
 
     // Testing DNS appid
-    databus_publish_called = false;
     asd->misc_app_id = APP_ID_NONE;
     asd->payload.set_id(APP_ID_NONE);
     asd->client.set_id(APP_ID_NONE);
-    asd->service.set_id(APP_ID_DNS);
-    AppIdDiscovery::do_application_discovery(&p, ins);
+    asd->service.set_id(APP_ID_DNS, app_ctxt.get_odp_ctxt());
+    AppIdDiscovery::do_application_discovery(&p, ins, nullptr);
 
     // Detect event for DNS service
-    CHECK_EQUAL(databus_publish_called, true);
+    mock().checkExpectations();
     CHECK_EQUAL(asd->service.get_id(), APP_ID_DNS);
 
     delete asd;
@@ -464,10 +463,10 @@ TEST(appid_discovery_tests, change_bits_to_string)
     change_bits.set();
     change_bits_to_string(change_bits, str);
     STRCMP_EQUAL(str.c_str(), "service, client, payload, misc, referred, host,"
-        " tls-host, url, user-agent, response, referrer, xff, client-version");
+        " tls-host, url, user-agent, response, referrer, version");
 
     // Failure of this test is a reminder that enum is changed, hence translator needs update
-    CHECK_EQUAL(APPID_MAX_BIT, 13);
+    CHECK_EQUAL(APPID_MAX_BIT, 12);
 }
 
 int main(int argc, char** argv)

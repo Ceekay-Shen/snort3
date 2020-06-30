@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -41,6 +41,7 @@ using namespace snort;
 const PegInfo ip_pegs[] =
 {
     SESSION_PEGS("ip"),
+    { CountType::SUM, "total_bytes", "total number of bytes processed" },
     { CountType::SUM, "total_frags", "total fragments" },
     { CountType::NOW, "current_frags", "current fragments" },
     { CountType::SUM, "max_frags", "max fragments" },
@@ -128,7 +129,7 @@ static inline void update_session(Packet* p, Flow* lws)
 // IpSession methods
 //-------------------------------------------------------------------------
 
-IpSession::IpSession(Flow* flow) : Session(flow)
+IpSession::IpSession(Flow* f) : Session(f)
 { memory::MemoryCap::update_allocations(sizeof(*this)); }
 
 IpSession::~IpSession()
@@ -149,7 +150,7 @@ void IpSession::clear()
 
 bool IpSession::setup(Packet* p)
 {
-    SESSION_STATS_ADD(ip_stats);
+    SESSION_STATS_ADD(ip_stats)
     memset(&tracker, 0, sizeof(tracker));
 
     StreamIpConfig* pc = get_ip_cfg(flow->ssn_server);
@@ -188,7 +189,7 @@ int IpSession::process(Packet* p)
 
     if ( Stream::blocked_flow(p) || Stream::ignored_flow(flow, p) )
         return 0;
-
+    ip_stats.total_bytes += p->dsize;
     if ( p->ptrs.decode_flags & DECODE_FRAG )
     {
         Defrag* d = get_defrag(flow->ssn_server);
@@ -247,7 +248,7 @@ public:
     ~StreamIp() override;
 
     bool configure(SnortConfig*) override;
-    void show(SnortConfig*) override;
+    void show(const SnortConfig*) const override;
     NORETURN_ASSERT void eval(Packet*) override;
     StreamIpConfig* config;
     Defrag* defrag;

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2004-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -37,8 +37,6 @@
 
 #include "reputation_parse.h"
 
-#define VERDICT_REASON_REPUTATION 19
-
 using namespace snort;
 
 THREAD_LOCAL ProfileStats reputation_perf_stats;
@@ -74,45 +72,6 @@ const char* WhiteActionOption[] =
  * Function prototype(s)
  */
 static void snort_reputation(ReputationConfig* GlobalConf, Packet* p);
-
-static void print_iplist_stats(ReputationConfig* config)
-{
-    /*Print out the summary*/
-    LogMessage("    Reputation total memory usage: " STDu64 " bytes\n",
-        reputationstats.memory_allocated);
-    config->num_entries = sfrt_flat_num_entries(config->ip_list);
-    LogMessage("    Reputation total entries loaded: %u, invalid: %lu, re-defined: %lu\n",
-        config->num_entries,total_invalids,total_duplicates);
-}
-
-static void print_reputation_conf(ReputationConfig* config)
-{
-    assert(config);
-
-    print_iplist_stats(config);
-
-    LogMessage("    Memcap: %d %s \n",
-        config->memcap,
-        config->memcap == 500 ? "(Default) M bytes" : "M bytes");
-    LogMessage("    Scan local network: %s\n",
-        config->scanlocal ? "ENABLED" : "DISABLED (Default)");
-    LogMessage("    Reputation priority:  %s \n",
-        config->priority ==  WHITELISTED_TRUST ?
-        "whitelist (Default)" : "blacklist");
-    LogMessage("    Nested IP: %s %s \n",
-        NestedIPKeyword[config->nested_ip],
-        config->nested_ip ==  INNER ? "(Default)" : "");
-    LogMessage("    White action: %s %s \n",
-        WhiteActionOption[config->white_action],
-        config->white_action ==  UNBLACK ? "(Default)" : "");
-    if (config->blacklist_path.size())
-        LogMessage("    Blacklist File Path: %s\n", config->blacklist_path.c_str());
-
-    if (config->whitelist_path.size())
-        LogMessage("    Whitelist File Path: %s\n", config->whitelist_path.c_str());
-
-    LogMessage("\n");
-}
 
 static inline IPrepInfo* reputation_lookup(ReputationConfig* config, const SfIp* ip)
 {
@@ -246,6 +205,7 @@ static IPdecision reputation_decision(ReputationConfig* config, Packet* p)
     }
 
     // For OUTER or ALL, save current layers, iterate, then restore layers as needed
+    ip::IpApi blocked_api;
     ip::IpApi tmp_api = p->ptrs.ip_api;
     int8_t num_layer = 0;
     IpProtocol tmp_next = p->get_ip_proto_next();
@@ -254,13 +214,10 @@ static IPdecision reputation_decision(ReputationConfig* config, Packet* p)
     {
         layer::set_outer_ip_api(p, p->ptrs.ip_api, p->ip_proto_next, num_layer);
         decision_per_layer(config, p, ingress_zone, egress_zone, p->ptrs.ip_api, &decision_final);
-        if (decision_final != BLACKLISTED_SRC and decision_final != BLACKLISTED_DST)
-            p->ptrs.ip_api = tmp_api;
     }
     else if (config->nested_ip == ALL)
     {
         bool done = false;
-        ip::IpApi blocked_api;
         IPdecision decision_current = DECISION_NULL;
 
         while (!done and layer::set_outer_ip_api(p, p->ptrs.ip_api, p->ip_proto_next, num_layer))
@@ -275,13 +232,14 @@ static IPdecision reputation_decision(ReputationConfig* config, Packet* p)
                 decision_current = DECISION_NULL;
             }
         }
-        if (decision_final != BLACKLISTED_SRC and decision_final != BLACKLISTED_DST)
-            p->ptrs.ip_api = tmp_api;
-        else if (p->ptrs.ip_api != blocked_api)
-            p->ptrs.ip_api = blocked_api;
     }
     else
         assert(false); // Should never hit this
+
+    if (decision_final != BLACKLISTED_SRC and decision_final != BLACKLISTED_DST)
+        p->ptrs.ip_api = tmp_api;
+    else if (config->nested_ip == ALL and p->ptrs.ip_api != blocked_api)
+        p->ptrs.ip_api = blocked_api;
 
     p->ip_proto_next = tmp_next;
     return decision_final;
@@ -305,18 +263,22 @@ static void snort_reputation(ReputationConfig* config, Packet* p)
         unsigned blacklist_event = (BLACKLISTED_SRC == decision) ?
             REPUTATION_EVENT_BLACKLIST_SRC : REPUTATION_EVENT_BLACKLIST_DST;
 
+        if (p->flow)
+        {
+            p->flow->flags.reputation_blacklist = true;
+            p->flow->flags.reputation_src_dest = (BLACKLISTED_SRC == decision);
+        }
+
         DetectionEngine::queue_event(GID_REPUTATION, blacklist_event);
         act->drop_packet(p, true);
 
         // disable all preproc analysis and detection for this packet
         DetectionEngine::disable_all(p);
         act->block_session(p, true);
+        act->set_drop_reason("reputation");
         reputationstats.blacklisted++;
         if (PacketTracer::is_active())
-        {
-            PacketTracer::set_reason(VERDICT_REASON_REPUTATION);
             PacketTracer::log("Reputation: packet blacklisted, drop\n");
-        }
     }
 
     else if (MONITORED_SRC == decision or MONITORED_DST == decision)
@@ -324,7 +286,12 @@ static void snort_reputation(ReputationConfig* config, Packet* p)
         unsigned monitor_event = (MONITORED_SRC == decision) ?
             REPUTATION_EVENT_MONITOR_SRC : REPUTATION_EVENT_MONITOR_DST;
 
-        p->packet_flags |= PKT_REP_MONITORED;
+        if (p->flow)
+        {
+            p->flow->flags.reputation_monitor = true;
+            p->flow->flags.reputation_src_dest = (MONITORED_SRC == decision);
+        }
+
         DetectionEngine::queue_event(GID_REPUTATION, monitor_event);
         reputationstats.monitored++;
     }
@@ -334,10 +301,14 @@ static void snort_reputation(ReputationConfig* config, Packet* p)
         unsigned whitelist_event = (WHITELISTED_TRUST_SRC == decision) ?
             REPUTATION_EVENT_WHITELIST_SRC : REPUTATION_EVENT_WHITELIST_DST;
 
+        if (p->flow)
+        {
+            p->flow->flags.reputation_whitelist = true;
+            p->flow->flags.reputation_src_dest = (WHITELISTED_TRUST_SRC == decision);
+        }
+
         DetectionEngine::queue_event(GID_REPUTATION, whitelist_event);
-        p->packet_flags |= PKT_IGNORE;
-        DetectionEngine::disable_all(p);
-        act->allow_session(p);
+        act->trust_session(p, true);
         reputationstats.whitelisted++;
     }
 }
@@ -348,6 +319,65 @@ static unsigned create_reputation_id()
     if (++reputation_id_tracker == 0)
         ++reputation_id_tracker;
     return reputation_id_tracker;
+}
+
+static const char* to_string(NestedIP nip)
+{
+    switch (nip)
+    {
+    case INNER:
+        return "inner";
+    case OUTER:
+        return "outer";
+    case ALL:
+        return "all";
+    }
+
+    return "";
+}
+
+static const char* to_string(WhiteAction wa)
+{
+    switch (wa)
+    {
+    case UNBLACK:
+        return "unblack";
+    case TRUST:
+        return "trust";
+    }
+
+    return "";
+}
+
+static const char* to_string(IPdecision ipd)
+{
+    switch (ipd)
+    {
+    case BLACKLISTED:
+        return "blacklisted";
+    case WHITELISTED_TRUST:
+        return "whitelisted_trust";
+    case MONITORED:
+        return "monitored";
+    case BLACKLISTED_SRC:
+        return "blacklisted_src";
+    case BLACKLISTED_DST:
+        return "blacklisted_dst";
+    case WHITELISTED_TRUST_SRC:
+        return "whitelisted_trust_src";
+    case WHITELISTED_TRUST_DST:
+        return "whitelisted_trust_dst";
+    case WHITELISTED_UNBLACK:
+        return "whitelisted_unblack";
+    case MONITORED_SRC:
+        return "monitored_src";
+    case MONITORED_DST:
+        return "monitored_dst";
+    case DECISION_NULL:
+    case DECISION_MAX:
+    default:
+        return "";
+    }
 }
 
 //-------------------------------------------------------------------------
@@ -375,9 +405,16 @@ Reputation::Reputation(ReputationConfig* pc)
     reputationstats.memory_allocated = sfrt_flat_usage(conf->ip_list);
 }
 
-void Reputation::show(SnortConfig*)
+void Reputation::show(const SnortConfig*) const
 {
-    print_reputation_conf(&config);
+    ConfigLogger::log_value("blacklist", config.blacklist_path.c_str());
+    ConfigLogger::log_value("list_dir", config.list_dir.c_str());
+    ConfigLogger::log_value("memcap", config.memcap);
+    ConfigLogger::log_value("nested_ip", to_string(config.nested_ip));
+    ConfigLogger::log_value("priority", to_string(config.priority));
+    ConfigLogger::log_flag("scan_local", config.scanlocal);
+    ConfigLogger::log_value("white (action)", to_string(config.white_action));
+    ConfigLogger::log_value("whitelist", config.whitelist_path.c_str());
 }
 
 void Reputation::eval(Packet* p)
@@ -412,10 +449,6 @@ static Module* mod_ctor()
 static void mod_dtor(Module* m)
 { delete m; }
 
-static void reputation_init()
-{
-    PacketTracer::register_verdict_reason(VERDICT_REASON_REPUTATION, PacketTracer::PRIORITY_LOW);
-}
 
 static Inspector* reputation_ctor(Module* m)
 {
@@ -447,7 +480,7 @@ const InspectApi reputation_api =
     PROTO_BIT__ANY_IP,
     nullptr, // buffers
     nullptr, // service
-    reputation_init, // pinit
+    nullptr, // pinit
     nullptr, // pterm
     nullptr, // tinit
     nullptr, // tterm

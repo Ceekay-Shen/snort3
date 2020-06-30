@@ -1,4 +1,468 @@
-19/12/20 - build 267
+2020/06/18 - 3.0.1 build 5
+
+-- actions: on a reload_config() free the memory allocated for react page on previous configuration
+   loading
+-- actions: refactor to store react page response in std::string
+-- active: add a facility to prevent a DAQ whitelist verdict
+-- appid: add api to check if appid needs inspection
+-- appid: add braces to fix static analysis complaint
+-- appid: add response message to reload_third_party
+-- appid: check fqn before registering rrt
+-- appid: for http2, if metadata doesn't give a match on payload, set payload id to unknown
+-- appid: free memory allocated when appid is configured initially and then not configured on a
+   subsequent reload
+-- appid: lua APIs to get IP and port tunneled through a proxy
+-- appid: match http2 response to request
+-- appid: remove unnecessary stuff from appid apis
+-- appid: revert snort protocol id changes and fixed warnings
+-- appid: set appid_tlshost_bit when we set tls_cname
+-- appid: set snort protocol id on the flow and remove ssl squelch code
+-- appid: update cert viz API to handle subject alt name and SNI mismatch
+-- codecs: fix issues found by static analysis
+-- dce_rpc: suppport for DCE/RPC future session
+-- detection: do not apply global rule state to the empty policy
+-- doc: update user manual for trace feature
+-- file_api: making sure that file malware inspection is turned off and only file-type detection is
+   enabled when file_id config is defined without any parameter
+-- flow: make client_initiated flag depend on the DAQ reverse flow flag
+-- hash: replace the cache entry if found
+-- host_cache: add new peg to module test
+-- host_cache: allowing module to accept 64 bit memcap value
+-- http2_inspect: fix hpack infractions
+-- http2_inspect: partial inspect with less than 8 bytes of frame header in the same packet
+-- http2_inspect: track memory usage for http_inspect flows in http2_inspect
+-- log: fix issues found by static analysis
+-- managers: add inspector execution and timing traces to InspectorManager
+-- packet: add client and server direction methods that use the client initiator flow flag
+-- parser: free memory allocated for RTN when SO rule load fails
+-- parser: print loaded and shared rules for each ips policy
+-- perf_monitor: fix count and interval during disable cli execution
+-- port_scan: cleanup port scan memory allocations in module tterm
+-- rpc_decode: remove unused config object
+-- search_engines: fix potential memory leaks and an error in a printed value
+-- service_inspectors: remove some redundant initializations and lookups, move some field
+   initializations into the constructor
+-- shell: if initial load of snort configuration fails release memory allocated for modules and
+   plugins
+-- snort2lua: deprecate react::msg option, display of rule message in react page not currently
+   supported
+-- snort2lua: fix issues found by static analysis
+-- snort_config: only perform FatalError cleanup from main thread
+-- stream: add final check to free allocated memory when module tterm is called
+-- stream: fixed ip family in the flow->key during StreamHAClient::consume
+-- stream_tcp: fix issues for tcp simultaneous close
+-- stream_tcp: unconditionally release held packets that have timed out, regardless of flushing
+-- trace: add control channel command
+-- trace: add support for passing in the packet pointer to loggers
+-- trace: filter traces by packet constraints
+-- trace: fix for trace messages in the test-mode ('-T' option)
+-- trace: remove redundant include
+
+2020/05/20 - 3.0.1 build 4
+
+-- appid: Do not allocate DNS session for non-DNS flows and update memory tracker for HTTP sessions
+-- appid: Get inspector for the current snort config during reload
+-- binder: print configured bindings in show() method
+-- build: fix cppcheck warnings and typos
+-- coverity: fixed issues discovered by Coverity tool
+-- daq: Configure DAQ instances with total instances and instance IDs
+-- dce_rpc: code style cleanups
+-- dce_rpc: generate alert when dce splitter aborts due to invalid fragment length
+-- flow: If a retry packet does not belong to a flow, block it.
+-- ftp_telnet: fix FTP race condition
+-- http2_inspect: change partial flush handling
+-- log: do not truncate config option names in ConfigLogger
+-- loggers: when logging alert only use inspector buffers and name when the inspector's paf
+   splitter is assigned for the direction of the alert"
+-- main: Fixing some issues reported by Coverity
+-- managers: print alphabetically sorted verbose inspector config output within an inspection
+   policy
+-- mpse: constify snort config args
+-- network_inspectors: Fixing a few minor issues reported by Coverity
+-- parser: print enabled rules for each ips policy
+-- search_tool: refactor initialization
+-- snort_config: constify Inspector::show and remove unnecessary logger args
+-- snort_config: make const for packet threads
+-- snort_config: minimize thread local access to snort_config
+-- snort_config: pseudo packet initialization
+-- snort_config: refactor access methods
+-- snort_config: use provided conf
+-- stream: add a configurable timeout for held packets
+-- stream: move held packet timeout to Stream and support changing it on reload
+-- stream_tcp: call splitter->finish() before reassemble() when flushing when PAF aborts due to gap
+   in queued data
+-- stream_tcp: change the DAQ verdict from drop to blacklist for held packets that timed out
+-- stream_tcp: clear gadget from Flow object once fallback has happened in both directions
+-- stream_tcp: only clear gadget after both splitters have aborted
+-- stream_tcp: when paf aborts due to gap in data set splitter state to ABORT
+-- trace: move module trace configuration into the trace module.
+
+2020/05/06 - 3.0.1 build 3
+
+-- appid: Do not process retry packets but continue processing future packets in AppId
+-- appid: Extract metadata for tunneled HTTP session
+-- appid: Make unit tests multithread safe
+-- appid: On API call store new values and publish an event for them immediately
+-- appid: remove old http2 support
+-- appid: store appids for http traffic in http session
+-- appid: support for multi-stream http2 session
+-- appid: Update miscellaneous appid on first decrypted packet
+-- build: add support for ccache
+-- file_api: fix file stats
+-- file_api: mark processing of file complete after type detection if signature not enabled
+-- http2_inspect: add peg count to track max concurrent http2 file transfers
+-- http2_inspect: fix handling leftover data with padding
+-- http2_inspect: protect against unexpected eval calls
+-- http2_inspect: support stream multiplexing
+-- http2_inspect: update padding check only for header and data frames
+-- http_inspect: add support for http2 file processing
+-- json: add stream formatter helper
+-- managers: sort the inspector list in inspection policy using the instance name
+-- memory: expose memory_cap.h to plugins
+-- parameter: reject reals assigned to ints
+-- rna: Update dev notes to describe usage
+-- snort: add classtype, priority, and references to --dump-rule-meta output
+-- snort: convert --dump-rule-{meta,state,deps} to json format
+-- so rules: allow #fragments in references in so rule stubs
+-- stream: Fix for stream pegs dumping zero values into perf_monitor_base.csv
+
+2020/04/23 - 3.0.1 build 2
+
+-- appid: Change sessionAPI to accomodate stream_index
+-- appid: detect payload for first http2 stream
+-- appid: Fix thread-safety issues in appid
+-- appid: mark third-party inspection as done for expected flows
+-- appid: Populate url for QUIC sessions by extracting QUIC SNI metadata from third-party
+-- appid: remove thirdparty processing for http2 traffic
+-- appid: remove unused code
+-- appid: remove unused config options and rename "debug" option
+-- appid: set up packet counters to make sure flows with one-way data don't pend forever
+-- appid: Support org unit in SSL lookup API and do not overwrite the API provided data
+-- codecs: Clean up CiscoMetaData implementation
+-- codecs: GRE checksum updated for injected and rewritten packets
+-- codecs: Update GRE flags and offset for injected packets
+-- control: Disable request unit-test in cmake if shell is disabled
+-- control: Fixing data races in request read and response
+-- file: apply cached verdict on already seen file
+-- file_magic: Update category for HWP and MSOLE2
+-- flowbits: eliminate extraneous FlowBitState
+-- flowbits: fix reload mapping
+-- flowbits: refactor implementation
+-- flowbits: relocate bitop.h to helpers
+-- flowbits: remove extraneous count
+-- flowbits: remove unused group support
+-- flow: track allocations for each flow, update cap_weights
+-- framework: Remove unused InspectorData template
+-- ftp_data: fix ids flushing at EOF
+-- ftp: whitelisting reason support
+-- host_tracker: Move all HostCacheAlloc template implementions to the header
+-- http2_inspect: discard split connection preface
+-- http2_inspect: flush pending data when a non-data frame is received
+-- http2_inspect: handle the case of leftover header only (no body)
+-- http2_inspect: support 0 length data frames
+-- http_inspect: add fragment to http_uri
+-- http_inspect: cut over to wizard on successful CONNECT response
+-- http_inspect: enhance processing of connect messages
+-- http_inspect: fix duplicated detained_inspection print in show()
+-- http_inspect: make script tag check case insensitive
+-- http_inspect: register extra-data callbacks in constructor
+-- hyperscan: simplify scratch memory initialization
+-- inspectors: designate service inspectors control channels for avc only
+-- inspectors: designate service inspectors for file carving
+-- inspectors: designate service inspectors for start tls
+-- inspectors: update verbose config output in show() method to a new format
+-- ips_context: add support to fallback to avc only
+-- ips: fix rule state mapping and policy lookup
+-- ips: remove plugins cruft from option tree node (rule body)
+-- latency: check if ip header is present before deferring it
+-- latency: use test_timeout config option to deterministically trigger latency events for ifdef
+   REG_TEST
+-- loggers: Add SGT field to CSV and JSON loggers
+-- main: Make test_log() static in snort_debug.cc
+-- managers: print inspectors' config output for every inspection policy configured
+-- metadata-filter: apply to so rule stubs
+-- output: allow error messages in quiet mode
+-- packet_io: log daq batch size
+-- packet_io: log daq pool size
+-- perf_monitor: Enable or disable flow-ip-profiling using shell commands
+-- plugin_manager: make erase from plug_map safer
+-- plugin_manager: make sure --show-plugins option picks up SO plugins
+-- reload: update ReloadError response messages to use consistent wording across all messages
+-- session: remove unused IPS option
+-- sip: Support pinhole for sip early media
+-- snort2lua: make qos configuration values deleted from firewall
+-- snort: add --dump-rule-deps
+-- snort: add --dump-rule-state
+-- snort: add flowbits set and checked to --dump-rule-meta
+-- snort: add rule text to --dump-rule-meta
+-- snort: enable --dump-rule-meta to work without a conf
+-- snort: initial implementation of --dump-rule-meta
+-- snort: remove inappropriate fatal errors
+-- snort: remove unused --pcap-reload option
+-- so rules: allow stub gid:sid:rev to override so
+-- so rules: allow stub header to override so header
+-- stream_tcp: remove unused session printing cruft
+-- target_based: refactor host attribute table logic into a c++ class, eliminate dead code
+-- target_based: refactor to improve design of the host attribute classes
+-- target_based: refactor to load host attribute table from file
+-- time: make packet_gettimeofday public
+-- trace: refactor stdout/syslog logging of trace into logger framework
+
+2020/03/31 - 3.0.1 build 1
+
+-- analyzer: Send detained packet event when a packet is held
+-- appid: use http2 inspector for detection even if third-party module is present
+-- build: Increment version to 3.0.1
+-- dce_rpc: Fixed missing space in string
+-- doc: add FIXIT-E description
+-- http2_inspect: handle Cl and TE headers, and end_stream flags set on headers frames
+-- http2_inspect: multiple data frames support
+-- http_inspect: added FIXIT for thread safety
+-- http_inspect: eliminate empty body sections for missing message bodies
+-- latency: remove action config option and convert the log handler to trace_log message
+-- mime: fix data race in mime config
+-- modules: Support verbosity level for module trace options, modify trace logging macros.
+-- service_inspectors: standardize verbose config startup output for SMTP, POP and IMAP inspectors
+-- snort2lua: remove conversion of deprecated options pkt-log and rule-log
+-- so_rule: fix reload of shared object rules that use flow data
+-- src: update high priority "to be fixed" comments (FIXIT-H)
+-- stream_tcp: Out-of-order ACK processing fix
+
+2020/03/25 - build 270
+
+-- active: Base hold_packet() decision on DAQ message pool usage
+-- active: Fix direction of RST packet being sent to server
+-- active: Move packet hold realization for Stream detainment to verdict handling
+-- active: Send entire buffer at once when send_data uses ioctl
+-- appid: Adding UT for client_app_aim_test
+-- appid: Fix SMB session data memory leak
+-- appid: Include DNS over TLS port for classification
+-- appid: Restart service detection on start of decryption
+-- appid: Support appid detection for outer protocol service
+-- appid: Support detection for first stream in http/2 session
+-- binder: Ignore the network_policy binding
+-- build: Bump the C++ compiler supported feature set requirement to C++14
+-- build: Don't try to use libuuid headers/libraries when not found.
+   Thanks to James Lay <jlay@slave-tothe-box.net> for reporting the issue.
+-- build: Refactor included headers
+-- codecs: Add new proto bit for udp tunneled traffic
+-- codecs: Add vxlan codec
+-- dce_rpc: Inspect midstream sessions for file inspection
+-- file_api: Reading the new data for the overlapped file_data
+-- filters: Update threshold tracking functions
+-- flow: Allow the ExpectCache to force prune, so that we can always make room when the cache is
+   full
+-- flow: Change the ExpectCache prune logic to only remove a specified number of oldest entries,
+   regardless of node expiration time
+-- flow: Do away altogether with the loop in ExpectCache::prune, just remove one, only when the
+   cache is full
+-- http2_inspect: Refactor data cutter - preparation for multi packet processing
+-- http2_inspect: Support single data frame sent to http, multiple flushes
+-- http2_inspect: Update dev notes with memory calculations
+-- http_inspect: Create http2 message body type
+-- http_inspect: Gzip detained inspection
+-- http_inspect: Refactor print_section for message bodies
+-- loggers: Update usage to GLOBAL for all loggers
+-- lua: Enable a rewrite plugin in a default config
+-- main: Check if flow state is blocked while applying verdicts
+-- main: Setting higher maximum pruning when idle
+-- snort2lua: Convert a replace option to a rewrite plugin/action
+-- snort2lua: Don't print out network_policy binding
+-- stream: Short-circuit stream when handling retry packets in no-ack mode
+-- stream_tcp: Cancel hold requests on the current packet when flushing
+-- stream_tcp: Finalize held packets in TcpSession::clear_session()
+-- stream_tcp: Moved retry check to TcpSession::process
+
+2020/03/12 - build 269
+
+-- active: Add ability to inject resets and payload via IOCTLs
+-- appid: Add support for third-party reload on midstream session
+-- appid: detect apps using x-working-with http field in response header
+-- appid: Enhance ssl appid lookup api to store SNI and CN provided by SSL for app detection
+-- appid: fix thread-safety issues in mdns detector
+-- appid: handle CERTIFICATE STATUS handshake type in SSL detector
+-- appid: move client/service pattern detectors and service discovery manager to odp context
+-- appid: Support third-party reload when snort is running with multiple packet threads
+-- base64_decode: use standard detection context data buffer
+-- build: fix build on big-endian systems
+-- build: Fix LibUUID detection on OS X
+-- build: Fix various build issues on FreeBSD and OS X
+-- build: refactor trace logs
+-- build: tweak includes
+-- build: use const and auto references where possible
+-- byte_math: Snort2 bug fix port of integer over and under flow detection
+-- classifications: update implementation with unordered map
+-- classifications: use consistent variable names
+-- cmake: Fix building without lzma library
+-- detection: added support for trace config option to take a list of strings with verbosity level
+   instead of bitmask
+-- detection: refactoring updates to detection, moved DetectionModule into a separate file
+-- flow: added initiator bytes/packets onto flow
+-- flow: Add missing time.h include for struct timeval
+-- flow: free the flow data before deleting the actual flow
+-- flow: turn off deferred whitelist on DONE if no whitelist was seen
+-- flow_cache: fix memory deallocation bug due to inverted return value from hash release node
+-- framework: add generic conversion of trace strings to bitmaks
+-- ftp: Whitelist ftp session after max sig depth reached
+-- ghash: fix thread race condition with GHash member variables when a GHash instance is global
+-- hash: add unit tests for new HashLruCache class
+-- hash: delete unused sfmemcap.[h|cc] and remove unnecessary includes
+-- http2_inspect: abort for nhi errors
+-- http2_inspect: send data frames to http - full frames only in a single flush
+-- http_inspect: change http_uri to only include path and query for absolute and absolute path uris
+-- http_inspect: improve precautions for stream interactions
+-- http_inspect: Properly mock HttpModule::peg_counts in http_transaction_test
+-- main: do FileService::post_init after inspectors are configured
+-- parser: remove legacy parsing code
+-- plugin_manager: add support for reload so_rule plugins
+-- pub_sub: add http2 info to http pub messages
+-- reference: update implementation with unordered map
+-- reload: add description of reload error to the response message of the reload_config command
+-- reputation: remove reputation monitor flag from packet, track verdict on flow
+-- rules: add constructors for references and classifications
+-- rules: fix warnings and startup counts for duplicates
+-- rules: remove cruft
+-- rules: simplify implementation of services, classifications, and references by using std::string
+-- rules: update --gen-msg-map to include all configured rules with references
+-- service_inspectors: added counters to track total number of data bytes processed in SMTP, POP,
+   SSH and FTP
+-- service: update implementation to vector
+-- sfdaq: convert parsing related error messages in DAQ init to ParseErrors
+-- sfdaq: Made get_stats public for plugins
+-- smb: Fix malware over size 131kb not being detected in SMBv2/SMBv3
+-- snort_config: footprint REG_TEST, no check for stream inspector add/rm, etc.
+-- stats: update shutdown timing stats
+-- stream: Addressing inconsistent stream stats and some data races
+-- stream_ip: added counters to track total number of data bytes processed
+-- stream_tcp: no_ack applies only to ips mode
+-- stream_udp: added counters to track total number of data bytes processed
+-- style: remove tabs and too long lines
+-- utils: add unit tests for MemCapAllocator class
+-- utils: create memory allocation class based on sfmemcap functionality
+-- utils: handle out-of-range time
+-- xhash: refactor XHash and HashFnc to eliminate c-style callbacks and simplify ctor options
+-- xhash: rename hashfcn.[cc|h] to hash_keys.[cc|h]
+-- xhash/zhash: refactor duplicated code into a common base class, xhash/zhash will subclass this
+   new base class
+-- zhash: make zhash a subclass of xhash, eliminate duplicate code
+-- zhash: refactor to use hash_lru_cache and hash_key_operations classes
+
+2020/02/21 - build 268
+
+-- appid: Adding support for appid detection on decrypted SSL sessions
+-- appid: Adding support for wildcard ports in static host port cache
+-- appid: clean up ENABLE_APPID_THIRD_PARTY from configure_cmake
+-- appid: cleanup terminology
+-- appid: delete odp context on exit
+-- appid: detect payload for http tunnel traffic
+-- appid: do not reload third party on reload_config
+-- appid: Don't mark HTTP session done if the ssl detector is still in progress
+-- appid: Fix array initialization on Appid
+-- appid: get rid of ENABLE_APPID_THIRD_PARTY flag
+-- appid: handle invalid uri in http tunnel traffic
+-- appid: load app mapping data to odp context
+-- appid: move dns, sip, ssl and http pattern matchers to odp context; move client discovery
+   manager to odp context
+-- appid: move odp config, host-port cache and length cache to a separate class OdpContext; remove
+   obsolete port detector code
+-- appid: reset tp packet counters each time we do reinspect
+-- appid: support third party reload when snort is running with single packet thread
+-- bufferlen: match on total length unless remaining is specified
+-- build: Clean up accumulated tabs and trailing whitespace in the code
+-- build: clean up non-hyperscan builds
+-- build: Fix more Clang 9 compiler warnings
+-- build: Remove some extraneous semicolons (compiler warnings)
+-- build: Rename parameters that shadow class members (compiler warnings)
+-- build: Updates across the board for stricter Clang const-casting warnings
+-- catch: Update to Catch v2.11.1
+-- cip: explicitly include sys/time.h header
+-- codecs: Use unions for checksum pseudoheaders
+-- content: add hyperscan content literal matching alternative to boyer-moore
+-- content: delete flawed hyper search test
+-- content: use hs_compile if hs_compile_lit is not available
+-- copyright: update year to 2020
+-- dce_tcp: fixup flow data handling
+-- detection: add config option to enable conversion of pcre expressions to use the regex engine
+-- detection: add hyperscan_literals option
+-- detection: add pcre_override to enable/disable pcre/O
+-- detection: signature evaluation looping based on literal contents only (exclude regex)
+-- doc: manual updates for HTTP/2
+-- doc: update documentation for lua whitelist
+-- doc: update reload_limitations.txt
+-- file_api: enable Active when there are reset rules in the file policy
+-- framework: introduce ScratchAllocator class to help with scratch memory management
+-- gtp_inspect: fix default port binding
+-- hash: refactor ghash implementation to convert it to an actual C++ class
+-- hash: refactor key compare function prototype and functions to return boolean
+-- hash: refactor to move common definitions into hash_defs.h
+-- hash: refactor xhash to be a real C++ class
+-- host_tracker: Check lock in a separate thread in unit-test
+-- host_tracker: make current_size atomic to save some locks
+-- host_tracker: Support host_cache reload with RRT when memcap changes
+-- http2_inspect: add transfer encoding chunked at end of decoded http1 header block
+-- http2_inspect: data frame http inspection walking skeleton first phase
+-- http2_inspect: fast pattern support
+-- http2_inspect: fix string decode error
+-- http2_inspect: frame data no longer in file_data
+-- http2_inspect: integration with NHI
+-- http2_inspect: support disabling detection for uninteresting HTTP/2 frames
+-- http2_inspect: support HPACK dynamic table size updates
+-- http_inspect: add http_param rule option
+-- http_inspect: gzip splitting beyond request_depth should use correct target size
+-- http_inspect: no duplicate built-in events for a flow
+-- http_inspect: patch H2I-related xtra data crash
+-- http_inspect: process multiple files simultaneously over HTTP/1.1
+-- http_inspect: refactoring
+-- http_inspect: update test tool to support the HTTP/2 macros and new insert command
+-- http_inspect: when detection is disabled, disable all rules not just content rules
+-- http_inspect/http2_inspect: H2I unified2 extra data logging
+-- hyperscan: convert thread locals to scan context
+-- inspectors: ensure correct lookup by type, name, or service
+-- inspectors: print label for type and alias in inspector manager. Remove printing module name in
+   inspectors ::show() method.
+-- ips: alert service rules check ports
+-- ips_pcre: compile/evaluate pcre rule option regular expressions with the hyperscan regex engine
+   when possible
+-- ips_pcre: support the O & R modifiers when converting pcre to regex
+-- ips: refactor rule parsing
+-- ips: remove dead code from rule parser
+-- ips: use service "file" instead of "user"
+-- loggers: update vlan logging in csv and json loggers
+-- lua: Added missing file magic pattern for FLIC
+-- lua: Added missing file magic pattern for IntelHEX
+-- lua: fix typo in default smtp's alt_max_command_line_len
+-- lua: update default lua files to whitelist the defined tables
+-- main: add verbose inspector output during reload
+-- main: make IPS actions (reject, react, replace) configurable per-IPS policy
+-- main: move config_lua to Shell::configure
+-- memory: Treating config value memory.cap as per thread instead of global
+-- metadata: add --metadata-filter to load matching rules only
+-- mime: support simultaneous file processing of MIME-encoded files over HTTP/1.1
+-- module_manager: add snort_whitelist_append and snort_whitelist_add_prefix FFIs
+-- normalizer: disable all normalizations by default except for tcp.ips
+-- packet_io: provide default reset action (bidirectional reset for TCP, ICMP unreachable for the
+   rest)
+-- packet_io: refactor Active and IPS Actions to start disentangling them
+-- parser: add service http2 to http rules
+-- parser: store local copy of service name
+-- pcre: ensure use of maximal ovector size and simplify logic
+-- port_scan: Supporting reload config when memcap changes
+-- protocols: provide direct access to the CiscoMetaData layer
+-- regex: convert thread locals to scan context
+-- reload: eliminate FatalError calls that can't happen because snort_calloc always returns valid
+   memory
+-- rna: use standard uint8_t type instead of u_int8_t
+-- search_engine: trivial reformatting
+-- smtp: update defaults to better align with Snort 2
+-- snort2lua: conversion of path containing variables
+-- snort: add new warn flag warn-conf-strict that will throw out warning when table is not found
+-- snort: Adding some verbose logs for appid, file_id, and reputation inspectors
+-- stream_tcp: ensure that flows with mss and timestamps are picked up on syn
+-- tweaks: set reasonable stream_ip.min_fragment_length values
+-- tweaks: update per new normalizer defaults
+-- tweaks: update policy configs to better align with Snort 2
+
+2019/12/20 - build 267
 
 -- appid: Adding command for third-party reload
 -- appid: cleanup unused code
@@ -40,7 +504,7 @@
 -- time: Convert periodic and stopwatch unit tests to standalone Catch
 -- utils: Convert bitop unit tests to standalone Catch
 
-19/12/04 - build 266
+2019/12/04 - build 266
 
 -- appid: Add new pattern to pop3, don't concatenate ssl certs, use openssl-1.1 compliant APIs
 -- appid: Enabling host cache for unknown SSL flows
@@ -74,7 +538,7 @@
    the stream tcp code into one component (libtcp goes away)
 -- stream_tcp: Updates from PR review comments
 
-19/11/22 - build 265
+2019/11/22 - build 265
 
 -- analyzer_command: support resource tuning on reload
 -- appid: Adding Lua-C API to handle midstream traffic
@@ -95,7 +559,7 @@
 -- stream_tcp: fix state machine instantiation
 -- wizard: handle NBSS startup in dce_smb_curse
 
-19/11/06 - build 264
+2019/11/06 - build 264
 
 -- appid: Handle DNS responses with compression pointers at last record
 -- dce_smb: deprecate config for smb_file_inspection, use smb_file_depth only
@@ -115,7 +579,7 @@
    needed when the stream 'max_flows' configuration option changes
 -- telnet: fix check_encrypted help string
 
-19/10/31 - build 263
+2019/10/31 - build 263
 
 -- appid: for ssl sessions, set payload id to unknown after ssl handshake is done if the payload id
    was not not found
@@ -153,7 +617,7 @@
 -- stream_tcp: fix stability issues
 -- stream_tcp: If no-ack is on, rewrite ACK value to be the expected ACK.
 
-19/10/09 - build 262
+2019/10/09 - build 262
 
 -- analyzer: move setting pkth to nullptr to after publishing finalize event
 -- analyzer: publish other message event for unknown DAQ messages
@@ -210,7 +674,7 @@
 -- unit-tests: fix compiler warnings that snuck into CppUTest unit tests
 -- utils: prevent integer overflow/underflow when reading BER elements
 
-19/09/12 - build 261
+2019/09/12 - build 261
 
 -- analyzer: Process retry queue and onloads when no DAQ messages are received
 -- appid: Enabled API for SSL to lookup appid
@@ -232,7 +696,7 @@
 -- stream: fix problem with accelerated blocking partial inspection
 -- style: update link for google c++ style guide
 
-19/08/28 - build 260
+2019/08/28 - build 260
 
 -- appid: handle 'change cipher spec' in 'server hello' to allow some app detection for tls 1.3
    traffic
@@ -245,7 +709,7 @@
 -- rna: Support for rna unified2 logging
 -- stream_tcp: clear consecutive small segs count upon non-small segs only
 
-19/08/21 - build 259
+2019/08/21 - build 259
 
 -- analyzer_command: Import into snort namespace and add the ability to retrieve the DAQ instance
    from an Analyzer
@@ -294,7 +758,7 @@
 -- wizard: Avoid host cache service insertion since we are using flow service
 -- xhash: Ported sfxhash_change_memcap() from snort2 to snort3
 
-19/07/17 - build 258
+2019/07/17 - build 258
 
 -- analyzer: 1024 contexts max is a better default until configurable
 -- appid: fix header order in appid_session
@@ -333,7 +797,7 @@
 -- stream_tcp: fix non-deep detect profile exclusion
 -- talos.lua: various fixes for command line usage
 
-19/06/19 - build 257
+2019/06/19 - build 257
 
 -- analyzer: publish finalize packet event before calling finalize_message.
 -- appid: Protocol based detection for non-TCP non-UDP traffic.
@@ -365,7 +829,7 @@
 -- stream: Do not validate timestamp until peer timestamp is set
 -- stream_ip: Checking null inspector while updating session
 
-19/05/22 - build 256
+2019/05/22 - build 256
 
 -- DAQng: Port Snort and its DAQ modules to DAQ3
    - Massive refactoring of the Analyzer thread
@@ -395,12 +859,12 @@
 -- snort2lua: Remove sticky buffer duplicates
 -- stream: disable inspection of flow on reset
 
-19/05/03 - build 255
+2019/05/03 - build 255
 
 -- ips: add includer for better relative path support
 -- module_manager: Fix potential null deref in module parameter dumping
 
-19/04/26 - build 254
+2019/04/26 - build 254
 
 -- analyzer: Print pause indicator from analyzer threads
 -- appid: remove inspector reference from detectors
@@ -418,7 +882,7 @@
 -- stream_tcp: Try to work with a cleaner Packet when purging at shutdown
 -- test: remove cruft
 
-19/04/17 - build 253
+2019/04/17 - build 253
 
 -- build: delete unused code called out by cppcheck
 -- doc: remove mention of obsolete LUA_PATH, SNORT_LUA_PATH, and required snort_config library
@@ -433,7 +897,7 @@
 -- parser: update include file handling
 -- parser: fix defaults for alerts.order and network.checksum_eval
 
-19/04/10 - build 252
+2019/04/10 - build 252
 
 -- appid: Fix NetworkSet compilation on big-endian systems
 -- appid: Reduce variable scope in service_mdns
@@ -499,7 +963,7 @@
 -- stream_tcp: Fix shadowed variable when profiling deeply
 -- u2spewfoo: update due to re-ording of retry action.
 
-19/03/31 - build 251
+2019/03/31 - build 251
 
 -- ActionManager: actions are tracked per packet for accurate packet suspension
 -- DetectionEngine: make onload safe for reentrance
@@ -695,7 +1159,7 @@
 -- stream_udp: ensure all flows are cleared fully
 -- time: Adding timersub_ms function to return timersub in milliseconds
 
-18/12/06 - build 250
+2018/12/06 - build 250
 
 -- actions: Fix incorrect order of IPS reject unreachable codes and adding forward option
 -- active: added peg count for injects
@@ -757,7 +1221,7 @@
 -- tools: Install appid-detector-builder.sh with the other tools;
    thanks to Jonathan McDowell <noodles-github@earth.li> for reporting the issue
 
-18/11/07 - build 249
+2018/11/07 - build 249
 
 -- appid: Fixing profiler data race and registration issues
 -- appid: make third party appid stats configurable
@@ -825,7 +1289,7 @@
 -- thread_idle: call timeout flows with packet time for pcap replay
 -- utils: fixed deprecation build warning on register keyword
 
-18/09/26 - build 248
+2018/09/26 - build 248
 
 -- appid: adding detector builder and fixing stats to recognize custom appid
    thanks to Wang Jun <traceflight@outlook.com> for reporting the issue
@@ -857,7 +1321,7 @@
 -- reputation: early return on parsing error causing uninitialized id
 -- reputation: fix SI doesn't block traffic if Any Zone is specified
 
-18/08/27 - build 247 - Beta
+2018/08/27 - build 247 - Beta
 
 -- appid: change map to unordered map
 -- appid: declare SMTPS early in STARTTLS state on success response code
@@ -869,7 +1333,7 @@
 -- stream_tcp: avoid duplicating split sement data
 -- build: removing use of u_char and u_short macros (github #53)
 
-18/08/13 - build 246
+2018/08/13 - build 246
 
 -- active: Add an upper limit of 255 to min_interval
 -- appid: Avoid snort crash upon lua file errors
@@ -941,7 +1405,7 @@
 -- stream_tcp: back out fin handling changes for bug not relevant to snort3
 -- tcp_connector_test: fixed version-sensitive build problem
 
-18/05/21 - build 245
+2018/05/21 - build 245
 
 -- CodecManager: removed unused code
 -- DataBus: fixed creating DataHandler when one doesn't exist
@@ -1103,7 +1567,7 @@
 -- wizard: Fix UBSAN out-of-bounds access runtime error
 -- zhash: cleanup cruftiness
 
-18/03/15 - build 244
+2018/03/15 - build 244
 
 -- appid: unit-tests for http detector plugins
 -- build: address compiler warnings, spell check and static analyzer issues
@@ -1129,7 +1593,7 @@
 -- snort: wrap SO_PUBLIC APIs (classes, functions exported public from snort) in the 'snort'
    namespace
 
-18/02/12 - build 243
+2018/02/12 - build 243
 
 -- build: enable gdb debugging info by default
 -- build: fix cppcheck warnings
@@ -1152,7 +1616,7 @@
    when service groups are present
 -- wizard: count user scans and hits separate from tcp
 
-18/01/29 - build 242
+2018/01/29 - build 242
 
 -- build: add STATIC to add_library call of port_scan to build it statically
    otherwise link will fail (Makefile.am already build only the static version)
@@ -1177,7 +1641,7 @@
 -- unit tests: added ability to run Catch tests from dynamic modules
 -- utils, flatbuffers: added a uniform interface for 64-bit endian swaps
 
-17/12/15 - build 241
+2017/12/15 - build 241
 
 -- add back the ref count for file config
 -- alert_csv: various fixes to match alert_json
@@ -1274,7 +1738,7 @@
 -- wizard: activate profiler support
 -- wizard: usage is inspect
 
-17/10/31 - build 240
+2017/10/31 - build 240
 
 -- active: fix packet modify vs resize handling
 -- alert_csv: rename dgm_len to pkt_len
@@ -1389,7 +1853,7 @@
 -- unified2: log buffers as cooked packets with legacy events
 -- wscale: add extra rule option to check tcp window scaling
 
-17/07/25 - build 239
+2017/07/25 - build 239
 
 -- rules: remove sample.rules; Talos will publish Snort 3 rules on snort.org
 -- logging: fix handling of out of range timeval
@@ -1397,7 +1861,7 @@
 -- wizard: fix direction issue
 -- wizard: fix imap spell
 
-17/07/24 - build 238
+2017/07/24 - build 238
 
 -- check: update hyperscan and regex tests
 -- cpputests: clean up some header include issues
@@ -1434,7 +1898,7 @@
 -- u2: remove obsolete configurations
 -- u2: support mixed IP versions
 
-17/07/13 - build 237
+2017/07/13 - build 237
 
 -- build: add support for appending EXTRABUILD to the BUILD string
 -- build: Clean up some ICC 2017 warnings
@@ -1468,7 +1932,7 @@
 -- snort2lua: fix heap-use-after-free for preprocessors and configs with no arguments
 -- snort2lua: update for port_scan
 
-17/06/15 - build 236
+2017/06/15 - build 236
 
 -- appid: clean up shutdown stats
 -- appid: fix memory leak
@@ -1486,7 +1950,7 @@
 -- ssl: use stop-and-wait splitter (protocol aware splitter is next)
 -- stream_ip: fix 123:7
 
-17/06/01 - build 235
+2017/06/01 - build 235
 
 -- http_inspect: improve handling of improper bare \r separator
 -- appid: fix bug where TNS detector corrupted the flow data object
@@ -1501,7 +1965,7 @@
 -- doc: update differences section
 -- doc: update README
 
-17/05/21 - build 234
+2017/05/21 - build 234
 
 -- byte_math: port rule option from 2X and add feature documentation
 -- pgm: don't calculate checksum if header length is not divisible by 4
@@ -1512,7 +1976,7 @@
 -- cmg: revamp hex buffer dump format with 16 or 20 bytes per line
 -- rules: reject positional parameters containing spaces
 
-17/05/11 - build 233
+2017/05/11 - build 233
 
 -- packet manager: ensure ether type proto ids don't masquerade as ip proto ids
    thanks to Bhargava Shastry <bshastry@sec.t-labs.tu-berlin.de> for reporting the issue
@@ -1530,7 +1994,7 @@
 -- cleanup: fix typos in source code string literals and comments
 -- doc: fix typos
 
-17/04/28 - build 232
+2017/04/28 - build 232
 
 -- build: clean up Intel compiler warnings and remarks
 -- build: fix FreeBSD compilation issues
@@ -1549,13 +2013,13 @@
 -- flatbuffers: add version to banner if present
 -- loggers: build alert_sf_socket on all platforms
 
-17/04/07 - build 231
+2017/04/07 - build 231
 
 -- add decode of MPLS in IP
 -- add 116:171 and 116:173 cases (label 0 or 2 in non-bottom of stack)
 -- cleanup: remove dead code
 
-17/03/27 - build 230
+2017/03/27 - build 230
 
 -- require hyperscan >= 4.4.0, check runtime support
    thanks to justin.viiret@intel.com for submitting the patch
@@ -1571,7 +2035,7 @@
 -- add regex.fast_pattern; do not use for fast pattern unless explicitly indicated
 -- update copyrights to 2017
 
-17/03/17 - build 229
+2017/03/17 - build 229
 
 -- fixed mpse to ensure all search methods return consistent results
 -- updated search tool to use fast pattern config's search method
@@ -1581,7 +2045,7 @@
 -- http_inspect: added alert 119:82 for bad Content-Length value
 -- http_inspect: added alert 119:83 for header wrapping; CR and LF parsed as whitespace
 
-17/03/02 - build 228 - Alpha 4
+2017/03/02 - build 228 - Alpha 4
 
 -- update hypercsan mpse: print error message and erroneous pattern when compilation fails
 -- update rule parser: add multiple byte orders warning
@@ -1594,14 +2058,14 @@
 -- doc: move LibDAQ README to Reference, update, and fix typos
 -- doc: update default manuals
 
-17/02/24 - build 227
+2017/02/24 - build 227
 
 -- allow arbitrary / unused gids in text rules
 -- support DAQs w/o explicit sources (nfq, ipfw)
 -- fix up peg help (remove _)
 -- fix u2 logging of PDUs
 
-17/02/16 - build 226
+2017/02/16 - build 226
 
 -- add PDF/SWF decompression to http_inspect
 -- add connectors to generated reference parts of manual
@@ -1625,7 +2089,7 @@
 -- snort2lua - changes to add file_id when smb file inspection is on
 -- snort2lua - add deprecated option stream5_tcp: log_asymmetric_traffic
 
-17/02/01 - build 225
+2017/02/01 - build 225
 
 -- implement RPC over HTTP by adding dce_http_server and dce_http_proxy
 -- port disable_replace option from snort 2.x and add snort2lua support
@@ -1650,7 +2114,7 @@
 -- normalize peg names to lower snake_case
 -- update default manuals
 
-17/01/17 - build 224
+2017/01/17 - build 224
 
 -- fix various stream_tcp flush issues
 -- fix various cmake issues
@@ -1669,7 +2133,7 @@
 -- added CPP flags used to build Snort to snort.pc for extras and other
    plugins to use
 
-16/21/16 - build 223
+2016/21/16 - build 223
 
 -- port 2983 smb active response updates
 -- fix reload crash with file inspector
@@ -1689,7 +2153,7 @@
 -- improve http_inspect Field class
 -- refactor plugin loading
 
-16/12/16 - build 222
+2016/12/16 - build 222
 
 -- add JavaScript Normalization to http_inspect
 -- fix appid service check dispatch list
@@ -1704,7 +2168,7 @@
 -- refactor user manual for clarity
 -- update default user manuals
 
-16/12/09 - build 221
+2016/12/09 - build 221
 
 -- fix appid handling of sip inspection events
 -- fix wizard to prevent use-after-free of service name
@@ -1715,7 +2179,7 @@
 -- update manual for dce_* inspectors
 -- refactor IP address handling
 
-16/12/01 - build 220
+2016/12/01 - build 220
 
 -- fixed uu and qp decode issue
 -- fixed file signature calculation for ftp
@@ -1733,7 +2197,7 @@
 -- document sensitive data use
 -- user manual refactoring and updates
 
-16/11/21 - build 219
+2016/11/21 - build 219
 
 -- add dce auto detect to wizard
 -- add MIME file processing to new http_inspect
@@ -1753,7 +2217,7 @@
 -- create pid file after dropping privileges
 -- improve detection and use of CppUTest in non-standard locations
 
-16/11/04 - build 218
+2016/11/04 - build 218
 
 -- fix shutdown stats
 -- fix misc appid issues
@@ -1761,7 +2225,7 @@
 -- add sip inspector events for appid
 -- update default manuals
 
-16/10/28 - build 217
+2016/10/28 - build 217
 
 -- update appid to 2983
 -- add inspector events from http_inspect to appid
@@ -1770,7 +2234,7 @@
 -- fix release of blocked flow
 -- fix 129:16 false positive
 
-16/10/21 - build 216
+2016/10/21 - build 216
 
 -- add build configuration for thread sanitizer
 -- port dce_udp fragments
@@ -1779,7 +2243,7 @@
 -- fix -Wmaybe-uninitialized issues
 -- fix related to appid name with space and SSL position
 
-16/10/13 - build 215
+2016/10/13 - build 215
 
 -- added module trace facility
 -- port block malware over ftp for clients/servers that support REST command
@@ -1791,7 +2255,7 @@
 -- fix file hash pruning issue
 -- fix rate_filter action config and apply_to clean up
 
-16/10/07 - build 214
+2016/10/07 - build 214
 
 -- updated DAQ - you *must* use DAQ 2.2.1
 -- add libDAQ version to snort -V output
@@ -1824,14 +2288,14 @@
 -- change default latency actions to none
 -- deleted non-functional extra decoder for i4l_rawip
 
-16/09/27 - build 213
+2016/09/27 - build 213
 
 -- ported full retransmit changes from snort 2X
 -- fixed carved smb2 filenames
 -- fixed multithread hyperscan mpse
 -- fixed sd_pattern iterative validation
 
-16/09/24 - build 212
+2016/09/24 - build 212
 
 -- add dce udp snort2lua
 -- add file detection when they are transferred in segments in SMB2
@@ -1852,14 +2316,14 @@
 -- build: remove SPARC support
 -- build: clean up some DAQ header inclusion creep.
 
-16/09/22 - build 211
+2016/09/22 - build 211
 
 -- fix hyperscan detection with nocase
 -- fix shutdown sequence
 -- fix --dirty-pig
 -- fix FreeBSD build re appid / service_rpc
 
-16/09/20 - build 210
+2016/09/20 - build 210
 
 -- started dce_udp porting
 -- added HA details to stream/* dev_notes
@@ -1870,7 +2334,7 @@
 -- fixed double counting of ip and udp timeouts and prunes
 -- fixed clearing of SYN - RST flows
 
-16/09/14 - build 209
+2016/09/14 - build 209
 
 -- add dce iface fast pattern for tcp
 -- add --enable-tsc-clock to build/use TSC register (on x86)
@@ -1881,7 +2345,7 @@
 -- fix most bogus gap counts
 -- unit test fixes for high availability, hyperscan, and regex
 
-16/09/09 - build 208
+2016/09/09 - build 208
 
 -- fixed for TCP high availability
 -- fixed install of file_decomp.h for consistency between Snort and extras
@@ -1890,7 +2354,7 @@
 -- ported mpls encode fixes from 2983
 -- cleaned up compiler warnings
 
-16/09/02 - build 207
+2016/09/02 - build 207
 
 -- ported smb file processing
 -- ported the 2.9.8 ciscometadata decoder
@@ -1908,7 +2372,7 @@
 -- fixed http_inspect and tcp valgrind errors
 -- fixed extra auto build from dist
 
-16/08/10 - build 206
+2016/08/10 - build 206
 
 -- ported appid rule option as "appids"
 -- moved http_inspect (old) to http_server (in extras)
@@ -1918,7 +2382,7 @@
 -- fixed event queue buffer log size
 -- fixed make distcheck; thanks to jack jackson <jsakcon@gmail.com> for reporting the issue
 
-16/08/05 - build 205
+2016/08/05 - build 205
 
 -- ported smb segmentation support
 -- converted sd_pattern to use hyperscan
@@ -1926,21 +2390,21 @@
 -- fixed endianness issues with rule options seq and win
 -- fixed rule option session binary vs all
 
-16/07/29 - build 204
+2016/07/29 - build 204
 
 -- fixed issue with icmp_seq and icmp_id field matching
 -- fixed off-by-1 line number in rule parsing errors
 -- fix cmake make check issue with new_http_inspect
 -- added new_http_inspect unbounded POST alert
 
-16/07/22 - build 203
+2016/07/22 - build 203
 
 -- add oversize directory alert to new_http_inspect
 -- add appid counts for mdns, timbuktu, battlefield, bgp, and netbios services
 -- continue smb port - write and close command, deprecated dialect check, smb fingerprint
 -- fix outstanding strndup calls
 
-16/07/15 - build 202
+2016/07/15 - build 202
 
 -- fix dynamic build of new_http_inspect
 -- fix static analysis issues
@@ -1950,7 +2414,7 @@
 -- snort2lua updates for new_http_inspect
 -- code refactoring and cleanup
 
-16/06/22 - build 201
+2016/06/22 - build 201
 
 -- initial appid port - in progress
 -- add configure --enable-hardened-build
@@ -1970,7 +2434,7 @@
 -- miscellaneous cmake and auto tools build fixes
 -- openssl is now a mandatory dependency
 
-16/06/10 - build 200
+2016/06/10 - build 200
 
 -- continued porting of dce_rpc - smb transaction processing
 -- tweaked autotools build foo
@@ -1980,7 +2444,7 @@
 -- fix static analysis issues
 -- fix handling of bpf file failures
 
-16/06/03 - build 199
+2016/06/03 - build 199
 
 -- add new http_inspect alerts abusive content-length and transfer-encodings
 -- add \b matching to sensitive data
@@ -1989,7 +2453,7 @@
 -- fix link with dynamic DAQ
 -- convert legacy allocations to memory manager for better memory profiling
 
-16/05/27 - build 198
+2016/05/27 - build 198
 
 -- add double-decoding to new_http_inspect
 -- add obfuscation support for cmg and unified2
@@ -2000,12 +2464,12 @@
 -- additional unit tests for high availability
 -- fix multi-DAQ instance configuration
 
-16/05/02 - build 197
+2016/05/02 - build 197
 
 -- fix build of extras
 -- fix unit tests
 
-16/04/29 - build 196
+2016/04/29 - build 196
 
 -- overhaul cmake foo
 -- update extras to better serve as examples
@@ -2014,7 +2478,7 @@
 -- continued dce2 port
 -- more static analysis memory leak fixes
 
-16/04/22 - build 195
+2016/04/22 - build 195
 
 -- added packet_capture module
 -- initial high availability for UDP
@@ -2028,7 +2492,7 @@
 -- perf_monitor refactoring
 -- unicode map file for new_http_inspect
 
-16/04/08 - build 194
+2016/04/08 - build 194
 
 -- added iterative pruning for out of memory condition
 -- added preemptive pruning to memory manager
@@ -2046,7 +2510,7 @@
 -- fixed memory leaks (more to go)
 -- clean up hyperscan pkg-config and cmake logic
 
-16/03/28 - build 193
+2016/03/28 - build 193
 
 -- fix session parsing abort handling
 -- fix shutdown memory leaks
@@ -2063,7 +2527,7 @@
 -- add configure --enable-code-coverage
 -- memory manager updates
 
-16/03/18 - build 192
+2016/03/18 - build 192
 
 -- use hwloc for CPU affinity
 -- fix process stats output
@@ -2077,13 +2541,13 @@
 -- miscellaneous warning and lint cleanup
 -- snort2Lua updates for preproc sensitive_data and sd_pattern option
 
-16/03/07 - build 191
+2016/03/07 - build 191
 
 -- fix perf_monitor stats output at shutdown
 -- initial port of sensitive data as a rule option
 -- fix doc/online_manual.sh for linux
 
-16/03/04 - build 190
+2016/03/04 - build 190
 
 -- fix console close and remote control disconnect issues
 -- added per-thread memcap calculation
@@ -2092,7 +2556,7 @@
 -- format string cleanup for parser logging
 -- fix conf reload by signal
 
-16/02/26 - build 189
+2016/02/26 - build 189
 
 -- snort2lua for dce2 port (in progress)
 -- replace ppm with latency
@@ -2104,7 +2568,7 @@
 -- fix linux + clang build errors
 -- trough rewrite
 
-16/02/22 - build 188
+2016/02/22 - build 188
 
 -- added delete/delete[] replacements for nothrow overload
    thanks to Ramya Potluri for reporting the issue
@@ -2117,7 +2581,7 @@
 -- packet latency updates
 -- perfmon updates
 
-16/02/12 - build 187
+2016/02/12 - build 187
 
 -- file capture added - initial version writes from packet thread
 -- added support for http 0.9 to new_http_inspect
@@ -2133,7 +2597,7 @@
 -- refactoring updates to tcp session
 -- refactoring updates to profiler
 
-16/02/02 - build 186
+2016/02/02 - build 186
 
 -- update copyright to 2016, add missing license blocks
 -- fix xcode builds
@@ -2144,7 +2608,7 @@
 -- start dce2 port - 1st of many updates
 -- remove --enable-ppm - always enabled
 
-16/01/25 - build 185
+2016/01/25 - build 185
 
 -- initial host_tracker for new integrated netmap
 -- new_http_inspect refactoring for time and space considerations
@@ -2152,18 +2616,18 @@
 -- fatal on failed IP rep segment allocation - thanks to Bill Parker
 -- tweaked style guide wrt class declarations
 
-16/01/08 - build 184
+2016/01/08 - build 184
 
 -- added new_http_inpsect rule options
 -- fixed build issue with Clang and thread_local
 -- continued tcp session refactoring
 -- fixed rule option string unescape issue
 
-15/12/11 - build 183
+2015/12/11 - build 183
 
 -- circumvent asymmetric flow handling issue
 
-15/12/11 - build 182 - Alpha 3
+2015/12/11 - build 182 - Alpha 3
 
 -- added memory profiling feature
 -- added regex fast pattern support
@@ -2173,14 +2637,14 @@
 -- removed PPM_TEST
 -- build and memory leak fixes
 
-15/12/04 - build 181
+2015/12/04 - build 181
 
 -- perf profiling enhancements
 -- fixed build issues and memory leaks
 -- continued pattern match refactoring
 -- fix spurious sip_method matching
 
-15/11/25 - build 180
+2015/11/25 - build 180
 
 -- ported dnp3 preprocessor and rule options from 2.X
 -- fixed various valgrind issues with stats from sip, imap, pop, and smtp
@@ -2191,7 +2655,7 @@
 -- squelch repeated ip6 ooo extensions and bad options per packet
 -- fixed arp inspection bug
 
-15/11/20 - build 179
+2015/11/20 - build 179
 
 -- user manaul updates
 -- fix perf_monitor.max_file_size default to work on 32-bit systems, thanks
@@ -2206,7 +2670,7 @@
 -- fix arp inspection
 -- search engine refactoring
 
-15/11/13 - build 178
+2015/11/13 - build 178
 
 -- document runtime link issue with hyperscan on osx
 -- fix pathname generation for event trace file
@@ -2214,7 +2678,7 @@
 -- remove --enable-ppm-test
 -- sync up auto tools and cmake build options
 
-15/11/05 - build 177
+2015/11/05 - build 177
 
 -- idle processing cleanup
 -- fixed teredo payload detection
@@ -2226,14 +2690,14 @@
 -- fix ppm config
 -- miscellanous code cleanup
 
-15/10/30 - build 176
+2015/10/30 - build 176
 
 -- tcp reassembly refactoring
 -- profiler rewrite
 -- added gzip support to new_http_inspect
 -- added regex rule option based on hyperscan
 
-15/10/23 - build 175
+2015/10/23 - build 175
 
 -- ported gtp preprocessor and rule options from 2.X
 -- ported modbus preprocessor and rule options from 2.X
@@ -2241,7 +2705,7 @@
 -- added unit test build for cmake (already in autotools builds)
 -- fixed dynamic builds (187 plugins, 138 dynamic)
 
-15/10/16 - build 174
+2015/10/16 - build 174
 
 -- legacy daemonization cleanup
 -- decouple -D, -M, -q
@@ -2255,7 +2719,7 @@
 -- perfmonitor fixes
 -- ssl stats updates
 
-15/10/09 - build 173
+2015/10/09 - build 173
 
 -- added pkt_num rule option to extras
 -- fix final -> finalize changes for extras
@@ -2272,7 +2736,7 @@
    packets may have ip6 next proto
 -- update default manuals
 
-15/10/01 - build 172
+2015/10/01 - build 172
 
 -- check for bool value before setting fastpath config option in PPM
 -- update manual related to liblzma
@@ -2282,7 +2746,7 @@
 -- enable active response without flow
 -- update bug list
 
-15/09/25 - build 171
+2015/09/25 - build 171
 
 -- fix metadata:service to work like 2x
 -- fixed issues when building with LINUX_SMP
@@ -2293,7 +2757,7 @@
 -- add cpputest for unit testing
 -- don't apply cooked verdicts to raw packets
 
-15/09/17 - build 170
+2015/09/17 - build 170
 
 -- removed unused control socket defines from cmake
 -- fixed build error with valgrind build option
@@ -2307,7 +2771,7 @@
 -- fix detection of stream_user and stream_file data
 -- log innermost proto for type of broken packets
 
-15/09/10 - build 169
+2015/09/10 - build 169
 
 -- fix chunked manual install
 -- add event direction bug
@@ -2316,7 +2780,7 @@
 -- code cleanup
 -- fix dev guide builds from top_srcdir
 
-15/09/04 - build 168
+2015/09/04 - build 168
 
 -- fixed build of chunked manual (thanks to Bill Parker for reporting the issue)
 -- const cleanup
@@ -2331,11 +2795,11 @@
 -- DNS bug fix for TCP
 -- added --catch-tags [footag],[bartag] for unit test selection
 
-15/08/31 - build 167
+2015/08/31 - build 167
 
 -- fix xcode warnings
 
-15/08/21 - build 166
+2015/08/21 - build 166
 
 -- fix link error with g++ 4.8.3
 -- support multiple script-path args and single files
@@ -2346,7 +2810,7 @@
 -- fixed rpc_decode sequence number handling and buffer setup
 -- perf_monitor fixes for file output
 
-15/08/14 - build 165
+2015/08/14 - build 165
 
 -- flow depth support for new_http_inspect
 -- TCP session refactoring and create libtcp
@@ -2358,7 +2822,7 @@
 -- run catch unit tests after check unit tests
 -- fix documentation errors in users manual
 
-15/08/07 - build 164
+2015/08/07 - build 164
 
 -- add range and default to command line args
 -- fix unit test build on osx
@@ -2369,7 +2833,7 @@
    thanks to Siti Farhana Binti Lokman <sitifarhana.lokman@postgrad.manchester.ac.uk>
    for reporting the issue
 
-15/07/30 - build 163
+2015/07/30 - build 163
 
 -- numerous piglet fixes and enhancements
 -- BitOp rewrite
@@ -2378,7 +2842,7 @@
 -- fixed endianness in private IP address check
 -- fix build of dynamic plugins
 
-15/07/22 - build 162
+2015/07/22 - build 162
 
 -- enable build dependency tracking
 -- cleanup automake and cmake foo
@@ -2389,7 +2853,7 @@
 -- dev guide - convert snort includes into links
 -- fixup includes
 
-15/07/15 - build 161
+2015/07/15 - build 161
 
 -- added piglet plugin test harness
 -- added piglet_scripts with codec and inspector examples
@@ -2397,7 +2861,7 @@
 -- added dev_notes.txt in each src/ subdir
 -- scrubbed headers
 
-15/07/06 - build 160 - Alpha 2
+2015/07/06 - build 160 - Alpha 2
 
 -- fixed duplicate patterns in file_magic.lua
 -- warn about rules with no fast pattern
@@ -2412,7 +2876,7 @@
 -- fix valgrind issues
 -- fix xcode analyzer issues
 
-15/07/02 - build 159
+2015/07/02 - build 159
 
 -- added file processing to new_http_inspect
 -- ported sip preprocessor
@@ -2422,7 +2886,7 @@
 -- tweak style guide
 -- fix hosts table parsing
 
-15/06/19 - build 158
+2015/06/19 - build 158
 
 -- nhttp splitter updates
 -- nhttp handle white space after chunk length
@@ -2433,7 +2897,7 @@
 -- fix ssl assertion
 -- cleanup cache config
 
-15/06/11 - build 157
+2015/06/11 - build 157
 
 -- port ssl from snort
 -- fix stream_tcp so call splitter finish only if scan was called
@@ -2444,14 +2908,14 @@
 -- refactored active module
 -- updated snort2lua
 
-15/06/04 - build 156
+2015/06/04 - build 156
 
 -- new_http_inspect switch to bitset for event tracking
 -- fixed stream tcp handling of paf abort
 -- fixed stream tcp cleanup on reset
 -- fixed sequence of flush and flow data cleanup for new http inspect
 
-15/05/31 - build 155
+2015/05/31 - build 155
 
 -- update default manuals
 -- fix autotools build of manual wrt plugins
@@ -2460,7 +2924,7 @@
 -- add file magic lua
 -- xcode analyzer cleanup
 
-15/05/28 - build 154
+2015/05/28 - build 154
 
 -- new_http_inspect parsing and event handling updates
 -- initial port of file capture from Snort
@@ -2477,7 +2941,7 @@
 -- cleanup logging
 -- stream_tcp refactoring and cleanup
 
-15/05/22 - build 153
+2015/05/22 - build 153
 
 -- new_http_inspect parsing updates
 -- use buckets for user seglist
@@ -2488,19 +2952,19 @@
 -- added stream_user for payload processing
 -- added stream_file for file processing
 
-15/05/15 - build 152
+2015/05/15 - build 152
 
 -- fixed config error for inspection of rebuilt packets
 -- ported smtp inspector from Snort
 -- static analysis fix for new_http_inspect
 
-15/05/08 - build 151
+2015/05/08 - build 151
 
 -- doc tweaks
 -- new_http_inspect message parsing updates
 -- misc bug fixes
 
-15/04/30 - build 150
+2015/04/30 - build 150
 
 -- fixed xcode static analysis issues
 -- updated default manuals
@@ -2513,11 +2977,11 @@
 -- ensure unknown sources are analyzed
 -- pop and imap inspectors ported
 
-15/04/28 - build 149
+2015/04/28 - build 149
 
 -- fixed build issue with extras
 
-15/04/28 - build 148
+2015/04/28 - build 148
 
 -- fixed default validation issue reported by Sancho Panza
 -- refactored snort and snort_config modules
@@ -2525,17 +2989,17 @@
 -- added publish-subscribe handling of data events
 -- added data_log plugin example for pub-sub
 
-15/04/23 - build 147
+2015/04/23 - build 147
 
 -- change PT_DATA to IT_PASSIVE; supports named instances, reload, and consumers
 
-15/04/16 - build 146
+2015/04/16 - build 146
 
 -- added build of snort_manual.text if w3m is installed
 -- added default_snort_manual.text w/o w3m
 -- add Flow pointer to StreamSplitter::finish()
 
-15/04/10 - build 145
+2015/04/10 - build 145
 
 -- nhttp clear() and related changes
 -- abort PAF in current direction only
@@ -2546,13 +3010,13 @@
 -- new http changes - events from splitter
 -- fix dns assertion; remove unused variables
 
-15/03/31 - build 144
+2015/03/31 - build 144
 
 -- reworked autotools generation of api_options.h
 -- updated default manuals
 -- ported dns inspector
 
-15/03/26 - build 143
+2015/03/26 - build 143
 
 -- ported ssh inspector
 -- apply service from hosts when inspector already bound to flow
@@ -2562,7 +3026,7 @@
 -- eliminate dedicated nhttp chunk buffer
 -- minor nhttp cleanup in StreamSplitter
 
-15/03/18 - build 142
+2015/03/18 - build 142
 
 -- fixed host lookup issue
 -- folded classification.lua and reference.lua into snort_defaults.lua
@@ -2574,28 +3038,28 @@
 -- fix ip and icmp flow client/server ip init
 -- added logging examples to usage
 
-15/03/11 - build 141
+2015/03/11 - build 141
 
 -- added build foo for lzma; refactored configure.ac
 -- enhancements for checking compatibility of external plugins
 -- added doc/usage.txt
 
-15/02/27 - build 140
+2015/02/27 - build 140
 
 -- uncrustify, see crusty.cfg
 -- updated documentation on new HTTP inspector, binder, and wizard
 
-15/02/26 - build 139
+2015/02/26 - build 139
 
 -- additional http_inspect cleanup
 -- documented gotcha regarding rule variable definitions in Lua
 -- sync 297 http xff, swf, and pdf updates
 
-15/02/20 - build 138
+2015/02/20 - build 138
 
 -- sync ftp with 297; replace stream event callbacks with FlowData virtuals
 
-15/02/12 - build 137
+2015/02/12 - build 137
 
 -- updated manual from blog posts and emails
 -- normalization refactoring, renaming
@@ -2604,20 +3068,20 @@
    Codec methods
 -- 297 sync of active and codecs
 
-15/02/05 - build 136
+2015/02/05 - build 136
 
 -- fix up encoders
 -- sync stream with 297
 -- fix encoder check for ip6 extensions
 -- sync normalizations with 297
 
-15/01/29 - build 135
+2015/01/29 - build 135
 
 -- fixed freebsd build error
 -- fix default hi profile name
 -- updated default snort manuals
 
-15/01/26 - build 134
+2015/01/26 - build 134
 
 -- sync Mpse to 297, add SearchTool
 -- 297 sync for sfghash, sfxhash, tag, u2spewfoo, profiler and target based
@@ -2627,7 +3091,7 @@
 -- added md5, sha256, and sha512 rule options based on Snort 2.X
    protected_content
 
-15/01/20 - build 133
+2015/01/20 - build 133
 
 -- fixes for large file support on 32-bit Linux systems (reported by Y M)
 -- changed u2 base file name to unified2.log
@@ -2640,7 +3104,7 @@
 -- added pflog codecs
 -- fixed stream_size rule option
 
-15/01/05 - build 132
+2015/01/05 - build 132
 
 -- added this change log
 -- initial partial sync with Snort 297 including bug fixes and variable
@@ -2649,7 +3113,7 @@
 -- updated source copyrights for 2015 and reformatted license foo for
    consistency
 
-14/12/16 - build 131
+2014/12/16 - build 131
 
 -- fix asciidoc formatting and update default manuals
 -- updates to doc to better explain github builds
@@ -2661,7 +3125,7 @@
 -- add missing sanity checks reported by bill parker
 -- tweak READMEs
 
-14/12/11 - build 130
+2014/12/11 - build 130
 
 -- alpha 1 release
 

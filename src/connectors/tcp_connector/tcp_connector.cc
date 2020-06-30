@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -167,7 +167,7 @@ void TcpConnector::process_receive()
     {
         if (errno != EINTR)
         {
-            
+
             char error_msg[1024] = {0};
             if (strerror_r(errno, error_msg, sizeof(error_msg)) == 0)
                 ErrorMessage("TcpC Input Thread: Error polling on socket %d: %s\n", pfds[0].fd, error_msg);
@@ -413,7 +413,7 @@ static TcpConnector* tcp_connector_tinit_answer(TcpConnectorConfig* cfg, const c
         if (strerror_r(errno, error_msg, sizeof(error_msg)) == 0)
             ErrorMessage("accept() failure: %s\n", error_msg);
         else
-            ErrorMessage("accept() failure: %d\n", errno); 
+            ErrorMessage("accept() failure: %d\n", errno);
         return nullptr;
     }
 

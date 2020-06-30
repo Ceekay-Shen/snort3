@@ -1,5 +1,5 @@
 
-// Copyright (C) 2019-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2019-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -53,12 +53,13 @@ THREAD_LOCAL bool Active::s_suspend = false;
 
 THREAD_LOCAL PacketTracer* snort::s_pkt_trace = nullptr;
 
-PacketTracer::PacketTracer() = default;
+void Active::drop_packet(snort::Packet const*, bool) { }
 PacketTracer::~PacketTracer() = default;
 void PacketTracer::log(const char*, ...) { }
 void PacketTracer::open_file() { }
 void PacketTracer::dump_to_daq(Packet*) { }
 void PacketTracer::reset() { }
+void Active::set_drop_reason(char const*) { }
 Packet::Packet(bool) { }
 Packet::~Packet() = default;
 FlowCache::FlowCache(const FlowCacheConfig& cfg) : config(cfg) { }
@@ -73,17 +74,17 @@ Flow* FlowCache::find(const FlowKey*) { return nullptr; }
 Flow* FlowCache::allocate(const FlowKey*) { return nullptr; }
 void FlowCache::push(Flow*) { }
 bool FlowCache::prune_one(PruneReason, bool) { return true; }
-unsigned FlowCache::delete_flows(unsigned) { return 0; } 
+unsigned FlowCache::delete_flows(unsigned) { return 0; }
 unsigned FlowCache::timeout(unsigned, time_t) { return 1; }
 void Flow::init(PktType) { }
-void set_network_policy(SnortConfig*, unsigned) { } 
+void set_network_policy(const SnortConfig*, unsigned) { }
 void DataBus::publish(const char*, const uint8_t*, unsigned, Flow*) { }
 void DataBus::publish(const char*, Packet*, Flow*) { }
-SnortConfig* SnortConfig::get_conf() { return nullptr; }
+const SnortConfig* SnortConfig::get_conf() { return nullptr; }
 void FlowCache::unlink_uni(Flow*) { }
 void Flow::set_direction(Packet*) { }
-void set_inspection_policy(SnortConfig*, unsigned) { }
-void set_ips_policy(SnortConfig*, unsigned) { }
+void set_inspection_policy(const SnortConfig*, unsigned) { }
+void set_ips_policy(const SnortConfig*, unsigned) { }
 void Flow::set_mpls_layer_per_dir(Packet*) { }
 void DetectionEngine::disable_all(Packet*) { }
 void Stream::drop_traffic(const Packet*, char) { }
@@ -115,6 +116,7 @@ uint32_t IpApi::id() const { return 0; }
 }
 
 bool FlowKey::init(
+    const SnortConfig*,
     PktType, IpProtocol,
     const SfIp*, uint16_t,
     const SfIp*, uint16_t,
@@ -124,6 +126,7 @@ bool FlowKey::init(
 }
 
 bool FlowKey::init(
+    const SnortConfig*,
     PktType, IpProtocol,
     const SfIp*, const SfIp*,
     uint32_t, uint16_t,

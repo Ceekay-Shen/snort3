@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -50,7 +50,7 @@
 #define STATE_BDATA            3    // Binary data state
 #define STATE_TLS_CLIENT_PEND  4    // Got STARTTLS
 #define STATE_TLS_SERVER_PEND  5    // Got STARTTLS
-#define STATE_TLS_DATA         6    // Successful handshake, TLS encrypted data 
+#define STATE_TLS_DATA         6    // Successful handshake, TLS encrypted data
 #define STATE_AUTH             7
 #define STATE_XEXCH50          8
 #define STATE_UNKNOWN          9
@@ -142,16 +142,16 @@ class SmtpMime : public snort::MimeSession
 {
 public:
     using snort::MimeSession::MimeSession;
-    SMTP_PROTO_CONF* config;
-#ifndef UNIT_TEST  
+    SmtpProtoConf* config;
+#ifndef UNIT_TEST
 private:
-#endif  
+#endif
     int handle_header_line(const uint8_t* ptr, const uint8_t* eol,
         int max_header_len, snort::Packet* p) override;
     int normalize_data(const uint8_t* ptr, const uint8_t* data_end, snort::Packet* p) override;
 #ifdef UNIT_TEST
 private:
-#endif  
+#endif
     void decode_alert() override;
     void decompress_alert() override;
     void reset_state(snort::Flow* ssn) override;

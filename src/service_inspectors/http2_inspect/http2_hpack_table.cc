@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2019-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2019-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -17,6 +17,12 @@
 //--------------------------------------------------------------------------
 // http2_hpack_table.cc author Katura Harvey <katharve@cisco.com>
 
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
+
+#include "http2_enum.h"
+#include "http2_flow_data.h"
 #include "http2_hpack_table.h"
 
 #include <string.h>
@@ -24,12 +30,14 @@
 #define MAKE_TABLE_ENTRY(name, value) \
     HpackTableEntry(strlen(name), (const uint8_t*)name, strlen(value), (const uint8_t*)value)
 
+using namespace Http2Enums;
+
 HpackTableEntry::HpackTableEntry(const Field& copy_name, const Field& copy_value)
 {
     uint8_t* new_name = new uint8_t[copy_name.length()];
     uint8_t* new_value = new uint8_t[copy_value.length()];
-    memcpy(new_value, copy_value.start(), copy_value.length());
     memcpy(new_name, copy_name.start(), copy_name.length());
+    memcpy(new_value, copy_value.start(), copy_value.length());
 
     name.set(copy_name.length(), new_name, true);
     value.set(copy_value.length(), new_value, true);
@@ -102,9 +110,40 @@ const HpackTableEntry HpackIndexTable::static_table[STATIC_MAX_INDEX + 1] =
 };
 
 const HpackTableEntry* HpackIndexTable::lookup(uint64_t index) const
-{ 
+{
     if (index <= STATIC_MAX_INDEX)
         return &static_table[index];
     else
         return dynamic_table.get_entry(index);
+}
+
+bool HpackIndexTable::add_index(const Field& name, const Field& value)
+{
+    return dynamic_table.add_entry(name, value);
+}
+
+void HpackIndexTable::settings_table_size_update(uint32_t new_size)
+{
+    if (!encoder_set_max_size)
+        dynamic_table.update_size(new_size);
+    else if (new_size < dynamic_table.get_max_size())
+    {
+        encoder_set_max_size = false;
+        dynamic_table.update_size(new_size);
+    }
+}
+
+// A dynamic table size update sent in an HPACK encoder cannot be larger than last
+// HEADER_TABLE_SIZE settings frame parameter sent by the decoder
+bool HpackIndexTable::hpack_table_size_update(uint32_t new_size)
+{
+    encoder_set_max_size = true;
+    if (new_size <= session_data->get_connection_settings((HttpCommon::SourceId)(1 - source_id))->
+        get_param(HEADER_TABLE_SIZE))
+    {
+       dynamic_table.update_size(new_size);
+       return true;
+    }
+    else
+        return false;
 }

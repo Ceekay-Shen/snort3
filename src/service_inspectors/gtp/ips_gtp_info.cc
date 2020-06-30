@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -24,7 +24,7 @@
 
 // gtp_info rule option implementation
 
-#include "hash/hashfcn.h"
+#include "hash/hash_key_operations.h"
 #include "framework/cursor.h"
 #include "framework/ips_option.h"
 #include "framework/module.h"
@@ -58,7 +58,7 @@ public:
     EvalStatus eval(Cursor&, Packet*) override;
 
 public:
-    // byte n is for version n (named types can have 
+    // byte n is for version n (named types can have
     // different codes in different versions)
     uint8_t types[MAX_GTP_VERSION_CODE + 1];
 };

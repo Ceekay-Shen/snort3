@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -615,7 +615,7 @@ int RtmpServiceDetector::validate(AppIdDiscoveryArgs& args)
     }
 
     /* Give up if it's taking us too long to figure out this thing. */
-    if (args.asd.session_packet_count >= args.asd.config->mod_config->rtmp_max_packets)
+    if (args.asd.session_packet_count >= args.asd.ctxt.get_odp_ctxt().rtmp_max_packets)
     {
         goto fail;
     }
@@ -633,6 +633,9 @@ fail:
 
 success:
     AppIdHttpSession* hsession = args.asd.get_http_session();
+    if (!hsession)
+        hsession = args.asd.create_http_session();
+
     if ( ss->swfUrl )
     {
         if ( !hsession->get_field(MISC_URL_FID) )
@@ -648,7 +651,7 @@ success:
     if ( ss->pageUrl )
     {
         if ( !hsession->get_field(REQ_REFERER_FID) &&
-            !args.asd.config->mod_config->referred_appId_disabled )
+            !args.asd.ctxt.get_odp_ctxt().referred_appId_disabled )
             hsession->set_field(REQ_REFERER_FID, new std::string(ss->pageUrl), args.change_bits);
 
         snort_free(ss->pageUrl);

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2019-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2019-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -82,7 +82,7 @@ bool StreamHa::convert(std::istringstream& data_stream)
         if (!tmpval)
         {
             data_api.failed_conversion(data_stream, arg_stream.str());
-            retval = false;;
+            retval = false;
         }
     }
     table_api.close_table(); // ha stream

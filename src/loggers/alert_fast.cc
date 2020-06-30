@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 // Copyright (C) 1998-2002 Martin Roesch <roesch@sourcefire.com>
 // Copyright (C) 2000,2001 Andrew R. Baker <andrewb@uab.edu>
@@ -42,6 +42,8 @@
 #include "detection/detection_engine.h"
 #include "detection/signature.h"
 #include "events/event.h"
+#include "flow/flow.h"
+#include "flow/session.h"
 #include "framework/logger.h"
 #include "framework/module.h"
 #include "log/log_text.h"
@@ -52,6 +54,7 @@
 #include "packet_io/active.h"
 #include "packet_io/sfdaq.h"
 #include "service_inspectors/http_inspect/http_enum.h"
+#include "stream/stream_splitter.h"
 
 using namespace snort;
 using namespace std;
@@ -98,12 +101,12 @@ public:
     bool begin(const char*, int, SnortConfig*) override;
 
     Usage get_usage() const override
-    { return CONTEXT; }
+    { return GLOBAL; }
 
 public:
-    size_t limit;
-    bool file;
-    bool packet;
+    size_t limit = 0;
+    bool file = false;
+    bool packet = false;
 };
 
 bool FastModule::set(const char*, Value& v, SnortConfig*)
@@ -183,7 +186,7 @@ FastLogger::FastLogger(FastModule* m)
     // could be configurable; and should be should be shared with u2
 
     Inspector* ins = InspectorManager::get_inspector("http_inspect");
-    
+
     if ( !ins )
         return;
 
@@ -224,7 +227,7 @@ void FastLogger::alert(Packet* p, const char* msg, const Event& event)
     TextLog_Print(fast_log, "[%u:%u:%u] ",
         event.sig_info->gid, event.sig_info->sid, event.sig_info->rev);
 
-    if (SnortConfig::alert_interface())
+    if (p->context->conf->alert_interface())
         TextLog_Print(fast_log, " <%s> ", SFDAQ::get_input_spec());
 
     if ( msg )
@@ -238,7 +241,7 @@ void FastLogger::alert(Packet* p, const char* msg, const Event& event)
     TextLog_Print(fast_log, "{%s} ", p->get_type());
     LogIpAddrs(fast_log, p);
 
-    if ( packet || SnortConfig::output_app_data() )
+    if ( packet || p->context->conf->output_app_data() )
     {
         log_data(p, event);
     }
@@ -255,7 +258,18 @@ void FastLogger::log_data(Packet* p, const Event& event)
     bool log_pkt = true;
 
     TextLog_NewLine(fast_log);
-    Inspector* gadget = p->flow ? p->flow->gadget : nullptr;
+    const char* ins_name = "snort";
+    Inspector* gadget = nullptr;
+    if ( p->flow and p->flow->session )
+    {
+        snort::StreamSplitter* ss = p->flow->session->get_splitter(p->is_from_client());
+        if ( ss and ss->is_paf() )
+        {
+            gadget = p->flow->gadget;
+            if ( gadget )
+                ins_name = gadget->get_name();
+        }
+    }
     const char** buffers = gadget ? gadget->get_api()->buffers : nullptr;
 
     if ( buffers )
@@ -269,7 +283,7 @@ void FastLogger::log_data(Packet* p, const Event& event)
         {
 
             if ( gadget->get_buf(id, p, buf) )
-                LogNetData(fast_log, buf.data, buf.len, p, buffers[id-1]);
+                LogNetData(fast_log, buf.data, buf.len, p, buffers[id-1], ins_name);
 
             log_pkt = rsp;
         }
@@ -279,13 +293,13 @@ void FastLogger::log_data(Packet* p, const Event& event)
         InspectionBuffer buf;
 
         if ( gadget->get_buf(InspectionBuffer::IBT_KEY, p, buf) )
-            LogNetData(fast_log, buf.data, buf.len, p);
+            LogNetData(fast_log, buf.data, buf.len, p, nullptr, ins_name);
 
         if ( gadget->get_buf(InspectionBuffer::IBT_HEADER, p, buf) )
-            LogNetData(fast_log, buf.data, buf.len, p);
+            LogNetData(fast_log, buf.data, buf.len, p, nullptr, ins_name);
 
         if ( gadget->get_buf(InspectionBuffer::IBT_BODY, p, buf) )
-            LogNetData(fast_log, buf.data, buf.len, p);
+            LogNetData(fast_log, buf.data, buf.len, p, nullptr, ins_name);
     }
     if (p->has_ip())
         LogIPPkt(fast_log, p);
@@ -298,10 +312,10 @@ void FastLogger::log_data(Packet* p, const Event& event)
         for ( const auto& b : *p->obfuscator )
             buf.replace(b.offset, b.length, b.length, p->obfuscator->get_mask_char());
 
-        LogNetData(fast_log, (const uint8_t*)buf.c_str(), p->dsize, p);
+        LogNetData(fast_log, (const uint8_t*)buf.c_str(), p->dsize, p, nullptr, ins_name);
     }
     else if ( log_pkt )
-        LogNetData(fast_log, p->data, p->dsize, p);
+        LogNetData(fast_log, p->data, p->dsize, p, nullptr, ins_name);
 
     DataBuffer& buf = DetectionEngine::get_alt_buffer(p);
 
@@ -319,7 +333,7 @@ static Module* mod_ctor()
 static void mod_dtor(Module* m)
 { delete m; }
 
-static Logger* fast_ctor(SnortConfig*, Module* mod)
+static Logger* fast_ctor(Module* mod)
 { return new FastLogger((FastModule*)mod); }
 
 static void fast_dtor(Logger* p)

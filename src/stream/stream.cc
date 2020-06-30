@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -32,15 +32,18 @@
 #include "flow/prune_stats.h"
 #include "main/snort.h"
 #include "main/snort_config.h"
+#include "main/snort_debug.h"
+#include "network_inspectors/packet_tracer/packet_tracer.h"
 #include "packet_io/active.h"
 #include "protocols/vlan.h"
 #include "stream/base/stream_module.h"
-#include "target_based/sftarget_hostentry.h"
+#include "target_based/host_attributes.h"
 #include "target_based/snort_protocols.h"
 #include "utils/util.h"
 
 #include "tcp/tcp_session.h"
 #include "tcp/tcp_stream_session.h"
+#include "tcp/tcp_stream_tracker.h"
 
 using namespace snort;
 
@@ -87,7 +90,8 @@ Flow* Stream::get_flow(
     uint16_t vlan, uint32_t mplsId, uint16_t addressSpaceId)
 {
     FlowKey key;
-    key.init(type, proto, srcIP, srcPort, dstIP, dstPort, vlan, mplsId, addressSpaceId);
+    const SnortConfig* sc = SnortConfig::get_conf();
+    key.init(sc, type, proto, srcIP, srcPort, dstIP, dstPort, vlan, mplsId, addressSpaceId);
     return get_flow(&key);
 }
 
@@ -97,6 +101,7 @@ void Stream::populate_flow_key(Packet* p, FlowKey* key)
         return;
 
     key->init(
+        SnortConfig::get_conf(),
         p->type(), p->get_ip_proto_next(),
         p->ptrs.ip_api.get_src(), p->ptrs.sp,
         p->ptrs.ip_api.get_dst(), p->ptrs.dp,
@@ -158,7 +163,11 @@ void Stream::check_flow_closed(Packet* p)
     if (flow->session_state & STREAM_STATE_CLOSED)
     {
         assert(flow_con);
-        
+
+        // Will no longer have flow so save use_direct_inject state on packet.
+        if ( flow->flags.use_direct_inject )
+            p->packet_flags |= PKT_USE_DIRECT_INJECT;
+
         // this will get called on each onload
         // eventually all onloads will occur and delete will be called
         if ( not flow->is_suspended() )
@@ -172,7 +181,12 @@ void Stream::check_flow_closed(Packet* p)
         flow->set_state(Flow::FlowState::BLOCK);
 
         if ( !(p->packet_flags & PKT_STATELESS) )
+        {
             drop_traffic(p, SSN_DIR_BOTH);
+            p->active->set_drop_reason("stream");
+            if (PacketTracer::is_active())
+                PacketTracer::log("Stream: pending block, drop\n");
+        }
         flow->session_state &= ~STREAM_STATE_BLOCK_PENDING;
     }
 }
@@ -213,9 +227,9 @@ void Stream::stop_inspection(
 {
     assert(flow && flow->session);
 
-    trace_logf(stream, "stop inspection on flow, dir %s \n",
-	       dir == SSN_DIR_BOTH ? "BOTH": 
-	       ((dir == SSN_DIR_FROM_CLIENT) ? "FROM_CLIENT" : "FROM_SERVER"));
+    debug_logf(stream_trace, p, "stop inspection on flow, dir %s \n",
+        dir == SSN_DIR_BOTH ? "BOTH" :
+        ((dir == SSN_DIR_FROM_CLIENT) ? "FROM_CLIENT" : "FROM_SERVER"));
 
     switch (dir)
     {
@@ -311,6 +325,10 @@ void Stream::drop_flow(const Packet* p)
 
     if ( !(p->packet_flags & PKT_STATELESS) )
         drop_traffic(p, SSN_DIR_BOTH);
+
+    p->active->set_drop_reason("stream");
+    if (PacketTracer::is_active())
+        PacketTracer::log("Stream: session has been dropped\n");
 }
 
 //-------------------------------------------------------------------------
@@ -324,8 +342,8 @@ void Stream::init_active_response(const Packet* p, Flow* flow)
 
     flow->response_count = 1;
 
-    if ( SnortConfig::get_conf()->max_responses > 1 )
-        flow->set_expire(p, SnortConfig::get_conf()->min_interval);
+    if ( p->context->conf->max_responses > 1 )
+        flow->set_expire(p, p->context->conf->min_interval);
 }
 
 void Stream::purge_flows()
@@ -334,11 +352,17 @@ void Stream::purge_flows()
         flow_con->purge_flows();
 }
 
-void Stream::timeout_flows(time_t cur_time)
+void Stream::handle_timeouts(bool idle)
 {
+    timeval cur_time;
+    packet_gettimeofday(&cur_time);
+
     // FIXIT-M batch here or loop vs looping over idle?
     if ( flow_con )
-        flow_con->timeout_flows(cur_time);
+        flow_con->timeout_flows(cur_time.tv_sec);
+
+    int max_remove = idle ? -1 : 1;       // -1 = all eligible
+    TcpStreamTracker::release_held_packets(cur_time, max_remove);
 }
 
 void Stream::prune_flows()
@@ -387,9 +411,8 @@ void Stream::set_snort_protocol_id(
         set_ip_protocol(flow);
     }
 
-    snort_protocol_id = get_snort_protocol_id_from_host_table(
-        host_entry, flow->ssn_state.ipprotocol,
-        flow->server_port, SFAT_SERVICE);
+    snort_protocol_id = host_entry->get_snort_protocol_id
+        (flow->ssn_state.ipprotocol, flow->server_port);
 
 #if 0
     // FIXIT-M from client doesn't imply need to swap
@@ -424,7 +447,7 @@ SnortProtocolId Stream::get_snort_protocol_id(Flow* flow)
         set_ip_protocol(flow);
     }
 
-    if ( HostAttributeEntry* host_entry = SFAT_LookupHostEntryByIP(&flow->server_ip) )
+    if ( HostAttributeEntry* host_entry = HostAttributes::find_host(&flow->server_ip) )
     {
         set_snort_protocol_id(flow, host_entry, FROM_SERVER);
 
@@ -432,7 +455,7 @@ SnortProtocolId Stream::get_snort_protocol_id(Flow* flow)
             return flow->ssn_state.snort_protocol_id;
     }
 
-    if ( HostAttributeEntry* host_entry = SFAT_LookupHostEntryByIP(&flow->client_ip) )
+    if ( HostAttributeEntry* host_entry = HostAttributes::find_host(&flow->client_ip) )
     {
         set_snort_protocol_id(flow, host_entry, FROM_CLIENT);
 
@@ -456,9 +479,8 @@ SnortProtocolId Stream::set_snort_protocol_id(Flow* flow, SnortProtocolId id)
 
     if ( !flow->is_proxied() )
     {
-        SFAT_UpdateApplicationProtocol(
-            &flow->server_ip, flow->server_port,
-            flow->ssn_state.ipprotocol, id);
+        HostAttributes::update_service
+            (&flow->server_ip, flow->server_port, flow->ssn_state.ipprotocol, id);
     }
     return id;
 }
@@ -548,7 +570,7 @@ uint8_t Stream::get_flow_ttl(Flow* flow, char dir, bool outer)
 // that we only send in the still active direction(s).
 static void active_response(Packet* p, Flow* lwssn)
 {
-    uint8_t max = SnortConfig::get_conf()->max_responses;
+    uint8_t max = p->context->conf->max_responses;
 
     if ( p->is_from_client() )
         lwssn->session_state |= STREAM_STATE_DROP_CLIENT;
@@ -557,7 +579,7 @@ static void active_response(Packet* p, Flow* lwssn)
 
     if ( (lwssn->response_count < max) && lwssn->expired(p) )
     {
-        uint32_t delay = SnortConfig::get_conf()->min_interval;
+        uint32_t delay = p->context->conf->min_interval;
         EncodeFlags flags =
             ( (lwssn->session_state & STREAM_STATE_DROP_CLIENT) &&
             (lwssn->session_state & STREAM_STATE_DROP_SERVER) ) ?
@@ -588,6 +610,9 @@ bool Stream::blocked_flow(Packet* p)
         DetectionEngine::disable_content(p);
         p->active->drop_packet(p);
         active_response(p, flow);
+        p->active->set_drop_reason("stream");
+        if (PacketTracer::is_active())
+            PacketTracer::log("Stream: session was already blocked\n");
         return true;
     }
     return false;
@@ -731,6 +756,12 @@ void Stream::set_extra_data(
 {
     assert(flow && flow->session);
     flow->session->set_extra_data(p, flag);
+}
+
+void Stream::disable_reassembly(Flow* flow)
+{
+    assert(flow && flow->session);
+    return flow->session->disable_reassembly(flow);
 }
 
 char Stream::get_reassembly_direction(Flow* flow)

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -23,7 +23,7 @@
 
 #include "swapper.h"
 
-#include "target_based/sftarget_reader.h"
+#include "target_based/host_attributes.h"
 
 #include "analyzer.h"
 #include "snort.h"
@@ -33,7 +33,7 @@ using namespace snort;
 
 bool Swapper::reload_in_progress = false;
 
-Swapper::Swapper(SnortConfig* s, tTargetBasedConfig* t)
+Swapper::Swapper(SnortConfig* s, HostAttributesTable* t)
 {
     old_conf = nullptr;
     new_conf = s;
@@ -42,7 +42,7 @@ Swapper::Swapper(SnortConfig* s, tTargetBasedConfig* t)
     new_attribs = t;
 }
 
-Swapper::Swapper(SnortConfig* sold, SnortConfig* snew)
+Swapper::Swapper(const SnortConfig* sold, SnortConfig* snew)
 {
     old_conf = sold;
     new_conf = snew;
@@ -51,7 +51,9 @@ Swapper::Swapper(SnortConfig* sold, SnortConfig* snew)
     new_attribs = nullptr;
 }
 
-Swapper::Swapper(SnortConfig* sold, SnortConfig* snew, tTargetBasedConfig* told, tTargetBasedConfig* tnew)
+Swapper::Swapper(
+    const SnortConfig* sold, SnortConfig* snew,
+    HostAttributesTable* told, HostAttributesTable* tnew)
 {
     old_conf = sold;
     new_conf = snew;
@@ -60,7 +62,7 @@ Swapper::Swapper(SnortConfig* sold, SnortConfig* snew, tTargetBasedConfig* told,
     new_attribs = tnew;
 }
 
-Swapper::Swapper(tTargetBasedConfig* told, tTargetBasedConfig* tnew)
+Swapper::Swapper(HostAttributesTable* told, HostAttributesTable* tnew)
 {
     old_conf = nullptr;
     new_conf = nullptr;
@@ -75,7 +77,7 @@ Swapper::~Swapper()
         delete old_conf;
 
     if ( old_attribs )
-        SFAT_Free(old_attribs);
+        delete old_attribs;
 }
 
 void Swapper::apply(Analyzer& analyzer)
@@ -85,10 +87,10 @@ void Swapper::apply(Analyzer& analyzer)
         const bool reload = (SnortConfig::get_conf() != nullptr);
         SnortConfig::set_conf(new_conf);
         // FIXIT-M Determine whether we really want to do this before or after the set_conf
-        if (reload)
+        if ( reload )
             analyzer.reinit(new_conf);
     }
 
     if ( new_attribs )
-        SFAT_SetConfig(new_attribs);
+        HostAttributes::set_host_attributes_table(new_attribs);
 }

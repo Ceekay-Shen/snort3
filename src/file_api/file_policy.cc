@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -62,6 +62,21 @@ void FilePolicy::set_file_signature(bool enabled)
 void FilePolicy::set_file_capture(bool enabled)
 {
     capture_enabled = enabled;
+}
+
+bool FilePolicy::get_file_type() const
+{
+    return type_enabled;
+}
+
+bool FilePolicy::get_file_signature() const
+{
+    return signature_enabled;
+}
+
+bool FilePolicy::get_file_capture() const
+{
+    return capture_enabled;
 }
 
 void FilePolicy::insert_file_rule(FileRule& rule)

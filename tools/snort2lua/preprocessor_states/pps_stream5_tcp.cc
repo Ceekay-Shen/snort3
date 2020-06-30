@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -508,8 +508,8 @@ bool StreamTcp::convert(std::istringstream& data_stream)
             bind_default->print_binding(false);
     }
 
-    //  Add the port bindings separately from the protocol bindings since 
-    //  in 2.9.x they are OR'd not AND'd. Clear the ports so they're not 
+    //  Add the port bindings separately from the protocol bindings since
+    //  in 2.9.x they are OR'd not AND'd. Clear the ports so they're not
     //  included with the protocol bindings.
     cv.make_binder(client);
     client.clear_ports();

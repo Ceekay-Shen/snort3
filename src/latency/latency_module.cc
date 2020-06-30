@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -27,12 +27,15 @@
 #include <chrono>
 
 #include "main/snort_config.h"
+#include "trace/trace.h"
 
 #include "latency_config.h"
 #include "latency_rules.h"
 #include "latency_stats.h"
 
 using namespace snort;
+
+THREAD_LOCAL const Trace* latency_trace = nullptr;
 
 // -----------------------------------------------------------------------------
 // latency attributes
@@ -50,8 +53,10 @@ static const Parameter s_packet_params[] =
     { "fastpath", Parameter::PT_BOOL, nullptr, "false",
         "fastpath expensive packets (max_time exceeded)" },
 
-    { "action", Parameter::PT_ENUM, "none | alert | log | alert_and_log", "none",
-        "event action if packet times out and is fastpathed" },
+#ifdef REG_TEST
+    { "test_timeout", Parameter::PT_BOOL, nullptr, "false",
+        "timeout on every packet" },
+#endif
 
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
 };
@@ -72,8 +77,10 @@ static const Parameter s_rule_params[] =
     { "max_suspend_time", Parameter::PT_INT, "0:max32", "30000",
         "set max time for suspending a rule (ms, 0 means permanently disable rule)" },
 
-    { "action", Parameter::PT_ENUM, "none | alert | log | alert_and_log", "none",
-        "event action for rule latency enable and suspend events" },
+#ifdef REG_TEST
+    { "test_timeout", Parameter::PT_BOOL, nullptr, "false",
+        "timeout on every rule evaluation" },
+#endif
 
     { nullptr, Parameter::PT_MAX, nullptr, nullptr, nullptr }
 };
@@ -125,10 +132,11 @@ static inline bool latency_set(Value& v, PacketLatencyConfig& config)
     }
     else if ( v.is("fastpath") )
         config.fastpath = v.get_bool();
+#ifdef REG_TEST
+    else if ( v.is("test_timeout") )
+        config.test_timeout = v.get_bool();
+#endif
 
-    else if ( v.is("action") )
-        config.action =
-            static_cast<decltype(config.action)>(v.get_uint8());
     else
         return false;
 
@@ -153,18 +161,27 @@ static inline bool latency_set(Value& v, RuleLatencyConfig& config)
         long t = clock_ticks(v.get_uint32());
         config.max_suspend_time = TO_DURATION(config.max_time, t);
     }
-    else if ( v.is("action") )
-        config.action =
-            static_cast<decltype(config.action)>(v.get_uint8());
+#ifdef REG_TEST
+    else if ( v.is("test_timeout") )
+        config.test_timeout = v.get_bool();
+#endif
     else
         return false;
 
     return true;
 }
 
-LatencyModule::LatencyModule() :
-    Module(s_name, s_help, s_params)
+LatencyModule::LatencyModule() : Module(s_name, s_help, s_params)
 { }
+
+void LatencyModule::set_trace(const Trace* trace) const
+{ latency_trace = trace; }
+
+const TraceOption* LatencyModule::get_trace_options() const
+{
+    static const TraceOption latency_trace_options(nullptr, 0, nullptr);
+    return &latency_trace_options;
+}
 
 bool LatencyModule::set(const char* fqn, Value& v, SnortConfig* sc)
 {
@@ -177,7 +194,7 @@ bool LatencyModule::set(const char* fqn, Value& v, SnortConfig* sc)
     else if ( !strncmp(fqn, slr, strlen(slr)) )
         return latency_set(v, sc->latency->rule_latency);
 
-    return false;
+    return true;
 }
 
 const RuleMap* LatencyModule::get_rules() const

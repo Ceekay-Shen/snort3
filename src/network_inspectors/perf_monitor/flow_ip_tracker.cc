@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2015-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2015-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -24,6 +24,7 @@
 
 #include "flow_ip_tracker.h"
 
+#include "hash/hash_defs.h"
 #include "log/messages.h"
 #include "protocols/packet.h"
 
@@ -46,9 +47,8 @@ FlowStateValue* FlowIPTracker::find_stats(const SfIp* src_addr, const SfIp* dst_
 {
     FlowStateKey key;
     FlowStateValue* value = nullptr;
-    bool prune_required = false;
 
-    if (src_addr->less_than(*dst_addr))
+    if ( src_addr->less_than(*dst_addr) )
     {
         key.ipA = *src_addr;
         key.ipB = *dst_addr;
@@ -61,24 +61,13 @@ FlowStateValue* FlowIPTracker::find_stats(const SfIp* src_addr, const SfIp* dst_
         *swapped = 1;
     }
 
-    value = (FlowStateValue*)xhash_find(ip_map, &key);
-    if (!value)
+    value = (FlowStateValue*)ip_map->get_user_data(&key);
+    if ( !value )
     {
-        XHashNode* node = xhash_get_node_with_prune(ip_map, &key, &prune_required);
-
-        if (!node)
-        {
+        if ( ip_map->insert(&key, nullptr) != HASH_OK )
             return nullptr;
-        }
-
-        if (prune_required)
-        {
-            ++pmstats.total_frees;
-            ++pmstats.alloc_prunes;
-        }
-
-        memset(node->data, 0, sizeof(FlowStateValue));
-        value = (FlowStateValue*)node->data;
+        value = (FlowStateValue*)ip_map->get_user_data();
+        memset(value, 0, sizeof(FlowStateValue));
     }
 
     return value;
@@ -88,16 +77,16 @@ bool FlowIPTracker::initialize(size_t new_memcap)
 {
     bool need_pruning = false;
 
-    if (!ip_map)
+    if ( !ip_map )
     {
-        ip_map = xhash_new(DEFAULT_XHASH_NROWS, sizeof(FlowStateKey), sizeof(FlowStateValue),
-            new_memcap, 1, nullptr, nullptr, 1);
+        ip_map = new XHash(DEFAULT_XHASH_NROWS, sizeof(FlowStateKey),
+            sizeof(FlowStateValue), new_memcap);
     }
     else
     {
         need_pruning = (new_memcap < memcap);
         memcap = new_memcap;
-        ip_map->mc.memcap = memcap;
+        ip_map->set_memcap(new_memcap);
     }
 
     return need_pruning;
@@ -140,30 +129,28 @@ FlowIPTracker::FlowIPTracker(PerfConfig* perf) : PerfTracker(perf, TRACKER_NAME)
     formatter->register_field("udp_created", (PegCount*)
         &stats.state_changes[SFS_STATE_UDP_CREATED]);
     formatter->finalize_fields();
+    stats.total_packets = stats.total_bytes = 0;
 
     memcap = perf->flowip_memcap;
-
-    ip_map = xhash_new(DEFAULT_XHASH_NROWS, sizeof(FlowStateKey), sizeof(FlowStateValue),
-        memcap, 1, nullptr, nullptr, 1);
-
-    if (!ip_map)
-        FatalError("Unable to allocate memory for FlowIP stats\n");
+    ip_map = new XHash(DEFAULT_XHASH_NROWS, sizeof(FlowStateKey), sizeof(FlowStateValue), memcap);
 }
 
 FlowIPTracker::~FlowIPTracker()
 {
-    if ( ip_map )
-        xhash_delete(ip_map);
+    const XHashStats& stats = ip_map->get_stats();
+    pmstats.flow_tracker_creates = stats.nodes_created;
+    pmstats.flow_tracker_total_deletes = stats.memcap_deletes;
+    pmstats.flow_tracker_prunes = stats.memcap_prunes;
+
+    delete ip_map;
 }
 
 void FlowIPTracker::reset()
-{
-    xhash_make_empty(ip_map);
-}
+{ ip_map->clear_hash(); }
 
 void FlowIPTracker::update(Packet* p)
 {
-    if (p->has_ip() && !p->is_rebuilt())
+    if ( p->has_ip() && !p->is_rebuilt() )
     {
         FlowType type = SFS_TYPE_OTHER;
         int swapped;
@@ -178,12 +165,12 @@ void FlowIPTracker::update(Packet* p)
             type = SFS_TYPE_UDP;
 
         FlowStateValue* value = find_stats(src_addr, dst_addr, &swapped);
-        if (!value)
+        if ( !value )
             return;
 
         TrafficStats* stats = &value->traffic_stats[type];
 
-        if (!swapped)
+        if ( !swapped )
         {
             stats->packets_a_to_b++;
             stats->bytes_a_to_b += len;
@@ -200,7 +187,7 @@ void FlowIPTracker::update(Packet* p)
 
 void FlowIPTracker::process(bool)
 {
-    for (auto node = xhash_findfirst(ip_map); node; node = xhash_findnext(ip_map))
+    for (auto node = ip_map->find_first_node(); node; node = ip_map->find_next_node())
     {
         FlowStateKey* key = (FlowStateKey*)node->key;
         FlowStateValue* cur_stats = (FlowStateValue*)node->data;
@@ -221,11 +208,10 @@ int FlowIPTracker::update_state(const SfIp* src_addr, const SfIp* dst_addr, Flow
     int swapped;
 
     FlowStateValue* value = find_stats(src_addr, dst_addr, &swapped);
-    if (!value)
+    if ( !value )
         return 1;
 
     value->state_changes[state]++;
-
     return 0;
 }
 

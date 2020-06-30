@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -25,7 +25,6 @@
 // provides a common flow management interface
 
 #include "flow/flow.h"
-
 
 struct HostAttributeEntry;
 
@@ -72,7 +71,7 @@ public:
     // for shutdown only
     static void purge_flows();
 
-    static void timeout_flows(time_t cur_time);
+    static void handle_timeouts(bool idle);
     static void prune_flows();
     static bool expected_flow(Flow*, Packet*);
 
@@ -143,7 +142,7 @@ public:
         Flow*, Packet* p, uint32_t gid, uint32_t sid,
         uint32_t eventId, uint32_t eventSecond);
 
-    // Get reassembly direction for given session
+    static void disable_reassembly(Flow*);
     static char get_reassembly_direction(Flow*);
 
     // Returns true if stream data for the flow is in sequence, otherwise return false.

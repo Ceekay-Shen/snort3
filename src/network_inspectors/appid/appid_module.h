@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -25,13 +25,19 @@
 #include <unordered_map>
 #include <vector>
 
+#include "framework/module.h"
+#include "main/snort_config.h"
+
 #include "appid_config.h"
 #include "appid_pegs.h"
-#include "framework/module.h"
+
+namespace snort
+{
+class Trace;
+}
 
 extern THREAD_LOCAL snort::ProfileStats appid_perf_stats;
-
-extern Trace TRACE_NAME(appid_module);
+extern THREAD_LOCAL const snort::Trace* appid_trace;
 
 #define MOD_NAME "appid"
 #define MOD_HELP "application and service identification"
@@ -77,15 +83,18 @@ public:
     PegCount* get_counts() const override;
     snort::ProfileStats* get_profile() const override;
 
-    const AppIdModuleConfig* get_data();
+    const AppIdConfig* get_data();
 
     Usage get_usage() const override
     { return CONTEXT; }
     void sum_stats(bool) override;
     void show_dynamic_stats() override;
 
+    void set_trace(const snort::Trace*) const override;
+    const snort::TraceOption* get_trace_options() const override;
+
 private:
-    AppIdModuleConfig* config;
+    AppIdConfig* config;
     AppIdReloadTuner appid_rrt;
 };
 

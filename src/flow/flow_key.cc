@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -24,7 +24,7 @@
 
 #include "flow/flow_key.h"
 
-#include "hash/hashfcn.h"
+#include "hash/hash_key_operations.h"
 #include "main/snort_config.h"
 #include "protocols/icmp4.h"
 #include "protocols/icmp6.h"
@@ -92,7 +92,7 @@ static inline void update_icmp6(const SfIp*& srcIP, uint16_t& srcPort,
 // init foo
 //-------------------------------------------------------------------------
 inline bool FlowKey::init4(
-    IpProtocol ip_proto,
+    const SnortConfig* sc, IpProtocol ip_proto,
     const SfIp *srcIP, uint16_t srcPort,
     const SfIp *dstIP, uint16_t dstPort,
     uint32_t mplsId, bool order)
@@ -139,7 +139,7 @@ inline bool FlowKey::init4(
         port_h = srcPort;
         reversed = true;
     }
-    if (SnortConfig::mpls_overlapping_ip() &&
+    if (sc->mpls_overlapping_ip() &&
         ip::isPrivateIP(src) && ip::isPrivateIP(dst))
         mplsLabel = mplsId;
     else
@@ -149,7 +149,7 @@ inline bool FlowKey::init4(
 }
 
 inline bool FlowKey::init6(
-    IpProtocol ip_proto,
+    const SnortConfig* sc, IpProtocol ip_proto,
     const SfIp *srcIP, uint16_t srcPort,
     const SfIp *dstIP, uint16_t dstPort,
     uint32_t mplsId, bool order)
@@ -193,7 +193,7 @@ inline bool FlowKey::init6(
         reversed = true;
     }
 
-    if (SnortConfig::mpls_overlapping_ip())
+    if (sc->mpls_overlapping_ip())
         mplsLabel = mplsId;
     else
         mplsLabel = 0;
@@ -201,31 +201,32 @@ inline bool FlowKey::init6(
     return reversed;
 }
 
-void FlowKey::init_vlan(uint16_t vlanId)
+void FlowKey::init_vlan(const SnortConfig* sc, uint16_t vlanId)
 {
-    if (!SnortConfig::get_vlan_agnostic())
+    if (!sc->get_vlan_agnostic())
         vlan_tag = vlanId;
     else
         vlan_tag = 0;
 }
 
-void FlowKey::init_address_space(uint16_t addrSpaceId)
+void FlowKey::init_address_space(const SnortConfig* sc, uint16_t addrSpaceId)
 {
-    if (!SnortConfig::address_space_agnostic())
+    if (!sc->address_space_agnostic())
         addressSpaceId = addrSpaceId;
     else
         addressSpaceId = 0;
 }
 
-void FlowKey::init_mpls(uint32_t mplsId)
+void FlowKey::init_mpls(const SnortConfig* sc, uint32_t mplsId)
 {
-    if (SnortConfig::mpls_overlapping_ip())
+    if (sc->mpls_overlapping_ip())
         mplsLabel = mplsId;
     else
         mplsLabel = 0;
 }
 
 bool FlowKey::init(
+    const SnortConfig* sc,
     PktType type, IpProtocol ip_proto,
     const SfIp *srcIP, uint16_t srcPort,
     const SfIp *dstIP, uint16_t dstPort,
@@ -242,25 +243,26 @@ bool FlowKey::init(
     if (srcIP->is_ip4() && dstIP->is_ip4())
     {
         version = 4;
-        reversed = init4(ip_proto, srcIP, srcPort, dstIP, dstPort, mplsId);
+        reversed = init4(sc, ip_proto, srcIP, srcPort, dstIP, dstPort, mplsId);
     }
     else
     {
         version = 6;
-        reversed = init6(ip_proto, srcIP, srcPort, dstIP, dstPort, mplsId);
+        reversed = init6(sc, ip_proto, srcIP, srcPort, dstIP, dstPort, mplsId);
     }
 
     pkt_type = type;
     ip_protocol = (uint8_t)ip_proto;
 
-    init_vlan(vlanId);
-    init_address_space(addrSpaceId);
+    init_vlan(sc, vlanId);
+    init_address_space(sc, addrSpaceId);
     padding = 0;
 
     return reversed;
 }
 
 bool FlowKey::init(
+    const SnortConfig* sc,
     PktType type, IpProtocol ip_proto,
     const SfIp *srcIP, const SfIp *dstIP,
     uint32_t id, uint16_t vlanId,
@@ -274,20 +276,20 @@ bool FlowKey::init(
     if (srcIP->is_ip4() && dstIP->is_ip4())
     {
         version = 4;
-        init4(ip_proto, srcIP, srcPort, dstIP, dstPort, mplsId, false);
+        init4(sc, ip_proto, srcIP, srcPort, dstIP, dstPort, mplsId, false);
         ip_protocol = (uint8_t)ip_proto;
     }
     else
     {
         version = 6;
-        init6(ip_proto, srcIP, srcPort, dstIP, dstPort, mplsId, false);
+        init6(sc, ip_proto, srcIP, srcPort, dstIP, dstPort, mplsId, false);
         ip_protocol = 0;
     }
 
     pkt_type = type;
 
-    init_vlan(vlanId);
-    init_address_space(addrSpaceId);
+    init_vlan(sc, vlanId);
+    init_address_space(sc, addrSpaceId);
     padding = 0;
 
     return false;
@@ -297,12 +299,49 @@ bool FlowKey::init(
 // hash foo
 //-------------------------------------------------------------------------
 
-uint32_t FlowKey::hash(HashFnc* hf, const unsigned char* p, int)
+bool FlowKey::is_equal(const void* s1, const void* s2, size_t)
+{
+    const uint64_t* a = (const uint64_t*)s1;
+    const uint64_t* b = (const uint64_t*)s2;
+    if (*a - *b)
+        return false;               /* Compares IPv4 lo/hi
+                                   Compares IPv6 low[0,1] */
+
+    a++;
+    b++;
+    if (*a - *b)
+        return false;               /* Compares port lo/hi, vlan, protocol, version
+                                   Compares IPv6 low[2,3] */
+
+    a++;
+    b++;
+    if (*a - *b)
+        return false;               /* Compares IPv6 hi[0,1] */
+
+    a++;
+    b++;
+    if (*a - *b)
+        return false;               /* Compares IPv6 hi[2,3] */
+
+    a++;
+    b++;
+    if (*a - *b)
+        return false;               /* Compares MPLS label, port lo/hi */
+
+    a++;
+    b++;
+    if (*a - *b)
+        return false;               /* Compares vlan,AddressSpace ID,ip_proto,type,version,8 bit pad */
+
+    return true;
+}
+
+unsigned FlowHashKeyOps::do_hash(const unsigned char* k, int)
 {
     uint32_t a, b, c;
-    a = b = c = hf->hardener;
+    a = b = c = hardener;
 
-    const uint32_t* d = (const uint32_t*)p;
+    const uint32_t* d = (const uint32_t*)k;
 
     a += d[0];   // IPv6 lo[0]
     b += d[1];   // IPv6 lo[1]
@@ -331,42 +370,9 @@ uint32_t FlowKey::hash(HashFnc* hf, const unsigned char* p, int)
     return c;
 }
 
-int FlowKey::compare(const void* s1, const void* s2, size_t)
+bool FlowHashKeyOps::key_compare(const void* k1, const void* k2, size_t len)
 {
-    const uint64_t* a,* b;
-
-    a = (const uint64_t*)s1;
-    b = (const uint64_t*)s2;
-    if (*a - *b)
-        return 1;               /* Compares IPv4 lo/hi
-                                   Compares IPv6 low[0,1] */
-
-    a++;
-    b++;
-    if (*a - *b)
-        return 1;               /* Compares port lo/hi, vlan, protocol, version
-                                   Compares IPv6 low[2,3] */
-
-    a++;
-    b++;
-    if (*a - *b)
-        return 1;               /* Compares IPv6 hi[0,1] */
-
-    a++;
-    b++;
-    if (*a - *b)
-        return 1;               /* Compares IPv6 hi[2,3] */
-
-    a++;
-    b++;
-    if (*a - *b)
-        return 1;               /* Compares MPLS label, port lo/hi */
-
-    a++;
-    b++;
-    if (*a - *b)
-        return 1;               /* Compares vlan,AddressSpace ID,ip_proto,type,version,8 bit pad */
-
-    return 0;
+    return FlowKey::is_equal(k1, k2, len);
 }
+
 

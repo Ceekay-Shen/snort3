@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -74,7 +74,7 @@ public:
     int add_expected(
         const snort::Packet* ctrlPkt, PktType, IpProtocol,
         const snort::SfIp *srcIP, uint16_t srcPort,
-		const snort::SfIp *dstIP, uint16_t dstPort,
+        const snort::SfIp *dstIP, uint16_t dstPort,
         char direction, snort::FlowData*);
 
     int add_expected(
@@ -99,6 +99,7 @@ private:
     void set_key(snort::FlowKey*, snort::Packet*);
     unsigned process(snort::Flow*, snort::Packet*);
     void preemptive_cleanup();
+    void update_stats(snort::Flow*, snort::Packet*);
 
 private:
     snort::InspectSsnFunc get_proto_session[to_utype(PktType::MAX)] = {};

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -21,12 +21,14 @@
 #include "config.h"
 #endif
 
+#include "http_common.h"
 #include "http_cutter.h"
+#include "http_enum.h"
 
 using namespace HttpEnums;
 
 ScanResult HttpStartCutter::cut(const uint8_t* buffer, uint32_t length,
-    HttpInfractions* infractions, HttpEventGen* events, uint32_t, bool)
+    HttpInfractions* infractions, HttpEventGen* events, uint32_t, bool, bool)
 {
     for (uint32_t k = 0; k < length; k++)
     {
@@ -154,7 +156,7 @@ HttpStartCutter::ValidationResult HttpStatusCutter::validate(uint8_t octet,
 }
 
 ScanResult HttpHeaderCutter::cut(const uint8_t* buffer, uint32_t length,
-    HttpInfractions* infractions, HttpEventGen* events, uint32_t, bool)
+    HttpInfractions* infractions, HttpEventGen* events, uint32_t, bool, bool)
 {
     // Header separators: leading \r\n, leading \n, nonleading \r\n\r\n, nonleading \n\r\n,
     // nonleading \r\n\n, and nonleading \n\n. The separator itself becomes num_excess which is
@@ -250,8 +252,38 @@ ScanResult HttpHeaderCutter::cut(const uint8_t* buffer, uint32_t length,
     return SCAN_NOT_FOUND;
 }
 
+HttpBodyCutter::HttpBodyCutter(bool detained_inspection_, CompressId compression_) :
+    detained_inspection(detained_inspection_), compression(compression_)
+{
+    if (detained_inspection && ((compression == CMP_GZIP) || (compression == CMP_DEFLATE)))
+    {
+        compress_stream = new z_stream;
+        compress_stream->zalloc = Z_NULL;
+        compress_stream->zfree = Z_NULL;
+        compress_stream->next_in = Z_NULL;
+        compress_stream->avail_in = 0;
+        const int window_bits = (compression == CMP_GZIP) ? GZIP_WINDOW_BITS : DEFLATE_WINDOW_BITS;
+        if (inflateInit2(compress_stream, window_bits) != Z_OK)
+        {
+            assert(false);
+            compression = CMP_NONE;
+            delete compress_stream;
+            compress_stream = nullptr;
+        }
+    }
+}
+
+HttpBodyCutter::~HttpBodyCutter()
+{
+    if (compress_stream != nullptr)
+    {
+        inflateEnd(compress_stream);
+        delete compress_stream;
+    }
+}
+
 ScanResult HttpBodyClCutter::cut(const uint8_t* buffer, uint32_t length, HttpInfractions*,
-    HttpEventGen*, uint32_t flow_target, bool stretch)
+    HttpEventGen*, uint32_t flow_target, bool stretch, bool)
 {
     assert(remaining > octets_seen);
 
@@ -327,7 +359,7 @@ ScanResult HttpBodyClCutter::cut(const uint8_t* buffer, uint32_t length, HttpInf
 }
 
 ScanResult HttpBodyOldCutter::cut(const uint8_t* buffer, uint32_t length, HttpInfractions*,
-    HttpEventGen*, uint32_t flow_target, bool stretch)
+    HttpEventGen*, uint32_t flow_target, bool stretch, bool)
 {
     if (flow_target == 0)
     {
@@ -364,7 +396,7 @@ ScanResult HttpBodyOldCutter::cut(const uint8_t* buffer, uint32_t length, HttpIn
 }
 
 ScanResult HttpBodyChunkCutter::cut(const uint8_t* buffer, uint32_t length,
-    HttpInfractions* infractions, HttpEventGen* events, uint32_t flow_target, bool stretch)
+    HttpInfractions* infractions, HttpEventGen* events, uint32_t flow_target, bool stretch, bool)
 {
     // Are we skipping through the rest of this chunked body to the trailers and the next message?
     const bool discard_mode = (flow_target == 0);
@@ -656,6 +688,65 @@ ScanResult HttpBodyChunkCutter::cut(const uint8_t* buffer, uint32_t length,
     return detain_this_packet ? SCAN_NOT_FOUND_DETAIN : SCAN_NOT_FOUND;
 }
 
+ScanResult HttpBodyH2Cutter::cut(const uint8_t* buffer, uint32_t length,
+    HttpInfractions* infractions, HttpEventGen* events, uint32_t flow_target, bool stretch,
+    bool h2_body_finished)
+{
+    //FIXIT-E detained inspection not yet supported for http2
+    UNUSED(buffer);
+
+    // FIXIT-E stretch not yet supported for http2 message bodies
+    UNUSED(stretch);
+
+    // If the headers included a content length header (expected length >= 0), check it against the
+    // actual message body length. Alert if it does not match at the end of the message body, or if
+    // it overflows during the body (alert once then stop computing).
+    if (expected_body_length >= 0)
+    {
+        if ((total_octets_scanned + length) > expected_body_length)
+        {
+            *infractions += INF_H2_DATA_OVERRUNS_CL;
+            events->create_event(EVENT_H2_DATA_OVERRUNS_CL);
+            expected_body_length = HttpCommon::STAT_NOT_COMPUTE;
+        }
+        else if (h2_body_finished and ((total_octets_scanned + length) < expected_body_length))
+        {
+            *infractions += INF_H2_DATA_UNDERRUNS_CL;
+            events->create_event(EVENT_H2_DATA_UNDERRUNS_CL);
+        }
+    }
+
+    if (flow_target == 0)
+    {
+        num_flush = length;
+        total_octets_scanned += length;
+        return SCAN_DISCARD_PIECE;
+    }
+    if (!h2_body_finished)
+    {
+        if (octets_seen + length < flow_target)
+        {
+            // Not enough data yet to create a message section
+            octets_seen += length;
+            total_octets_scanned += length;
+            return SCAN_NOT_FOUND;
+        }
+        else
+        {
+            num_flush = flow_target - octets_seen;
+            total_octets_scanned += num_flush;
+            return SCAN_FOUND_PIECE;
+        }
+    }
+    else
+    {
+        // For now if end_stream is set for scan, a zero-length buffer is always sent to flush
+        assert(length == 0);
+        num_flush = 0;
+        return SCAN_FOUND;
+    }
+}
+
 // This method searches the input stream looking for the beginning of a script or other dangerous
 // content that requires detained inspection. Exactly what we are looking for is encapsulated in
 // dangerous().
@@ -683,21 +774,57 @@ bool HttpBodyCutter::need_detained_inspection(const uint8_t* data, uint32_t leng
 // Currently we do detained inspection when we see a javascript starting
 bool HttpBodyCutter::dangerous(const uint8_t* data, uint32_t length)
 {
+    const uint8_t* input_buf = data;
+    uint32_t input_length = length;
+    uint8_t* decomp_output = nullptr;
+
+    // Zipped flows must be decompressed before we can check them. Unzipping for detained
+    // inspection is completely separate from the unzipping done later in reassemble().
+    if ((compression == CMP_GZIP) || (compression == CMP_DEFLATE))
+    {
+        const uint32_t decomp_buffer_size = MAX_OCTETS;
+        decomp_output = new uint8_t[decomp_buffer_size];
+
+        compress_stream->next_in = const_cast<Bytef*>(data);
+        compress_stream->avail_in = length;
+        compress_stream->next_out = decomp_output;
+        compress_stream->avail_out = decomp_buffer_size;
+
+        int ret_val = inflate(compress_stream, Z_SYNC_FLUSH);
+
+        // Not going to be subtle about this and try to fix decompression problems. If it doesn't
+        // work out we assume it could be dangerous.
+        if (((ret_val != Z_OK) && (ret_val != Z_STREAM_END)) || (compress_stream->avail_in > 0))
+        {
+            delete[] decomp_output;
+            return true;
+        }
+
+        input_buf = decomp_output;
+        input_length = decomp_buffer_size - compress_stream->avail_out;
+    }
+
     static const uint8_t match_string[] = { '<', 's', 'c', 'r', 'i', 'p', 't' };
+    static const uint8_t match_string_upper[] = { '<', 'S', 'C', 'R', 'I', 'P', 'T' };
     static const uint8_t string_length = sizeof(match_string);
-    for (uint32_t k = 0; k < length; k++)
+    for (uint32_t k = 0; k < input_length; k++)
     {
         // partial_match is persistent, enabling matches that cross data boundaries
-        if (data[k] == match_string[partial_match])
+        if ((input_buf[k] == match_string[partial_match]) ||
+            (input_buf[k] == match_string_upper[partial_match]))
         {
             if (++partial_match == string_length)
+            {
+                delete[] decomp_output;
                 return true;
+            }
         }
         else
         {
             partial_match = 0;
         }
     }
+    delete[] decomp_output;
     return false;
 }
 

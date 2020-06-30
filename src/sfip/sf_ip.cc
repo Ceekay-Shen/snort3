@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 1998-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -353,7 +353,7 @@ SfIpRet SfIp::set(const void* src)
 
 /* Obfuscates this IP with an obfuscation CIDR
     Makes this:  ob | (this & mask) */
-void SfIp::obfuscate(SfCidr* ob)
+void SfIp::obfuscate(const SfCidr* ob)
 {
     const uint32_t* ob_p;
     int index, i;

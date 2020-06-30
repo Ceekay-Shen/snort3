@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2016-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2016-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -396,10 +396,10 @@ inline void dce_alert(uint32_t gid, uint32_t sid, dce2CommonStats* stats, DCE2_S
 }
 
 bool dce2_set_common_config(snort::Value&, dce2CommonProtoConf&);
-void print_dce2_common_config(dce2CommonProtoConf&);
+void print_dce2_common_config(const dce2CommonProtoConf&);
 bool dce2_set_co_config(snort::Value&, dce2CoProtoConf&);
-void print_dce2_co_config(dce2CoProtoConf&);
-bool dce2_paf_abort(snort::Flow*, DCE2_SsnData*);
+void print_dce2_co_config(const dce2CoProtoConf&);
+bool dce2_paf_abort(DCE2_SsnData*);
 void DCE2_Detect(DCE2_SsnData*);
 snort::Packet* DCE2_GetRpkt(snort::Packet*, DCE2_RpktType, const uint8_t*, uint32_t);
 uint16_t DCE2_GetRpktMaxData(DCE2_RpktType);

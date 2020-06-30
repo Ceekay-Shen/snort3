@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2018-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2018-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -39,7 +39,6 @@ using namespace snort;
 using namespace HttpCommon;
 using namespace Http2Enums;
 
-// Mindless scan() that just flushes whatever it is given
 StreamSplitter::Status Http2StreamSplitter::scan(Packet* pkt, const uint8_t* data, uint32_t length,
     uint32_t, uint32_t* flush_offset)
 {
@@ -52,17 +51,12 @@ StreamSplitter::Status Http2StreamSplitter::scan(Packet* pkt, const uint8_t* dat
 
     if (session_data == nullptr)
     {
-        pkt->flow->set_flow_data(session_data = new Http2FlowData);
-        Http2Module::increment_peg_counts(PEG_FLOW);
         AssistantGadgetEvent event(pkt, "http");
         DataBus::publish(FLOW_ASSISTANT_GADGET_EVENT, event);
-    }
-
-    // General mechanism to abort using scan
-    if (session_data->frame_type[source_id] == FT__ABORT)
-    {
-        session_data->frame_type[source_id] = FT__NONE;
-        return HttpStreamSplitter::status_value(StreamSplitter::ABORT, true);
+        if (pkt->flow->assistant_gadget == nullptr)
+            return HttpStreamSplitter::status_value(StreamSplitter::ABORT, true);
+        pkt->flow->set_flow_data(session_data = new Http2FlowData(pkt->flow));
+        Http2Module::increment_peg_counts(PEG_FLOW);
     }
 
 #ifdef REG_TEST
@@ -94,8 +88,15 @@ StreamSplitter::Status Http2StreamSplitter::scan(Packet* pkt, const uint8_t* dat
     }
 #endif
 
+    // General mechanism to abort using scan
+    if (session_data->frame_type[source_id] == FT__ABORT)
+        return HttpStreamSplitter::status_value(StreamSplitter::ABORT, true);
+
     const StreamSplitter::Status ret_val =
         implement_scan(session_data, data, length, flush_offset, source_id);
+
+    if (ret_val == StreamSplitter::ABORT)
+        session_data->frame_type[source_id] = FT__ABORT;
 
 #ifdef REG_TEST
     if (HttpTestManager::use_test_input(HttpTestManager::IN_HTTP2))
@@ -208,7 +209,7 @@ bool Http2StreamSplitter::finish(Flow* flow)
     }
 #endif
 
-    // FIXIT-H not supported yet
+    // FIXIT-E not supported yet
     return false;
 }
 
@@ -235,7 +236,7 @@ bool Http2StreamSplitter::init_partial_flush(Flow* flow)
     }
 #endif
 
-    // FIXIT-H not supported yet
+    // FIXIT-E not supported yet
     return false;
 }
 

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -32,8 +32,11 @@
 #include "http_msg_status.h"
 #include "http_msg_trailer.h"
 
+#include "hash/hash_key_operations.h"
+
 using namespace HttpCommon;
 using namespace HttpEnums;
+using namespace snort;
 
 static void delete_section_list(HttpMsgSection* section_list)
 {
@@ -54,7 +57,6 @@ HttpTransaction::~HttpTransaction()
         delete header[k];
         delete trailer[k];
         delete infractions[k];
-        delete events[k];
     }
     delete_section_list(body_list);
     delete_section_list(discard_list);
@@ -105,17 +107,13 @@ HttpTransaction* HttpTransaction::attach_my_transaction(HttpFlowData* session_da
                 delete_transaction(session_data->transaction[SRC_CLIENT], session_data);
             }
         }
-        session_data->transaction[SRC_CLIENT] = new HttpTransaction;
+        session_data->transaction[SRC_CLIENT] = new HttpTransaction(session_data);
 
-        // The StreamSplitter generates infractions and events related to this transaction while
-        // splitting the request line and keep them in temporary storage in the FlowData. Now we
-        // move them here.
+        // The StreamSplitter generates infractions related to this transaction while splitting the
+        // request line and keeps them in temporary storage in the FlowData. Now we move them here.
         session_data->transaction[SRC_CLIENT]->infractions[SRC_CLIENT] =
             session_data->infractions[SRC_CLIENT];
         session_data->infractions[SRC_CLIENT] = nullptr;
-        session_data->transaction[SRC_CLIENT]->events[SRC_CLIENT] =
-            session_data->events[SRC_CLIENT];
-        session_data->events[SRC_CLIENT] = nullptr;
     }
     // This transaction has more than one response. This is a new response which is replacing the
     // interim response. The two responses cannot coexist so we must clean up the interim response.
@@ -141,7 +139,7 @@ HttpTransaction* HttpTransaction::attach_my_transaction(HttpFlowData* session_da
         if (session_data->pipeline_underflow)
         {
             // A previous underflow separated the two sides forever
-            session_data->transaction[SRC_SERVER] = new HttpTransaction;
+            session_data->transaction[SRC_SERVER] = new HttpTransaction(session_data);
         }
         else if ((session_data->transaction[SRC_SERVER] = session_data->take_from_pipeline()) ==
             nullptr)
@@ -152,7 +150,7 @@ HttpTransaction* HttpTransaction::attach_my_transaction(HttpFlowData* session_da
                 // Either there is no request at all or there is a request but a previous response
                 // already took it. Either way we have more responses than requests.
                 session_data->pipeline_underflow = true;
-                session_data->transaction[SRC_SERVER] = new HttpTransaction;
+                session_data->transaction[SRC_SERVER] = new HttpTransaction(session_data);
             }
 
             else if (session_data->type_expected[SRC_CLIENT] == SEC_REQUEST)
@@ -173,13 +171,10 @@ HttpTransaction* HttpTransaction::attach_my_transaction(HttpFlowData* session_da
         }
         session_data->transaction[SRC_SERVER]->response_seen = true;
 
-        // Move in server infractions and events now that the response is attached here
+        // Move in server infractions now that the response is attached here
         session_data->transaction[SRC_SERVER]->infractions[SRC_SERVER] =
             session_data->infractions[SRC_SERVER];
         session_data->infractions[SRC_SERVER] = nullptr;
-        session_data->transaction[SRC_SERVER]->events[SRC_SERVER] =
-            session_data->events[SRC_SERVER];
-        session_data->events[SRC_SERVER] = nullptr;
     }
 
     assert(session_data->transaction[source_id] != nullptr);
@@ -248,20 +243,28 @@ HttpInfractions* HttpTransaction::get_infractions(SourceId source_id)
     return infractions[source_id];
 }
 
-HttpEventGen* HttpTransaction::get_events(SourceId source_id)
-{
-    return events[source_id];
-}
-
 void HttpTransaction::set_one_hundred_response()
 {
     assert(response_seen);
     if (one_hundred_response)
     {
         *infractions[SRC_SERVER] += INF_MULTIPLE_100_RESPONSES;
-        events[SRC_SERVER]->create_event(EVENT_MULTIPLE_100_RESPONSES);
+        session_data->events[SRC_SERVER]->create_event(EVENT_MULTIPLE_100_RESPONSES);
     }
     one_hundred_response = true;
     second_response_expected = true;
 }
 
+void HttpTransaction::set_file_processing_id(const SourceId source_id,
+    const uint64_t transaction_id, const uint32_t stream_id)
+{
+    const int data_len = sizeof(source_id) + sizeof(transaction_id) + sizeof(stream_id);
+    uint8_t data[data_len];
+    memcpy(data, (void*)&source_id, sizeof(source_id));
+    uint32_t offset = sizeof(source_id);
+    memcpy(data + offset, (void*)&transaction_id, sizeof(transaction_id));
+    offset += sizeof(transaction_id);
+    memcpy(data + offset, (void*)&stream_id, sizeof(stream_id));
+
+    file_processing_id[source_id] = str_to_hash(data, data_len);
+}

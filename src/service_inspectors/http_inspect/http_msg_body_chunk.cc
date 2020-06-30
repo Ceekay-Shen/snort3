@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify it
 // under the terms of the GNU General Public License Version 2 as published
@@ -55,9 +55,7 @@ void HttpMsgBodyChunk::update_flow()
 #ifdef REG_TEST
 void HttpMsgBodyChunk::print_section(FILE* output)
 {
-    HttpMsgSection::print_section_title(output, "chunked body");
-    fprintf(output, "Cumulative octets %" PRIi64 "\n", body_octets);
-    print_body_section(output);
+    print_body_section(output, "chunked body");
 }
 #endif
 

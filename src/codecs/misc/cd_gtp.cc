@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -40,10 +40,10 @@ static const RuleMap gtp_rules[] =
     { 0, nullptr }
 };
 
-class GtpModule : public CodecModule
+class GtpModule : public BaseCodecModule
 {
 public:
-    GtpModule() : CodecModule(CD_GTP_NAME, CD_GTP_HELP) { }
+    GtpModule() : BaseCodecModule(CD_GTP_NAME, CD_GTP_HELP) { }
 
     const RuleMap* get_rules() const override
     { return gtp_rules; }
@@ -174,7 +174,7 @@ bool GtpCodec::decode(const RawData& raw, CodecData& codec, DecodeData& dd)
         return false;
     }
 
-    if ( SnortConfig::tunnel_bypass_enabled(TUNNEL_GTP) )
+    if ( codec.conf->tunnel_bypass_enabled(TUNNEL_GTP) )
         codec.tunnel_bypass = true;
 
     codec.lyr_len = len;

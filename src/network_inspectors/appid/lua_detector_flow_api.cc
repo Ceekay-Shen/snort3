@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2005-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -213,7 +213,7 @@ static int create_detector_flow(lua_State* L)
     LuaDetectorManager::add_detector_flow(detector_flow);
 
     detector_flow->asd = AppIdSession::create_future_session(lsd->ldp.pkt, &saddr, sport,
-        &daddr, dport, proto, 0, 0);
+        &daddr, dport, proto, 0);
 
     if (!detector_flow->asd)
     {

@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------
-// Copyright (C) 2014-2019 Cisco and/or its affiliates. All rights reserved.
+// Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
 // Copyright (C) 2002-2013 Sourcefire, Inc.
 //
 // This program is free software; you can redistribute it and/or modify it
@@ -81,7 +81,7 @@
 #include "framework/endianness.h"
 #include "framework/ips_option.h"
 #include "framework/module.h"
-#include "hash/hashfcn.h"
+#include "hash/hash_key_operations.h"
 #include "log/messages.h"
 #include "profiler/profiler.h"
 #include "protocols/packet.h"
@@ -383,7 +383,7 @@ static const Parameter s_params[] =
 class ByteJumpModule : public Module
 {
 public:
-    ByteJumpModule() : Module(s_name, s_help, s_params) { }
+    ByteJumpModule() : Module(s_name, s_help, s_params) { data.multiplier = 1; }
 
     bool begin(const char*, int, SnortConfig*) override;
     bool end(const char*, int, SnortConfig*) override;
@@ -396,7 +396,7 @@ public:
     { return DETECT; }
 
 public:
-    ByteJumpData data;
+    ByteJumpData data = {};
     string var;
     string post_var;
 };
@@ -523,7 +523,7 @@ bool ByteJumpModule::set(const char*, Value& v, SnortConfig*)
 
     else if ( v.is("bitmask") )
         data.bitmask_val = v.get_uint32();
-    
+
     else
         return false;
 
